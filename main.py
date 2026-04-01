@@ -3,8 +3,11 @@ import time
 import requests
 from save_alert import init_sheet, save_to_sheet, get_daily_volume_info
 from datetime import datetime, timedelta
+from dotenv import load_dotenv
+import os
 
-
+load_dotenv()
+slack_token = os.getenv("SLACK_TOKEN")
 
 # 스크립트를 실행하려면 여백의 녹색 버튼을 누릅니다.
 if __name__ != '__main__':
@@ -12,7 +15,7 @@ if __name__ != '__main__':
     exit
 
 # 1. 슬랙 설정
-SLACK_WEBHOOK_URL = "https://hooks.slack.com/services/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"
+SLACK_WEBHOOK_URL = os.getenv("SLACK_TOKEN")
 
 def send_slack_msg(text):
     try:
