@@ -198,7 +198,9 @@ while True:
                     print(f"[{time.strftime('%H:%M:%S')}] {ticker} 조건 만족 알림 발송!")
                     last_notified_time[ticker] = current_candle_time
         time.sleep(1)  # API 과부하 방지
-    time.sleep(10)  # 10초마다 체크
+
+    print(f"{'=' * 40} == END 15분 후 다시 동작 ")
+    time.sleep(60 * 15) # 15분
 
 
 
