@@ -2,6 +2,9 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 import pyupbit
+from logger import get_logger
+
+logger = get_logger()
 
 SHEET_NAME = "py-upbit-alram"  # 본인 구글 시트 이름으로 변경
 
@@ -58,7 +61,7 @@ def get_daily_volume_info(ticker):
         }
 
     except Exception as e:
-        print(f"[일봉 조회 실패] {e}")
+        logger.error(f"[일봉 조회 실패] {e}")
         return None
 
 
@@ -90,4 +93,4 @@ def save_to_sheet(ticker, active_intervals, surge_count, daily_str):  # daily �
         ], index=2)
 
     except Exception as e:
-        print(f"[시트 저장 실패] {e}")
+        logger.error(f"[시트 저장 실패] {e}")

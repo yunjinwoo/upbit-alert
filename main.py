@@ -5,13 +5,15 @@ from save_alert import init_sheet, save_to_sheet, get_daily_volume_info
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import os
+from logger import get_logger
 
 load_dotenv()
 slack_token = os.getenv("SLACK_TOKEN")
+logger = get_logger()
 
 # 스크립트를 실행하려면 여백의 녹색 버튼을 누릅니다.
 if __name__ != '__main__':
-    print(f" not main ")
+    logger.info(f" not main ")
     exit
 
 # 1. 슬랙 설정
@@ -22,7 +24,7 @@ def send_slack_msg(text):
         payload = {"text": text}
         requests.post(SLACK_WEBHOOK_URL, json=payload, timeout=5)
     except Exception as e:
-        print(f"슬랙 전송 실패: {e}")
+        logger.error(f"슬랙 전송 실패: {e}")
 
 # 2. 거래량 체크 함수
 def check_volume_surge(ticker, interval):
@@ -44,14 +46,14 @@ def check_volume_surge(ticker, interval):
 
         ratio = curr_vol / prev_vol
 
-        print(f"{interval} :: ratio = {ratio} === vol_list:{vol_list}" )
+        logger.info(f"{interval} :: ratio = {ratio} === vol_list:{vol_list}" )
         # 3배 이상 급증 시 True
         if ratio >= 3:
             return True, ratio
         return False, ratio
 
     except Exception as e:
-        print(f"[{interval}] 상세 에러: {e}")
+        logger.error(f"[{interval}] 상세 에러: {e}")
         return False, 0
 
 # 3. 메인 루프
@@ -79,10 +81,10 @@ def get_volume_ratio(ticker, interval):
         if prev_vol == 0:
             return 0
 
-        print(f" {interval} = {curr_vol / prev_vol}")
+        logger.info(f" {interval} = {curr_vol / prev_vol}")
         return curr_vol / prev_vol
     except Exception as e:
-        print(f"[{ticker}-{interval}] 에러: {e}")
+        logger.error(f"[{ticker}-{interval}] 에러: {e}")
         return 0
 
 
@@ -119,15 +121,15 @@ skip_cache = {}
 SKIP_DURATION = timedelta(hours=4)     # 4시간봉 기준으로 맞추고 싶으면
 SKIP_DURATION_ALERT = timedelta(hours=1)     # 4시간봉 기준으로 맞추고 싶으면
 
-print(f"🚀 전 타임프레임 동시 폭발 감시 시작! (노이즈 최소화 버전)")
-print("-" * 40)
+logger.info(f"🚀 전 타임프레임 동시 폭발 감시 시작! (노이즈 최소화 버전)")
+logger.info("-" * 40)
 
 init_sheet()  # 헤더 자동 생성
 while True:
     active_count = len(target_tickers) - len(skip_cache)
-    print(f"\n{'=' * 40}")
-    print(f"감시 대상: {active_count}/{len(target_tickers)}개 (스킵: {len(skip_cache)}개)")
-    print(f"{'=' * 40}")
+    logger.info(f"\n{'=' * 40}")
+    logger.info(f"감시 대상: {active_count}/{len(target_tickers)}개 (스킵: {len(skip_cache)}개)")
+    logger.info(f"{'=' * 40}")
 
     for i, ticker in enumerate(target_tickers, 1):  # 1부터 시작
         ratios = {}
@@ -135,13 +137,13 @@ while True:
         if ticker in skip_cache and datetime.now() < skip_cache[ticker]:
             continue  # 출력도 없이 조용히 스킵
 
-        print("-" * 10)
-        print(f"{time.strftime('%H:%M:%S')} :: [{i}/{len(target_tickers)}] ticker = {ticker}")
+        logger.info("-" * 10)
+        logger.info(f"{time.strftime('%H:%M:%S')} :: [{i}/{len(target_tickers)}] ticker = {ticker}")
 
         # ① 일봉 먼저 체크 → 전일 이하면 바로 스킵
         daily = get_daily_volume_info(ticker)
         if daily is None:
-            print(f"[{ticker}] 일봉 전일 이하 → 스킵")
+            logger.info(f"[{ticker}] 일봉 전일 이하 → 스킵")
             time.sleep(0.5)  # API 과부하 방지
             continue  # 분봉 조회 자체를 안 함
 
@@ -169,19 +171,19 @@ while True:
         )
         if surge_count >= 2:
             save_to_sheet(ticker, active_intervals, surge_count, daily_str)
-            print(f" active_intervals = {active_intervals}")
-            print(f" https://upbit.com/exchange?code=CRIX.UPBIT.{ticker}")
+            logger.info(f" active_intervals = {active_intervals}")
+            logger.info(f" https://upbit.com/exchange?code=CRIX.UPBIT.{ticker}")
 
         if surge_count >= 2 and ratios["minutes240"] >= 1 :
             df_now = pyupbit.get_ohlcv(ticker, interval="minutes5", count=1)
-            print(f" df_now :: {df_now} ")
+            logger.info(f" df_now :: {df_now} ")
 
             if df_now is not None and not df_now.empty:
                 # [★여기 수정 완료!★] .index 뒤에을 붙여 진짜 날짜 값만 쏙 빼옵니다.
                 current_candle_time = df_now.index[0]
-                print(f" df_now.index :: {df_now.index[0]} ")
+                logger.info(f" df_now.index :: {df_now.index[0]} ")
 
-                print(f" {current_candle_time}")
+                logger.info(f" {current_candle_time}")
                 if last_notified_time[ticker] != current_candle_time:
 
                     surge_text = ", ".join(active_intervals)
@@ -195,11 +197,11 @@ while True:
                     send_slack_msg(message)
                     skip_cache[ticker] = datetime.now() + SKIP_DURATION_ALERT  # ← 1시간 스킵
 
-                    print(f"[{time.strftime('%H:%M:%S')}] {ticker} 조건 만족 알림 발송!")
+                    logger.info(f"[{time.strftime('%H:%M:%S')}] {ticker} 조건 만족 알림 발송!")
                     last_notified_time[ticker] = current_candle_time
         time.sleep(1)  # API 과부하 방지
 
-    print(f"{'=' * 40} == END 15분 후 다시 동작 ")
+    logger.info(f"{'=' * 40} == END 15분 후 다시 동작 ")
     time.sleep(60 * 15) # 15분
 
 
