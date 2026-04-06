@@ -1,0 +1,24 @@
+name: Remote SSH Connection Test
+
+on:
+  workflow_dispatch: # GitHub 웹사이트에서 'Run workflow' 버튼으로 직접 실행 가능하게 함
+
+jobs:
+  test-connection:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: SSH Connect and Check Server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "Successfully connected to iwinv server!"
+            echo "Current User: $(whoami)"
+            echo "Server Uptime: $(uptime)"
+            node -v # 아까 설치한 Node.js 버전도 확인해봅시다
