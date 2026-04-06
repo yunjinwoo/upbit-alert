@@ -40,3 +40,8 @@ credentials.json 안의 client_email 값을 시트에 편집자로 공유
 pip freeze > requirements.txt
 ## 가져오기
 pip install -r requirements.txt
+
+
+## GITHUB - actions
+https://github.com/yunjinwoo/upbit-alert/settings/secrets/actions
+서버정보 넣기
