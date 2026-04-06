@@ -38,8 +38,41 @@ def init_db():
             url TEXT
         )
     ''')
+    # API 토큰 저장 테이블 (신규)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS api_tokens (
+            provider TEXT PRIMARY KEY,
+            token TEXT,
+            issued_date TEXT
+        )
+    ''')
     conn.commit()
     conn.close()
+
+def save_api_token(provider, token):
+    """API 토큰 저장 (날짜 포함)"""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    today = datetime.now().strftime('%Y-%m-%d')
+    cursor.execute('''
+        INSERT OR REPLACE INTO api_tokens (provider, token, issued_date)
+        VALUES (?, ?, ?)
+    ''', (provider, token, today))
+    conn.commit()
+    conn.close()
+
+def get_api_token(provider):
+    """오늘 날짜의 유효한 토큰 조회"""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    today = datetime.now().strftime('%Y-%m-%d')
+    cursor.execute('''
+        SELECT token FROM api_tokens 
+        WHERE provider = ? AND issued_date = ?
+    ''', (provider, today))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else None
 
 def save_alert_to_db(ticker, surge_count, m240, m60, m30, m15, daily_info, url):
     conn = sqlite3.connect(DB_NAME)
