@@ -45,3 +45,8 @@ pip install -r requirements.txt
 ## GITHUB - actions
 https://github.com/yunjinwoo/upbit-alert/settings/secrets/actions
 서버정보 넣기
+
+
+pm2 start main.py --interpreter ./venv/bin/python3 --name upbit-bot
+pm2 start api_server.py --interpreter ./venv/bin/python3 --name upbit-api
+pm2 start main_stocks.py --interpreter ./venv/bin/python3 --name stock-bot

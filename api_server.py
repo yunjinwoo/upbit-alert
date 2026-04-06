@@ -1,6 +1,9 @@
 from flask import Flask, jsonify, render_template
 from flask_cors import CORS
-from db_manager import get_latest_alerts, delete_alert
+from db_manager import (
+    get_latest_alerts, delete_alert, 
+    get_latest_stock_alerts, delete_stock_alert
+)
 
 app = Flask(__name__)
 # 모든 도메인에서의 접근을 허용합니다 (CORS 해결)
@@ -13,7 +16,7 @@ def index():
 
 @app.route('/alerts', methods=['GET'])
 def get_alerts():
-    """최근 발생한 알림을 JSON 형식으로 반환합니다."""
+    """최근 발생한 코인 알림을 JSON 형식으로 반환합니다."""
     try:
         alerts = get_latest_alerts(limit=50)
         return jsonify({
@@ -29,10 +32,32 @@ def get_alerts():
 
 @app.route('/alerts/<int:alert_id>', methods=['DELETE'])
 def delete_alert_api(alert_id):
-    """특정 알림을 삭제합니다."""
+    """특정 코인 알림을 삭제합니다."""
     try:
         delete_alert(alert_id)
-        return jsonify({"status": "success", "message": f"Alert {alert_id} deleted."})
+        return jsonify({"status": "success", "message": f"Coin alert {alert_id} deleted."})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/stock-alerts', methods=['GET'])
+def get_stock_alerts():
+    """최근 발생한 주식 알림을 JSON 형식으로 반환합니다."""
+    try:
+        alerts = get_latest_stock_alerts(limit=50)
+        return jsonify({
+            "status": "success",
+            "count": len(alerts),
+            "data": alerts
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/stock-alerts/<int:alert_id>', methods=['DELETE'])
+def delete_stock_alert_api(alert_id):
+    """특정 주식 알림을 삭제합니다."""
+    try:
+        delete_stock_alert(alert_id)
+        return jsonify({"status": "success", "message": f"Stock alert {alert_id} deleted."})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 

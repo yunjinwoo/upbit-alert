@@ -3,13 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Upbit 거래량 폭발 알림 대시보드</title>
+    <title>통합 금융 알림 대시보드</title>
     <!-- CSS (Bootstrap & DataTables) -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css" rel="stylesheet">
     <style>
         body { background-color: #f4f7f6; font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; }
         .dashboard-container { margin-top: 30px; margin-bottom: 50px; }
+        .nav-tabs { border-bottom: 2px solid #0049af; margin-bottom: 20px; }
+        .nav-link { font-weight: bold; color: #666; cursor: pointer; }
+        .nav-link.active { color: #0049af !important; border-bottom: 3px solid #0049af !important; background: none !important; }
         .stats-container { margin-bottom: 25px; }
         .stats-card { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); border-left: 5px solid #0049af; }
         .stats-title { font-size: 0.9rem; color: #666; margin-bottom: 10px; font-weight: bold; }
@@ -19,13 +22,10 @@
         .top-ticker-count { color: #d60000; font-weight: bold; margin-left: 5px; }
         .table-container { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
         .badge-red { background-color: #ff4d4d; color: white; font-weight: bold; }
-        .badge-orange { background-color: #ff9933; color: white; font-weight: bold; }
-        .badge-yellow { background-color: #ffcc00; color: black; font-weight: bold; }
         .up-rate { color: #d60000; font-weight: bold; }
+        .down-rate { color: #0049af; font-weight: bold; }
         .ticker-link { text-decoration: none; color: #0049af; font-weight: bold; cursor: pointer; }
         .ticker-link:hover { text-decoration: underline; }
-        .external-link { text-decoration: none; font-size: 0.8rem; margin-left: 5px; color: #adb5bd; }
-        .external-link:hover { color: #0049af; }
         .header-title { margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }
     </style>
 </head>
@@ -33,20 +33,29 @@
 
 <div class="container dashboard-container">
     <div class="header-title">
-        <h2>🚀 Upbit 거래량 폭발 대시보드</h2>
+        <h2>🚀 통합 금융 알림 대시보드</h2>
         <div>
-            <span id="update-timer" class="badge bg-secondary">데이터 업데이트 중...</span>
+            <span id="update-timer" class="badge bg-secondary">로딩 중...</span>
             <button onclick="loadData()" class="btn btn-primary btn-sm ms-2">새로고침</button>
-            <a href="https://docs.google.com/spreadsheets/d/1-C7YhPRZWRwG-GbXIHyRzvSkQl3Iz-tS65_X2I7KbcQ/edit?gid=0#gid=0" 
-               target="_blank" class="btn btn-success btn-sm ms-1">📊시트</a>
+            <a id="sheet-link" href="#" target="_blank" class="btn btn-success btn-sm ms-1">📊 시트</a>
         </div>
     </div>
 
-    <!-- 통계 섹션 추가 -->
+    <!-- 탭 메뉴 -->
+    <ul class="nav nav-tabs" id="mainTab">
+        <li class="nav-item">
+            <a class="nav-link active" onclick="switchTab('coin')">🪙 가상화폐 (Upbit)</a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link" onclick="switchTab('stock')">📈 한국 주식 (KIS)</a>
+        </li>
+    </ul>
+
+    <!-- 통계 섹션 -->
     <div class="row stats-container">
         <div class="col-md-12">
             <div class="stats-card">
-                <div class="stats-title">최근 최다 발생 코인 (TOP 5)</div>
+                <div id="stats-title" class="stats-title">최근 최다 발생 종목 (TOP 5)</div>
                 <div id="top-tickers-list" class="stats-value">
                     <small class="text-muted">데이터 분석 중...</small>
                 </div>
@@ -56,18 +65,8 @@
 
     <div class="table-container">
         <table id="alertTable" class="table table-hover" style="width:100%">
-            <thead class="table-light">
-                <tr>
-                    <th>시간</th>
-                    <th>코인</th>
-                    <th>상태</th>
-                    <th>4시간</th>
-                    <th>1시간</th>
-                    <th>30분</th>
-                    <th>15분</th>
-                    <th>일봉 정보</th>
-                    <th>작업</th>
-                </tr>
+            <thead id="tableHead" class="table-light">
+                <!-- 탭에 따라 동적으로 변경됨 -->
             </thead>
             <tbody id="tableBody">
                 <!-- 데이터가 여기에 동적으로 추가됩니다 -->
@@ -76,149 +75,103 @@
     </div>
 </div>
 
-<!-- JS (jQuery, Bootstrap, DataTables) -->
 <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
 <script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
 
 <script>
+    let currentTab = 'coin';
     let dataTable;
+    const COIN_SHEET = "https://docs.google.com/spreadsheets/d/1-C7YhPRZWRwG-GbXIHyRzvSkQl3Iz-tS65_X2I7KbcQ/edit#gid=0";
+    const STOCK_SHEET = "#"; // 주식용 시트 주소 알게되면 교체하세요
+
+    function switchTab(tab) {
+        currentTab = tab;
+        $('.nav-link').removeClass('active');
+        $(`a[onclick="switchTab('${tab}')"]`).addClass('active');
+        
+        // 시트 링크 변경
+        document.getElementById('sheet-link').href = tab === 'coin' ? COIN_SHEET : STOCK_SHEET;
+        document.getElementById('stats-title').innerText = tab === 'coin' ? '최근 최다 발생 코인 (TOP 5)' : '최근 최다 발생 주식 (TOP 5)';
+        
+        loadData();
+    }
 
     function filterByTicker(ticker) {
         if (dataTable) {
             dataTable.search(ticker).draw();
-            // 검색 창으로 스크롤 이동 (선택 사항)
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
     }
 
-    function formatDailyInfo(info) {
-        if (!info) return '-';
-        // '▲' 가 포함된 문자열을 예쁘게 포매팅
-        return info.replace('▲', '<span class="up-rate">▲').replace('%', '%</span>');
-    }
-
-    function getBadgeClass(countStr) {
-        const count = parseInt(countStr.split('/')[0]);
-        if (count >= 4) return 'badge-red';
-        if (count === 3) return 'badge-orange';
-        return 'badge-yellow';
-    }
-
     async function deleteAlert(id) {
-        if (!confirm('이 알림을 삭제하시겠습니까?')) return;
-        
+        if (!confirm('삭제하시겠습니까?')) return;
+        const url = currentTab === 'coin' ? `/alerts/${id}` : `/stock-alerts/${id}`;
         try {
-            const response = await fetch(`/alerts/${id}`, { method: 'DELETE' });
-            const result = await response.json();
-            if (result.status === 'success') {
-                loadData(); // 데이터 새로고침
-            } else {
-                alert('삭제 실패: ' + result.message);
-            }
-        } catch (error) {
-            console.error('삭제 중 에러:', error);
-            alert('삭제 중 에러가 발생했습니다.');
-        }
+            const response = await fetch(url, { method: 'DELETE' });
+            if ((await response.json()).status === 'success') loadData();
+        } catch (e) { alert('삭제 실패'); }
     }
 
     async function loadData() {
+        const url = currentTab === 'coin' ? '/alerts' : '/stock-alerts';
         try {
-            const response = await fetch('/alerts');
+            const response = await fetch(url);
             const result = await response.json();
+            if (result.status !== 'success') return;
+
+            if (dataTable) dataTable.destroy();
+
+            const tableHead = document.getElementById('tableHead');
+            const tableBody = document.getElementById('tableBody');
             
-            if (result.status === 'success') {
-                const data = result.data;
-                
-                // 기존 테이블 데이터 삭제
-                if (dataTable) {
-                    dataTable.destroy();
-                }
-                
-                const tableBody = document.getElementById('tableBody');
-                tableBody.innerHTML = '';
-
-                // TOP 5 코인 집계 로직
-                const tickerCounts = {};
-                data.forEach(item => {
-                    tickerCounts[item.ticker] = (tickerCounts[item.ticker] || 0) + 1;
-                });
-
-                // 정렬 및 상위 5개 추출
-                const topTickers = Object.entries(tickerCounts)
-                    .sort((a, b) => b[1] - a[1])
-                    .slice(0, 5);
-
-                const topListEl = document.getElementById('top-tickers-list');
-                if (topTickers.length > 0) {
-                    topListEl.innerHTML = topTickers.map(([ticker, count]) => `
-                        <span class="top-ticker-item" onclick="filterByTicker('${ticker}')">
-                            ${ticker} <span class="top-ticker-count">${count}회</span>
-                        </span>
-                    `).join('');
-                } else {
-                    topListEl.innerHTML = '<small class="text-muted">데이터 없음</small>';
-                }
-
-                data.forEach(item => {
-                    const row = `
-                        <tr>
-                            <td><small>${item.timestamp}</small></td>
-                            <td>
-                                <a href="${item.url}" target="_blank" class="ticker-link" title="업비트 거래소 이동">
-                                    ${item.ticker}
-                                </a>
-                            </td>
-                            <td>
-                                <span class="badge ${getBadgeClass(item.surge_count)}">
-                                    ${item.surge_count}
-                                </span>
-                            </td>
-                            <td><small>${item.m240}</small></td>
-                            <td><small>${item.m60}</small></td>
-                            <td><small>${item.m30}</small></td>
-                            <td><small>${item.m15}</small></td>
-                            <td><small>${formatDailyInfo(item.daily_info)}</small></td>
-                            <td>
-                                <button onclick="deleteAlert(${item.id})" class="btn btn-outline-danger btn-sm" title="삭제">
-                                    🗑️
-                                </button>
-                            </td>
-                        </tr>
-                    `;
-                    tableBody.innerHTML += row;
-                });
-
-                // DataTables 다시 초기화 (최신순 정렬)
-                dataTable = $('#alertTable').DataTable({
-                    order: [[0, 'desc']],
-                    pageLength: 20,
-                    language: {
-                        search: "검색:",
-                        lengthMenu: "_MENU_ 개씩 보기",
-                        info: "총 _TOTAL_ 개의 알림 중 _START_~_END_ 표시",
-                        paginate: {
-                            first: "처음", last: "마지막", next: "다음", previous: "이전"
-                        }
-                    }
-                });
-
-                const now = new Date().toLocaleTimeString();
-                document.getElementById('update-timer').innerText = `최근 업데이트: ${now}`;
+            if (currentTab === 'coin') {
+                tableHead.innerHTML = `<tr><th>시간</th><th>코인</th><th>상태</th><th>4시간</th><th>1시간</th><th>30분</th><th>15분</th><th>일봉 정보</th><th>작업</th></tr>`;
+                tableBody.innerHTML = result.data.map(item => `
+                    <tr>
+                        <td><small>${item.timestamp}</small></td>
+                        <td><a href="${item.url}" target="_blank" class="ticker-link">${item.ticker}</a></td>
+                        <td><span class="badge ${parseInt(item.surge_count) >= 3 ? 'badge-red' : 'bg-warning text-dark'}">${item.surge_count}</span></td>
+                        <td><small>${item.m240}</small></td><td><small>${item.m60}</small></td><td><small>${item.m30}</small></td><td><small>${item.m15}</small></td>
+                        <td><small>${item.daily_info.replace('▲', '<span class="up-rate">▲').replace('%', '%</span>')}</small></td>
+                        <td><button onclick="deleteAlert(${item.id})" class="btn btn-outline-danger btn-sm">🗑️</button></td>
+                    </tr>
+                `).join('');
+            } else {
+                tableHead.innerHTML = `<tr><th>시간</th><th>종목명</th><th>현재가</th><th>등락률</th><th>거래량</th><th>체결강도</th><th>시총</th><th>이유</th><th>작업</th></tr>`;
+                tableBody.innerHTML = result.data.map(item => `
+                    <tr>
+                        <td><small>${item.timestamp}</small></td>
+                        <td><a href="${item.url}" target="_blank" class="ticker-link">${item.name}</a></td>
+                        <td><b>${parseInt(item.price).toLocaleString()}원</b></td>
+                        <td><span class="${parseFloat(item.change_rate) >= 0 ? 'up-rate' : 'down-rate'}">${item.change_rate}%</span></td>
+                        <td><small>${parseInt(item.volume).toLocaleString()}</small></td>
+                        <td><span class="badge bg-info text-dark">${item.volume_power}%</span></td>
+                        <td><small>${item.market_cap}</small></td>
+                        <td><small class="text-primary">${item.reason}</small></td>
+                        <td><button onclick="deleteAlert(${item.id})" class="btn btn-outline-danger btn-sm">🗑️</button></td>
+                    </tr>
+                `).join('');
             }
-        } catch (error) {
-            console.error('데이터 로드 실패:', error);
-        }
+
+            // TOP 5 집계
+            const counts = {};
+            result.data.forEach(item => { const key = currentTab === 'coin' ? item.ticker : item.name; counts[key] = (counts[key] || 0) + 1; });
+            const top5 = Object.entries(counts).sort((a,b) => b[1]-a[1]).slice(0,5);
+            document.getElementById('top-tickers-list').innerHTML = top5.map(([k, v]) => `
+                <span class="top-ticker-item" onclick="filterByTicker('${k}')">${k} <span class="top-ticker-count">${v}회</span></span>
+            `).join('') || '<small class="text-muted">데이터 없음</small>';
+
+            dataTable = $('#alertTable').DataTable({ order: [[0, 'desc']], pageLength: 20 });
+            document.getElementById('update-timer').innerText = `최근 업데이트: ${new Date().toLocaleTimeString()}`;
+        } catch (e) { console.error(e); }
     }
 
-    // 초기 데이터 로드
-    $(document).ready(function() {
-        loadData();
-        // 30초마다 자동 새로고침
-        setInterval(loadData, 30000);
+    $(document).ready(() => { 
+        switchTab('coin');
+        setInterval(loadData, 30000); 
     });
 </script>
-
 </body>
 </html>
