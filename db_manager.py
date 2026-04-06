@@ -45,6 +45,14 @@ def get_latest_alerts(limit=50):
     
     return [dict(row) for row in rows]
 
+def delete_alert(alert_id):
+    """특정 ID의 알림을 삭제합니다."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM alerts WHERE id = ?', (alert_id,))
+    conn.commit()
+    conn.close()
+
 if __name__ == "__main__":
     init_db()
     print("Database initialized.")
