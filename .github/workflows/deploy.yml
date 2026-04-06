@@ -39,6 +39,8 @@ jobs:
             pm2 restart stock-bot || pm2 start main_stocks.py --interpreter ./venv/bin/python3 --name stock-bot
             
             # 5. 최종 상태 확인 (로그에서 잘 보이도록 줄바꿈과 구분선 추가)
-            echo "==================== DEPLOYMENT STATUS ===================="
-            pm2 list --no-color
-            echo "==========================================================="
+            #echo "==================== DEPLOYMENT STATUS ===================="
+            #pm2 list --no-color
+            #echo "==========================================================="
+            
+            pm2 prettylist

@@ -46,7 +46,28 @@ pip install -r requirements.txt
 https://github.com/yunjinwoo/upbit-alert/settings/secrets/actions
 서버정보 넣기
 
+------------------
 
-pm2 start main.py --interpreter ./venv/bin/python3 --name upbit-bot
-pm2 start api_server.py --interpreter ./venv/bin/python3 --name upbit-api
-pm2 start main_stocks.py --interpreter ./venv/bin/python3 --name stock-bot
+   1 sudo apt update
+   2 sudo apt install nginx -y
+
+  3단계: Nginx 설정 (도메인과 5000번 포트 연결)
+  Nginx 설정 파일을 만들어 도메인 주소와 우리 프로그램을 이어줍니다.
+
+   1 # 새로운 설정 파일 생성
+   2 sudo nano /etc/nginx/sites-available/upbit-alert
+
+  아래 내용을 복사해서 붙여넣으세요 (도메인 주소만 본인 것으로 수정).
+
+    1 server {
+    2     listen 80;
+    3     server_name upbit.내도메인.com; # 1단계에서 설정한 도메인 주소
+    4
+    5     location / {
+    6         proxy_pass http://localhost:5000; # Flask 서버 포트
+    7         proxy_set_header Host $host;
+    8         proxy_set_header X-Real-IP $remote_addr;
+    9         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+   10     }
+   11 }
+  (저장: Ctrl+O, Enter / 나가기: Ctrl+X)
