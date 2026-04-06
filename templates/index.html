@@ -37,6 +37,8 @@
         <div>
             <span id="update-timer" class="badge bg-secondary">데이터 업데이트 중...</span>
             <button onclick="loadData()" class="btn btn-primary btn-sm ms-2">새로고침</button>
+            <a href="https://docs.google.com/spreadsheets/d/1-C7YhPRZWRwG-GbXIHyRzvSkQl3Iz-tS65_X2I7KbcQ/edit?gid=0#gid=0" 
+               target="_blank" class="btn btn-success btn-sm ms-1">📊시트</a>
         </div>
     </div>
 
@@ -164,10 +166,9 @@
                         <tr>
                             <td><small>${item.timestamp}</small></td>
                             <td>
-                                <span class="ticker-link" onclick="filterByTicker('${item.ticker}')">
+                                <a href="${item.url}" target="_blank" class="ticker-link" title="업비트 거래소 이동">
                                     ${item.ticker}
-                                </span>
-                                <a href="${item.url}" target="_blank" class="external-link" title="업비트 거래소 이동">🔗</a>
+                                </a>
                             </td>
                             <td>
                                 <span class="badge ${getBadgeClass(item.surge_count)}">
