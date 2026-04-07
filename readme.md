@@ -71,3 +71,12 @@ https://github.com/yunjinwoo/upbit-alert/settings/secrets/actions
    10     }
    11 }
   (저장: Ctrl+O, Enter / 나가기: Ctrl+X)
+
+
+Fish 셸: source venv/bin/activate.fish
+Csh/Tcsh 셸: source venv/bin/activate.csh
+
+가상환경 진입하기 (Activate)
+ source venv/bin/activate
+가상환경 나오기 (Deactivate)
+ deactivate
