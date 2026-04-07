@@ -7,8 +7,10 @@ from dataclasses import asdict
 from dotenv import load_dotenv
 from db_manager import save_stock_alert_to_db, init_db, save_api_token, get_api_token
 from kis_models import RequestHeader, RequestQueryParam, FluctuationRankingResponse
+from logger import get_logger
 
 load_dotenv()
+logger = get_logger()
 
 # 한국투자증권 설정
 APP_KEY = os.getenv("KIS_APP_KEY")
@@ -24,11 +26,11 @@ def get_access_token():
     
     db_token = get_api_token('KIS')
     if db_token:
-        print("💾 DB에서 오늘 유효한 토큰을 불러왔습니다.")
+        logger.info("💾 DB에서 오늘 유효한 토큰을 불러왔습니다.")
         ACCESS_TOKEN = db_token
         return ACCESS_TOKEN
 
-    print("📡 새로운 토큰 발급을 시도합니다...")
+    logger.info("📡 새로운 토큰 발급을 시도합니다...")
     url = f"{URL_BASE}/oauth2/tokenP"
     headers = {"content-type": "application/json"}
     body = {
@@ -42,13 +44,13 @@ def get_access_token():
         if res.status_code == 200:
             ACCESS_TOKEN = res.json().get("access_token")
             save_api_token('KIS', ACCESS_TOKEN)
-            print("✅ 새로운 토큰이 발급되어 DB에 저장되었습니다.")
+            logger.info("✅ 새로운 토큰이 발급되어 DB에 저장되었습니다.")
             return ACCESS_TOKEN
         else:
-            print(f"❌ 토큰 발급 실패: {res.status_code} - {res.text}")
+            logger.error(f"❌ 토큰 발급 실패: {res.status_code} - {res.text}")
             return None
     except Exception as e:
-        print(f"❌ 토큰 요청 중 에러: {e}")
+        logger.error(f"❌ 토큰 요청 중 에러: {e}")
         return None
 
 def get_stock_ranking():
@@ -86,7 +88,7 @@ def get_stock_ranking():
     )
     
     now_time = datetime.now().strftime('%H:%M:%S')
-    print(f"📡 [{now_time}] 순위 데이터 호출 중...", end=" ")
+    logger.info(f"📡 [{now_time}] 순위 데이터 호출 중...")
 
     try:
         # 요청 정보 디버깅 출력
@@ -97,39 +99,39 @@ def get_stock_ranking():
 
         # 상세 로그 (에러 발생 시 확인용)
         if res.status_code != 200:
-            print(f"\n--- DEBUG INFO ---")
-            print(f"URL: {res.url}")
-            print(f"Headers: {json.dumps(full_headers, indent=2)}")
-            print(f"Response Status: {res.status_code}")
-            print(f"Raw Response: {res.text}")
-            print(f"------------------\n")
+            logger.error(f"\n--- DEBUG INFO ---")
+            logger.error(f"URL: {res.url}")
+            logger.error(f"Headers: {json.dumps(full_headers, indent=2)}")
+            logger.error(f"Response Status: {res.status_code}")
+            logger.error(f"Raw Response: {res.text}")
+            logger.error(f"------------------\n")
 
         raw_json = res.json()
 
         if res.status_code == 200:
             response_obj = FluctuationRankingResponse.from_json(raw_json)
             if response_obj.rt_cd != "0":
-                print(f"❌ KIS API 에러: {response_obj.msg1} ({response_obj.msg_cd})")
+                logger.error(f"❌ KIS API 에러: {response_obj.msg1} ({response_obj.msg_cd})")
                 return []
-            print(f"✅ 성공 ({len(response_obj.output)}건 수신)")
+            logger.info(f"✅ 성공 ({len(response_obj.output)}건 수신)")
             return response_obj.output
         elif res.status_code == 401:
-            print("🔑 토큰 만료! 재발급을 시도합니다.")
+            logger.info("🔑 토큰 만료! 재발급을 시도합니다.")
             get_access_token()
             return []
         else:
-            print(f"❌ 실패! {res.status_code} - {res.text}")
+            logger.error(f"❌ 실패! {res.status_code} - {res.text}")
             return []
     except Exception as e:
-        print(f"🔥 에러: {e}")
+        logger.error(f"🔥 에러: {e}")
         return []
 
 def monitor_stocks():
-    print("🚀 한국 주식 실시간 감시 시작!")
+    logger.info("🚀 한국 주식 실시간 감시 시작!")
     init_db()
     
     while get_access_token() is None:
-        print("⏳ 1분 후 다시 시도합니다...")
+        logger.info("⏳ 1분 후 다시 시도합니다...")
         time.sleep(61)
 
     last_notified = {}
@@ -145,7 +147,6 @@ def monitor_stocks():
                 continue
 
             stocks = get_stock_ranking()
-            print(f"stocks - {stocks}")
             for stock in stocks:
                 name = stock.hts_kor_isnm
                 code = stock.stck_shrn_iscd
@@ -154,7 +155,7 @@ def monitor_stocks():
                 vol_rate = float(stock.prdy_vol_rvrt if stock.prdy_vol_rvrt else 0)
                 
                 if code not in last_notified or (now - last_notified[code]).seconds > 3600:
-                    print(f"🔥 [포착] {name}({code}) | 등락: {change_rate}% | 거래량비: {vol_rate}%")
+                    logger.info(f"🔥 [포착] {name}({code}) | 등락: {change_rate}% | 거래량비: {vol_rate}%")
                     save_stock_alert_to_db(
                         code=code, name=name, price=price, 
                         change_rate=change_rate, volume=stock.acml_vol, 
@@ -165,7 +166,7 @@ def monitor_stocks():
                     last_notified[code] = now
             time.sleep(30)
         except Exception as e:
-            print(f"❌ 에러: {e}")
+            logger.error(f"❌ 에러: {e}")
             time.sleep(10)
 
 if __name__ == "__main__":

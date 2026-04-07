@@ -18,8 +18,7 @@ def index():
 def get_alerts():
     """최근 발생한 코인 알림을 JSON 형식으로 반환합니다."""
     try:
-        alerts = get_latest_alerts(limit=300)
-
+        alerts = get_latest_alerts(limit=100)
         return jsonify({
             "status": "success",
             "count": len(alerts),
@@ -44,7 +43,7 @@ def delete_alert_api(alert_id):
 def get_stock_alerts():
     """최근 발생한 주식 알림을 JSON 형식으로 반환합니다."""
     try:
-        alerts = get_latest_stock_alerts(limit=300)
+        alerts = get_latest_stock_alerts(limit=100)
         return jsonify({
             "status": "success",
             "count": len(alerts),
