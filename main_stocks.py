@@ -89,8 +89,21 @@ def get_stock_ranking():
     print(f"📡 [{now_time}] 순위 데이터 호출 중...", end=" ")
 
     try:
-        # header_obj.to_dict()를 통해 하이픈 처리된 헤더 전달
-        res = requests.get(url, headers=header_obj.to_dict(), params=asdict(param_obj))
+        # 요청 정보 디버깅 출력
+        full_headers = header_obj.to_dict()
+        full_params = asdict(param_obj)
+
+        res = requests.get(url, headers=full_headers, params=full_params)
+
+        # 상세 로그 (에러 발생 시 확인용)
+        if res.status_code != 200:
+            print(f"\n--- DEBUG INFO ---")
+            print(f"URL: {res.url}")
+            print(f"Headers: {json.dumps(full_headers, indent=2)}")
+            print(f"Response Status: {res.status_code}")
+            print(f"Raw Response: {res.text}")
+            print(f"------------------\n")
+
         raw_json = res.json()
 
         if res.status_code == 200:
@@ -139,20 +152,17 @@ def monitor_stocks():
                 price = stock.stck_prpr
                 change_rate = stock.prdy_ctrt
                 vol_rate = float(stock.prdy_vol_rvrt if stock.prdy_vol_rvrt else 0)
-
+                
                 if code not in last_notified or (now - last_notified[code]).seconds > 3600:
                     print(f"🔥 [포착] {name}({code}) | 등락: {change_rate}% | 거래량비: {vol_rate}%")
                     save_stock_alert_to_db(
-                        code=code, name=name, price=price,
-                        change_rate=change_rate, volume=stock.acml_vol,
-                        volume_power="0", market_cap="-",
+                        code=code, name=name, price=price, 
+                        change_rate=change_rate, volume=stock.acml_vol, 
+                        volume_power="0", market_cap="-", 
                         reason=f"전일비 거래량 {vol_rate}% 급증",
                         url=f"https://finance.naver.com/item/main.nhn?code={code}"
-                    )
+                        )
                     last_notified[code] = now
-
-                #if vol_rate > 200 and float(change_rate) > 3:
-
             time.sleep(30)
         except Exception as e:
             print(f"❌ 에러: {e}")

@@ -97,7 +97,7 @@ def save_stock_alert_to_db(code, name, price, change_rate, volume, volume_power,
     conn.commit()
     conn.close()
 
-def get_latest_alerts(limit=50):
+def get_latest_alerts(limit=100):
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
@@ -107,7 +107,7 @@ def get_latest_alerts(limit=50):
     
     return [dict(row) for row in rows]
 
-def get_latest_stock_alerts(limit=50):
+def get_latest_stock_alerts(limit=100):
     """최신 주식 알림 조회"""
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
