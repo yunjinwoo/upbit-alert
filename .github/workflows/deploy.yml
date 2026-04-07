@@ -43,4 +43,4 @@ jobs:
             #pm2 list --no-color
             #echo "==========================================================="
             
-            pm2 prettylist
+            #pm2 prettylist
