@@ -23,10 +23,10 @@ def get_access_token():
     global ACCESS_TOKEN
     
     db_token = get_api_token('KIS')
-    if db_token:
-        print("💾 DB에서 오늘 유효한 토큰을 불러왔습니다.")
-        ACCESS_TOKEN = db_token
-        return ACCESS_TOKEN
+    # if db_token:
+    #     print("💾 DB에서 오늘 유효한 토큰을 불러왔습니다.")
+    #     ACCESS_TOKEN = db_token
+    #     return ACCESS_TOKEN
 
     print("📡 새로운 토큰 발급을 시도합니다...")
     url = f"{URL_BASE}/oauth2/tokenP"
