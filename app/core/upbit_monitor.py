@@ -67,7 +67,7 @@ def run_upbit_monitor():
             daily = get_daily_volume_info(ticker)
             if daily is None:
                 logger.info(f"[{ticker}] 일봉 전일 이하 → 스킵")
-                time.sleep(0.5)
+                time.sleep(2.0)
                 continue
 
             skip_cache.pop(ticker, None)
@@ -76,7 +76,7 @@ def run_upbit_monitor():
             ratios = {}
             for interval in intervals.keys():
                 ratios[interval] = get_volume_ratio(ticker, interval)
-                time.sleep(0.1)
+                time.sleep(0.4)
 
             surge_count = 0
             active_intervals = []
@@ -118,10 +118,10 @@ def run_upbit_monitor():
                             last_notified_time[ticker]["alert"] = current_candle_time
                             logger.info(f"[{time.strftime('%H:%M:%S')}] {ticker} 조건 만족 알림 발송!")
             
-            time.sleep(0.5)
+            time.sleep(2.0)
 
-        logger.info(f"{'=' * 40} == END 15분 후 다시 동작 ")
-        time.sleep(60 * 15)
+        logger.info(f"{'=' * 40} == END 1시간 후 다시 동작 ")
+        time.sleep(60 * 60)
 
 if __name__ == "__main__":
     run_upbit_monitor()

@@ -117,8 +117,8 @@ def run_stock_monitor():
     init_db()
     
     while get_access_token() is None:
-        logger.info("⏳ 1분 후 다시 시도합니다...")
-        time.sleep(61)
+        logger.info("⏳ 4분 후 다시 시도합니다...")
+        time.sleep(244) # 61 * 4
 
     last_notified = {}
 
@@ -127,10 +127,10 @@ def run_stock_monitor():
             now = datetime.now()
             # 장 운영 시간 외 대기 (예시)
             if now.hour < 8 or now.hour >= 20:
-                time.sleep(60)
+                time.sleep(240) # 60 * 4
                 continue
             if now.weekday() >= 5:
-                time.sleep(3600)
+                time.sleep(14400) # 3600 * 4
                 continue
 
             stocks = get_stock_ranking()
@@ -151,10 +151,10 @@ def run_stock_monitor():
                         url=f"https://finance.naver.com/item/main.nhn?code={code}"
                         )
                     last_notified[code] = now
-            time.sleep(30)
+            time.sleep(120) # 30 * 4
         except Exception as e:
             logger.error(f"❌ 에러: {e}")
-            time.sleep(10)
+            time.sleep(40) # 10 * 4
 
 if __name__ == "__main__":
     run_stock_monitor()
