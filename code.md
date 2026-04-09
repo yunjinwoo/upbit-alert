@@ -57,3 +57,23 @@
 - **알림 조건 변경**: `main.py`의 `thresholds` 딕셔너리나 `main_stocks.py`의 `vol_rate > 300` 부분을 수정.
 - **데이터 보관 개수**: `db_manager.py`의 `get_latest_alerts(limit=50)`의 숫자를 늘려 더 긴 히스토리 조회 가능.
 - **새로운 알림 추가**: `db_manager.py`에 테이블 추가 -> `api_server.py`에 엔드포인트 추가 -> `index.html`에 탭 추가 순서로 진행.
+
+===========
+
+# 리펙토링 20260409 
+전체적인 리펙토링과 테스트 파일 정리를 완료했습니다. 주요 변경 사항은 다음과 같습니다:
+
+   1. 프로젝트 구조 모듈화: app 폴더를 생성하여 코드를 역할별로 분리했습니다.
+       * app/api/: Flask 서버 관련 코드 (server.py)
+       * app/core/: 업비트 및 주식 감시 핵심 로직 (upbit_monitor.py, stock_monitor.py, kis_models.py)
+       * app/utils/: 데이터베이스, 로깅, 구글 시트 등 유틸리티 (db_manager.py, logger.py, google_sheets.py)
+   2. 설정 중앙 집중화: app/config.py를 생성하여 환경 변수와 주요 설정값들을 한 곳에서 관리하도록 했습니다.
+   3. 테스트 파일 분리: test_insert.py를 tests/ 폴더로 이동하고, 새로운 구조에서도 작동하도록 업데이트했습니다.
+   4. 통합 엔트리 포인트: 루트의 main.py를 수정하여 인자값(api, upbit, stock, all)에 따라 원하는 서비스를 실행할 수 있도록 통합했습니다.
+   5. 배포 워크플로우 업데이트: .github/workflows/deploy.yml을 새로운 구조와 실행 방식에 맞게 수정했습니다.
+   6. 코드 정리: 루트 디렉토리에 흩어져 있던 기존 파일들을 정리하여 프로젝트가 훨씬 깔끔해졌습니다.
+
+  이제 서비스를 실행하려면 다음과 같이 사용할 수 있습니다:
+   * 전체 실행: .venv\Scripts\python.exe main.py
+   * 특정 기능만 실행: .venv\Scripts\python.exe main.py api (또는 upbit, stock)
+   * 테스트 데이터 입력: .venv\Scripts\python.exe tests\test_insert.py

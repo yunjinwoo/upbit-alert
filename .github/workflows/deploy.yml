@@ -35,9 +35,9 @@ jobs:
             pm2 delete upbit-bot upbit-api stock-bot || true
             
             # 가상환경 내의 python3 경로를 정확히 지정하여 실행
-            pm2 start main.py --interpreter ./venv/bin/python3 --name upbit-bot
-            pm2 start api_server.py --interpreter ./venv/bin/python3 --name upbit-api
-            pm2 start main_stocks.py --interpreter ./venv/bin/python3 --name stock-bot
+            pm2 start main.py --name upbit-api --interpreter ./venv/bin/python3 -- api
+            pm2 start main.py --name upbit-bot --interpreter ./venv/bin/python3 -- upbit
+            pm2 start main.py --name stock-bot --interpreter ./venv/bin/python3 -- stock
             
             # 5. 설정 저장 (서버 재부팅 시 자동 실행)
             pm2 save
