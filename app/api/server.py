@@ -1,5 +1,6 @@
 from flask import Flask, jsonify, render_template
 from flask_cors import CORS
+from werkzeug.middleware.proxy_fix import ProxyFix
 from app.utils.db_manager import (
     get_latest_alerts, delete_alert, 
     get_latest_stock_alerts, delete_stock_alert
@@ -7,6 +8,7 @@ from app.utils.db_manager import (
 from app.config import Config
 
 app = Flask(__name__, template_folder='../../templates')
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 CORS(app)
 
 @app.route('/')

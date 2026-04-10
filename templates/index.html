@@ -107,7 +107,7 @@
 
     async function deleteAlert(id) {
         if (!confirm('삭제하시겠습니까?')) return;
-        const url = currentTab === 'coin' ? `/alerts/${id}` : `/stock-alerts/${id}`;
+        const url = currentTab === 'coin' ? `alerts/${id}` : `stock-alerts/${id}`;
         try {
             const response = await fetch(url, { method: 'DELETE' });
             if ((await response.json()).status === 'success') loadData();
@@ -115,7 +115,7 @@
     }
 
     async function loadData() {
-        const url = currentTab === 'coin' ? '/alerts' : '/stock-alerts';
+        const url = currentTab === 'coin' ? 'alerts' : 'stock-alerts';
         try {
             const response = await fetch(url);
             const result = await response.json();
