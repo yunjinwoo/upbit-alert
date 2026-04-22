@@ -63,8 +63,8 @@ def delete_stock_alert_api(alert_id):
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-def run_server():
-    app.run(host=Config.API_HOST, port=Config.API_PORT, debug=Config.DEBUG)
+def run_server(use_reloader=False):
+    app.run(host=Config.API_HOST, port=Config.API_PORT, debug=Config.DEBUG, use_reloader=use_reloader)
 
 if __name__ == '__main__':
-    run_server()
+    run_server(use_reloader=True)

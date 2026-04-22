@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from app.config import Config
 from app.utils.logger import get_logger
 from app.utils.google_sheets import init_sheet, save_to_sheet, get_daily_volume_info
+from app.utils.db_manager import get_today_alert_count
 
 logger = get_logger()
 
@@ -110,13 +111,25 @@ def run_upbit_monitor():
                             )
 
                             save_to_sheet(ticker, active_intervals, surge_count, daily_str)
-                            send_slack_msg(message)
+                            
+                            # (NEW) 당일 2회 이상 수집된 경우에만 슬랙 전송
+                            today_count = get_today_alert_count(ticker)
+                            if today_count >= 2:
+                                message = (
+                                    f"🚨 *[{ticker}] 거래량 조건 만족 ({surge_count}/4) - 당일 {today_count}회째* 🚨\n"
+                                    f"폭발한 봉: {surge_text} \n"
+                                    f" https://upbit.com/exchange?code=CRIX.UPBIT.{ticker}"
+                                )
+                                send_slack_msg(message)
+                                logger.info(f"[{time.strftime('%H:%M:%S')}] {ticker} {today_count}회째 수집 - 슬랙 알림 발송!")
+                            else:
+                                logger.info(f"[{time.strftime('%H:%M:%S')}] {ticker} 첫 수집 - 슬랙 건너뜀 (DB/시트 저장완료)")
+                                
                             skip_cache[ticker] = datetime.now() + skip_duration_alert
                             
                             if ticker not in last_notified_time:
                                 last_notified_time[ticker] = {}
                             last_notified_time[ticker]["alert"] = current_candle_time
-                            logger.info(f"[{time.strftime('%H:%M:%S')}] {ticker} 조건 만족 알림 발송!")
             
             time.sleep(2.0)
 

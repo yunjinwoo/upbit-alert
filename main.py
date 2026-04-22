@@ -12,7 +12,7 @@ def start_all():
     logger.info("Starting all services...")
     
     # Use multiprocessing to run services in parallel
-    p_api = multiprocessing.Process(target=run_server)
+    p_api = multiprocessing.Process(target=run_server, kwargs={'use_reloader': False})
     p_upbit = multiprocessing.Process(target=run_upbit_monitor)
     p_stock = multiprocessing.Process(target=run_stock_monitor)
     
@@ -25,6 +25,8 @@ def start_all():
     p_stock.join()
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
+    
     parser = argparse.ArgumentParser(description="Upbit & Stock Alert System")
     parser.add_argument("mode", nargs="?", choices=["all", "api", "upbit", "stock"], default="all",
                         help="Mode to run: all (default), api, upbit, or stock")
@@ -34,7 +36,7 @@ if __name__ == "__main__":
     if args.mode == "all":
         start_all()
     elif args.mode == "api":
-        run_server()
+        run_server(use_reloader=True)
     elif args.mode == "upbit":
         run_upbit_monitor()
     elif args.mode == "stock":

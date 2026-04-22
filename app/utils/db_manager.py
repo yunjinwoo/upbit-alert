@@ -47,6 +47,18 @@ def init_db():
             issued_date TEXT
         )
     ''')
+
+
+    # 골든 데이터셋 저장소 만들기 - 하네스 테스트용
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS gold_dataset (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scenario_name TEXT,
+            input_data TEXT,       -- 업비트 Mock 데이터 (JSON)
+            expected_output TEXT,  -- 기대하는 슬랙 메시지
+            category TEXT          -- '폭등', '횡보', '에러처리' 등
+        )
+    ''')
     conn.commit()
     conn.close()
 
@@ -118,6 +130,19 @@ def get_latest_stock_alerts(limit=100):
     conn.close()
     
     return [dict(row) for row in rows]
+
+def get_today_alert_count(ticker):
+    """오늘 해당 티커의 알림 횟수 조회"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    today = datetime.now().strftime('%Y-%m-%d')
+    cursor.execute('''
+        SELECT COUNT(*) FROM alerts 
+        WHERE ticker = ? AND timestamp LIKE ?
+    ''', (ticker, f"{today}%"))
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count
 
 def delete_alert(alert_id):
     """특정 ID의 코인 알림을 삭제합니다."""
