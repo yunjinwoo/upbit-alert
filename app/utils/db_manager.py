@@ -1,7 +1,10 @@
 import sqlite3
 from datetime import datetime
 import os
+import json
+from typing import List
 from app.config import Config
+from app.core.kis_models import MarketCapRankingItem # MarketCapRankingItem 임포트
 
 DB_PATH = Config.DB_NAME
 
@@ -59,6 +62,32 @@ def init_db():
             category TEXT          -- '폭등', '횡보', '에러처리' 등
         )
     ''')
+
+    # 주식 원본 데이터 저장 테이블
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS stock_raw_data (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            api_type TEXT, -- API 종류를 저장할 새 컬럼
+            raw_json TEXT
+        )
+    ''')
+
+    # 일별 시가총액 데이터 저장 테이블
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS stock_market_cap_daily (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT,
+            code TEXT,
+            name TEXT,
+            market_cap_amount TEXT, -- 시가총액 (문자열로 저장)
+            rank INTEGER,           -- 순위
+            price TEXT,             -- 현재가
+            change_rate TEXT,       -- 등락률
+            timestamp TEXT
+        )
+    ''')
+
     conn.commit()
     conn.close()
 
@@ -159,6 +188,85 @@ def delete_stock_alert(alert_id):
     cursor.execute('DELETE FROM stock_alerts WHERE id = ?', (alert_id,))
     conn.commit()
     conn.close()
+
+def save_stock_raw_data(data, api_type="UNKNOWN"): # api_type 인자 추가
+    """주식 원본 데이터 저장"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('''
+        INSERT INTO stock_raw_data (timestamp, api_type, raw_json)
+        VALUES (?, ?, ?)
+    ''', (timestamp, api_type, json.dumps(data, ensure_ascii=False)))
+    conn.commit()
+    conn.close()
+
+def get_latest_stock_raw_data(limit=10):
+    """최신 주식 원본 데이터 조회"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM stock_raw_data ORDER BY id DESC LIMIT ?', (limit,))
+    rows = cursor.fetchall()
+    conn.close()
+    
+    return [dict(row) for row in rows]
+
+def save_daily_market_cap(data_list: List[MarketCapRankingItem]): # 타입 힌트 추가
+    """일별 시가총액 순위 데이터 일괄 저장 (당일 데이터는 덮어쓰기)"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    today_date = datetime.now().strftime('%Y-%m-%d')
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    # 당일 데이터가 이미 있다면 삭제 후 재등록 (항상 최신 상태 유지)
+    cursor.execute('DELETE FROM stock_market_cap_daily WHERE date = ?', (today_date,))
+
+    insert_data = []
+    for item in data_list:
+        insert_data.append((
+            today_date,
+            item.stck_shrn_iscd, # MarketCapRankingItem 객체에서 직접 접근
+            item.hts_kor_isnm,   # MarketCapRankingItem 객체에서 직접 접근
+            item.stck_avls,      # MarketCapRankingItem 객체에서 직접 접근
+            int(item.data_rank), # MarketCapRankingItem 객체에서 직접 접근
+            item.stck_prpr,      # MarketCapRankingItem 객체에서 직접 접근
+            item.prdy_ctrt,      # MarketCapRankingItem 객체에서 직접 접근
+            timestamp
+        ))
+
+    cursor.executemany('''
+        INSERT INTO stock_market_cap_daily (date, code, name, market_cap_amount, rank, price, change_rate, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ''', insert_data)
+
+    conn.commit()
+    conn.close()
+
+def get_market_cap_history(code=None, limit_dates=7):
+    """특정 종목 또는 전체 시총 추이 데이터 조회"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    if code:
+        # 특정 종목의 최근 N일 데이터 조회
+        cursor.execute('''
+            SELECT * FROM stock_market_cap_daily 
+            WHERE code = ? 
+            ORDER BY date ASC
+        ''', (code,))
+    else:
+        # 최근 날짜 기준 전체 순위 조회 (날짜 그룹핑용으로 쓸 수 있음)
+        # 일단은 최근 7일치 데이터만 가져오도록 수정 (너무 많으면 성능 저하)
+        cursor.execute('''
+            SELECT * FROM stock_market_cap_daily
+            WHERE date IN (SELECT DISTINCT date FROM stock_market_cap_daily ORDER BY date DESC LIMIT ?)
+            ORDER BY date DESC, rank ASC
+        ''', (limit_dates,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
 
 # Initialize DB on load
 init_db()

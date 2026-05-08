@@ -60,6 +60,68 @@ class RequestQueryParam:
     fid_rsfl_rate1: Annotated[str, "등락 비율1"] = field(metadata=REQUIRED)
 
 @dataclass
+class MarketCapQueryParam:
+    """국내 시가총액 순위 API 요청 파라미터"""
+    fid_cond_mrkt_div_code: str = "J" # 시장 분류 코드 (J: 전체)
+    fid_cond_scr_div_code: str = "20174" # 조건 화면 분류 코드
+    fid_div_cls_code: str = "0" # 분류 구분 코드
+    fid_input_iscd: str = "0000" # 입력 종목코드
+    fid_trgt_cls_code: str = "0" # 대상 구분 코드
+    fid_trgt_exls_cls_code: str = "0" # 대상 제외 구분 코드
+
+@dataclass
+class MarketCapRankingItem:
+    """국내 시가총액 순위 개별 종목 정보 (Response Output)"""
+    data_rank: str           # 데이터 순위
+    stck_shrn_iscd: str      # 주식 단축 종목코드
+    hts_kor_isnm: str        # HTS 한글 종목명
+    stck_prpr: str           # 주식 현재가
+    prdy_vrss_sign: str      # 전일 대비 부호
+    prdy_vrss: str           # 전일 대비
+    prdy_ctrt: str           # 전일 대비율 (등락률)
+    acml_vol: str            # 누적 거래량
+    acml_tr_pbmn: str        # 누적 거래 대금
+    stck_avls: str           # 시가총액 (억 원 단위)
+    lstn_stcn: str           # 상장 주식 수
+    mrkt_div_cls_code: str   # 시장 구분 분류 코드
+
+@dataclass
+class MarketCapRankingResponse:
+    """국내 시가총액 순위 API 전체 응답 구조"""
+    rt_cd: str               # 성공 실패 여부 (0:성공, 0 이외:실패)
+    msg_cd: str              # 응답코드
+    msg1: str                # 응답메세지
+    output: List[MarketCapRankingItem] = field(default_factory=list)
+
+    @classmethod
+    def from_json(cls, data: dict):
+        output_data = data.get("output", [])
+        parsed_items = []
+        for item in output_data:
+            item_obj = MarketCapRankingItem(
+                data_rank=item.get("data_rank", "0"),
+                stck_shrn_iscd=item.get("stck_shrn_iscd", "000000"),
+                hts_kor_isnm=item.get("hts_kor_isnm", "N/A"),
+                stck_prpr=item.get("stck_prpr", "0"),
+                prdy_vrss_sign=item.get("prdy_vrss_sign", "3"),
+                prdy_vrss=item.get("prdy_vrss", "0"),
+                prdy_ctrt=item.get("prdy_ctrt", "0"),
+                acml_vol=item.get("acml_vol", "0"),
+                acml_tr_pbmn=item.get("acml_tr_pbmn", "0"),
+                stck_avls=item.get("stck_avls", "0"),
+                lstn_stcn=item.get("lstn_stcn", "0"),
+                mrkt_div_cls_code=item.get("mrkt_div_cls_code", "N/A")
+            )
+            parsed_items.append(item_obj)
+        
+        return cls(
+            rt_cd=data.get("rt_cd", "1"),
+            msg_cd=data.get("msg_cd", ""),
+            msg1=data.get("msg1", ""),
+            output=parsed_items
+        )
+
+@dataclass
 class FluctuationRankingItem:
     """국내주식 등락률 순위 개별 종목 정보 (Response Output)"""
     hts_kor_isnm: str        # HTS 한글 종목명

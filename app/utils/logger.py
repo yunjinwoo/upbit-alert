@@ -20,7 +20,8 @@ def get_logger(name='upbit_alert'):
         # File handler (Rotating to keep log size manageable)
         # Using a fixed path for log file relative to project root
         log_file = os.path.join(os.getcwd(), 'app.log')
-        file_handler = RotatingFileHandler(log_file, maxBytes=10*1024*1024, backupCount=5, encoding='utf-8')
+        # maxBytes=10MB, backupCount=1 (app.log, app.log.1 까지만 유지)
+        file_handler = RotatingFileHandler(log_file, maxBytes=10*1024*1024, backupCount=1, encoding='utf-8')
         file_handler.setFormatter(log_format)
         logger.addHandler(file_handler)
 

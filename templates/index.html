@@ -38,6 +38,8 @@
             <span id="update-timer" class="badge bg-secondary">로딩 중...</span>
             <button onclick="loadData()" class="btn btn-primary btn-sm ms-2">새로고침</button>
             <a id="sheet-link" href="#" target="_blank" class="btn btn-success btn-sm ms-1">📊 시트</a>
+            <a href="/raw-data" class="btn btn-info btn-sm ms-1 text-white">🗄️ 원본 데이터</a>
+            <a href="/market-cap" class="btn btn-warning btn-sm ms-1 text-dark">📈 시총 추이</a>
         </div>
     </div>
 
@@ -55,7 +57,7 @@
     <div class="row stats-container">
         <div class="col-md-12">
             <div class="stats-card">
-                <div id="stats-title" class="stats-title">최근 최다 발생 종목 (TOP 5)</div>
+                <div id="stats-title" class="stats-title">최근 최다 발생 종목 (TOP 15)</div>
                 <div id="top-tickers-list" class="stats-value">
                     <small class="text-muted">데이터 분석 중...</small>
                 </div>
@@ -93,7 +95,7 @@
         
         // 시트 링크 변경
         document.getElementById('sheet-link').href = tab === 'coin' ? COIN_SHEET : STOCK_SHEET;
-        document.getElementById('stats-title').innerText = tab === 'coin' ? '최근 최다 발생 코인 (TOP 5)' : '최근 최다 발생 주식 (TOP 5)';
+        document.getElementById('stats-title').innerText = tab === 'coin' ? '최근 최다 발생 코인 (TOP 15)' : '최근 최다 발생 주식 (TOP 15)';
         
         loadData();
     }
@@ -155,11 +157,11 @@
                 `).join('');
             }
 
-            // TOP 5 집계
+            // TOP 15 집계로 수정
             const counts = {};
             result.data.forEach(item => { const key = currentTab === 'coin' ? item.ticker : item.name; counts[key] = (counts[key] || 0) + 1; });
-            const top5 = Object.entries(counts).sort((a,b) => b[1]-a[1]).slice(0,5);
-            document.getElementById('top-tickers-list').innerHTML = top5.map(([k, v]) => `
+            const top15 = Object.entries(counts).sort((a,b) => b[1]-a[1]).slice(0, 15);
+            document.getElementById('top-tickers-list').innerHTML = top15.map(([k, v]) => `
                 <span class="top-ticker-item" onclick="filterByTicker('${k}')">${k} <span class="top-ticker-count">${v}회</span></span>
             `).join('') || '<small class="text-muted">데이터 없음</small>';
 
