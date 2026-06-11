@@ -187,7 +187,7 @@
                 return `
                     <tr>
                         <td><b>${item.date}</b></td>
-                        <td><span class="badge bg-dark rank-badge">${item.rank}위</span></td>
+                        <td><span class="badge rank-badge ${item.fid_input_iscd === '1001' ? 'bg-success' : 'bg-primary'}">${item.rank}위</span></td>
                         <td>
                             <a href="https://finance.naver.com/item/main.nhn?code=${item.code}" target="_blank" class="ticker-link">
                                 ${item.name} <small class="text-muted">(${item.code})</small>
@@ -200,10 +200,11 @@
                     </tr>`;
             }).join('');
 
-            const orderOption = searchCode ? [[0, 'desc']] : [[0, 'desc'], [1, 'asc']];
+            // 날짜 내림차순 → 시가총액(3번째 컬럼) 내림차순
+            const orderOption = [[0, 'desc'], [3, 'desc']];
             dataTable = $('#marketCapTable').DataTable({
                 order: orderOption,
-                pageLength: 50,
+                pageLength: 100,
                 language: {
                     search: "결과 내 검색:",
                     lengthMenu: "_MENU_ 개씩 보기",
