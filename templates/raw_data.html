@@ -23,9 +23,24 @@
         .timestamp-badge { font-size: 1.1rem; }
         .card-header { cursor: pointer; user-select: none; } /* 헤더 클릭 가능 표시 */
         .card-header:hover { background-color: #343a40 !important; }
+        .main-navbar { background-color: #1a1a2e; }
+        .main-navbar .navbar-brand { color: #fff; font-weight: bold; }
+        .main-navbar .nav-link { color: rgba(255,255,255,0.75) !important; }
+        .main-navbar .nav-link:hover, .main-navbar .nav-link.active { color: #fff !important; }
+        .main-navbar .nav-link.active { border-bottom: 2px solid #4da6ff; }
     </style>
 </head>
 <body>
+
+<nav class="navbar main-navbar px-3">
+    <a class="navbar-brand" href="/">📡 알림 시스템</a>
+    <div class="d-flex gap-3">
+        <a href="/" class="nav-link">대시보드</a>
+        <a href="/market-cap" class="nav-link">시가총액 추이</a>
+        <a href="/investor-trend" class="nav-link">투자자별 매매동향</a>
+        <a href="/raw-data" class="nav-link active">원본 데이터</a>
+    </div>
+</nav>
 
 <div class="container dashboard-container">
     <div class="header-title">

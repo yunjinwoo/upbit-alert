@@ -68,7 +68,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS stock_raw_data (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT,
-            api_type TEXT, -- API 종류를 저장할 새 컬럼
+            api_type TEXT,
             raw_json TEXT
         )
     ''')
@@ -80,13 +80,58 @@ def init_db():
             date TEXT,
             code TEXT,
             name TEXT,
-            market_cap_amount TEXT, -- 시가총액 (문자열로 저장)
-            rank INTEGER,           -- 순위
-            price TEXT,             -- 현재가
-            change_rate TEXT,       -- 등락률
+            market_cap_amount TEXT,
+            rank INTEGER,
+            price TEXT,
+            change_rate TEXT,
+            market_weight TEXT,
+            fid_input_iscd TEXT,
             timestamp TEXT
         )
     ''')
+
+    # 일별 투자자별 프로그램 매매동향 저장 테이블
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS investor_trend_daily (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT,
+            exch_div TEXT,
+            mrkt_div TEXT,
+            invr_cls_code TEXT,
+            invr_cls_name TEXT,
+            all_shnu_amt TEXT,
+            all_seln_amt TEXT,
+            all_ntby_amt TEXT,
+            all_shnu_qty TEXT,
+            all_seln_qty TEXT,
+            all_ntby_qty TEXT,
+            arbt_shnu_amt TEXT,
+            arbt_seln_amt TEXT,
+            arbt_ntby_amt TEXT,
+            arbt_shnu_qty TEXT,
+            arbt_seln_qty TEXT,
+            arbt_ntby_qty TEXT,
+            nabt_shnu_amt TEXT,
+            nabt_seln_amt TEXT,
+            nabt_ntby_amt TEXT,
+            nabt_shnu_qty TEXT,
+            nabt_seln_qty TEXT,
+            nabt_ntby_qty TEXT,
+            timestamp TEXT
+        )
+    ''')
+
+    # 기존 테이블 컬럼 마이그레이션
+    migrations = [
+        'ALTER TABLE stock_market_cap_daily ADD COLUMN market_weight TEXT DEFAULT "0"',
+        'ALTER TABLE stock_market_cap_daily ADD COLUMN fid_input_iscd TEXT DEFAULT "0000"',
+        'ALTER TABLE stock_raw_data ADD COLUMN api_type TEXT DEFAULT "UNKNOWN"',
+    ]
+    for sql in migrations:
+        try:
+            cursor.execute(sql)
+        except Exception:
+            pass
 
     conn.commit()
     conn.close()
@@ -109,7 +154,7 @@ def get_api_token(provider):
     cursor = conn.cursor()
     today = datetime.now().strftime('%Y-%m-%d')
     cursor.execute('''
-        SELECT token FROM api_tokens 
+        SELECT token FROM api_tokens
         WHERE provider = ? AND issued_date = ?
     ''', (provider, today))
     row = cursor.fetchone()
@@ -146,7 +191,7 @@ def get_latest_alerts(limit=100):
     cursor.execute('SELECT * FROM alerts ORDER BY id DESC LIMIT ?', (limit,))
     rows = cursor.fetchall()
     conn.close()
-    
+
     return [dict(row) for row in rows]
 
 def get_latest_stock_alerts(limit=100):
@@ -157,7 +202,7 @@ def get_latest_stock_alerts(limit=100):
     cursor.execute('SELECT * FROM stock_alerts ORDER BY id DESC LIMIT ?', (limit,))
     rows = cursor.fetchall()
     conn.close()
-    
+
     return [dict(row) for row in rows]
 
 def get_today_alert_count(ticker):
@@ -166,7 +211,7 @@ def get_today_alert_count(ticker):
     cursor = conn.cursor()
     today = datetime.now().strftime('%Y-%m-%d')
     cursor.execute('''
-        SELECT COUNT(*) FROM alerts 
+        SELECT COUNT(*) FROM alerts
         WHERE ticker = ? AND timestamp LIKE ?
     ''', (ticker, f"{today}%"))
     count = cursor.fetchone()[0]
@@ -189,7 +234,7 @@ def delete_stock_alert(alert_id):
     conn.commit()
     conn.close()
 
-def save_stock_raw_data(data, api_type="UNKNOWN"): # api_type 인자 추가
+def save_stock_raw_data(data, api_type="UNKNOWN"):
     """주식 원본 데이터 저장"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -209,64 +254,159 @@ def get_latest_stock_raw_data(limit=10):
     cursor.execute('SELECT * FROM stock_raw_data ORDER BY id DESC LIMIT ?', (limit,))
     rows = cursor.fetchall()
     conn.close()
-    
+
     return [dict(row) for row in rows]
 
-def save_daily_market_cap(data_list: List[MarketCapRankingItem]): # 타입 힌트 추가
-    """일별 시가총액 순위 데이터 일괄 저장 (당일 데이터는 덮어쓰기)"""
+def save_daily_market_cap(data_list: List[MarketCapRankingItem], fid_input_iscd: str = "0000"):
+    """일별 시가총액 순위 데이터 일괄 저장 (당일 + 동일 시장구분 데이터 덮어쓰기)"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     today_date = datetime.now().strftime('%Y-%m-%d')
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-    # 당일 데이터가 이미 있다면 삭제 후 재등록 (항상 최신 상태 유지)
-    cursor.execute('DELETE FROM stock_market_cap_daily WHERE date = ?', (today_date,))
+    cursor.execute('DELETE FROM stock_market_cap_daily WHERE date = ? AND fid_input_iscd = ?', (today_date, fid_input_iscd))
 
     insert_data = []
     for item in data_list:
         insert_data.append((
             today_date,
-            item.stck_shrn_iscd, # MarketCapRankingItem 객체에서 직접 접근
-            item.hts_kor_isnm,   # MarketCapRankingItem 객체에서 직접 접근
-            item.stck_avls,      # MarketCapRankingItem 객체에서 직접 접근
-            int(item.data_rank), # MarketCapRankingItem 객체에서 직접 접근
-            item.stck_prpr,      # MarketCapRankingItem 객체에서 직접 접근
-            item.prdy_ctrt,      # MarketCapRankingItem 객체에서 직접 접근
+            item.mksc_shrn_iscd,
+            item.hts_kor_isnm,
+            item.stck_avls,
+            int(item.data_rank),
+            item.stck_prpr,
+            item.prdy_ctrt,
+            item.mrkt_whol_avls_rlim,
+            fid_input_iscd,
             timestamp
         ))
 
     cursor.executemany('''
-        INSERT INTO stock_market_cap_daily (date, code, name, market_cap_amount, rank, price, change_rate, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO stock_market_cap_daily (date, code, name, market_cap_amount, rank, price, change_rate, market_weight, fid_input_iscd, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', insert_data)
 
     conn.commit()
     conn.close()
 
-def get_market_cap_history(code=None, limit_dates=7):
-    """특정 종목 또는 전체 시총 추이 데이터 조회"""
+def get_market_cap_history(code=None, limit_dates=7, fid_input_iscd="combined", date=None):
+    """시총 순위 이력 조회. fid_input_iscd='combined' 이면 거래소+코스닥 합산."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    
-    if code:
-        # 특정 종목의 최근 N일 데이터 조회
-        cursor.execute('''
-            SELECT * FROM stock_market_cap_daily 
-            WHERE code = ? 
-            ORDER BY date ASC
-        ''', (code,))
+
+    if fid_input_iscd == "combined":
+        iscd_list = ("0001", "1001")
     else:
-        # 최근 날짜 기준 전체 순위 조회 (날짜 그룹핑용으로 쓸 수 있음)
-        # 일단은 최근 7일치 데이터만 가져오도록 수정 (너무 많으면 성능 저하)
-        cursor.execute('''
+        iscd_list = (fid_input_iscd,)
+
+    placeholders = ",".join("?" * len(iscd_list))
+
+    if code:
+        cursor.execute(f'''
             SELECT * FROM stock_market_cap_daily
-            WHERE date IN (SELECT DISTINCT date FROM stock_market_cap_daily ORDER BY date DESC LIMIT ?)
-            ORDER BY date DESC, rank ASC
-        ''', (limit_dates,))
+            WHERE code = ? AND fid_input_iscd IN ({placeholders})
+            ORDER BY date ASC
+        ''', (code, *iscd_list))
+    elif date:
+        cursor.execute(f'''
+            SELECT * FROM stock_market_cap_daily
+            WHERE date = ? AND fid_input_iscd IN ({placeholders})
+            ORDER BY CAST(market_cap_amount AS INTEGER) DESC
+        ''', (date, *iscd_list))
+    else:
+        cursor.execute(f'''
+            SELECT * FROM stock_market_cap_daily
+            WHERE fid_input_iscd IN ({placeholders})
+              AND date IN (
+                  SELECT DISTINCT date FROM stock_market_cap_daily
+                  WHERE fid_input_iscd IN ({placeholders})
+                  ORDER BY date DESC LIMIT ?
+              )
+            ORDER BY date DESC, CAST(market_cap_amount AS INTEGER) DESC
+        ''', (*iscd_list, *iscd_list, limit_dates))
+
     rows = cursor.fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def save_daily_investor_trend(output1: list, exch_div: str, mrkt_div: str):
+    """투자자별 프로그램 매매동향 일별 저장 (당일 데이터 덮어쓰기)"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    today = datetime.now().strftime('%Y-%m-%d')
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    cursor.execute(
+        'DELETE FROM investor_trend_daily WHERE date = ? AND exch_div = ? AND mrkt_div = ?',
+        (today, exch_div, mrkt_div)
+    )
+
+    rows = []
+    for item in output1:
+        rows.append((
+            today, exch_div, mrkt_div,
+            item.get('invr_cls_code', ''),
+            item.get('invr_cls_name', ''),
+            item.get('all_shnu_amt', '0'),
+            item.get('all_seln_amt', '0'),
+            item.get('all_ntby_amt', '0'),
+            item.get('all_shnu_qty', '0'),
+            item.get('all_seln_qty', '0'),
+            item.get('all_ntby_qty', '0'),
+            item.get('arbt_shnu_amt', '0'),
+            item.get('arbt_seln_amt', '0'),
+            item.get('arbt_ntby_amt', '0'),
+            item.get('arbt_shnu_qty', '0'),
+            item.get('arbt_seln_qty', '0'),
+            item.get('arbt_ntby_qty', '0'),
+            item.get('nabt_shnu_amt', '0'),
+            item.get('nabt_seln_amt', '0'),
+            item.get('nabt_ntby_amt', '0'),
+            item.get('nabt_shnu_qty', '0'),
+            item.get('nabt_seln_qty', '0'),
+            item.get('nabt_ntby_qty', '0'),
+            timestamp,
+        ))
+
+    cursor.executemany('''
+        INSERT INTO investor_trend_daily (
+            date, exch_div, mrkt_div,
+            invr_cls_code, invr_cls_name,
+            all_shnu_amt, all_seln_amt, all_ntby_amt,
+            all_shnu_qty, all_seln_qty, all_ntby_qty,
+            arbt_shnu_amt, arbt_seln_amt, arbt_ntby_amt,
+            arbt_shnu_qty, arbt_seln_qty, arbt_ntby_qty,
+            nabt_shnu_amt, nabt_seln_amt, nabt_ntby_amt,
+            nabt_shnu_qty, nabt_seln_qty, nabt_ntby_qty,
+            timestamp
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ''', rows)
+
+    conn.commit()
+    conn.close()
+
+
+def get_investor_trend_history(exch_div: str, mrkt_div: str, limit_days: int = 30):
+    """투자자별 프로그램 매매동향 이력 조회"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT * FROM investor_trend_daily
+        WHERE exch_div = ? AND mrkt_div = ?
+          AND date IN (
+              SELECT DISTINCT date FROM investor_trend_daily
+              WHERE exch_div = ? AND mrkt_div = ?
+              ORDER BY date DESC LIMIT ?
+          )
+        ORDER BY date DESC, invr_cls_code ASC
+    ''', (exch_div, mrkt_div, exch_div, mrkt_div, limit_days))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
 
 # Initialize DB on load
 init_db()

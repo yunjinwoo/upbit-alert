@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>프로그램매매 투자자별 매매동향</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f4f7f6; font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; }
+        .dashboard-container { margin-top: 30px; margin-bottom: 50px; }
+        .header-title { margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+        .section-box { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); margin-bottom: 28px; }
+        .section-title { font-size: 1rem; font-weight: bold; margin-bottom: 14px; color: #333; }
+        .buy-val  { color: #d60000; font-weight: bold; }
+        .sell-val { color: #0049af; font-weight: bold; }
+        .zero-val { color: #aaa; }
+        #rawJsonBox { background: #1e1e1e; color: #d4d4d4; font-size: 0.75rem; border-radius: 8px; padding: 15px; max-height: 400px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; display: none; }
+        .table th, .table td { white-space: nowrap; }
+        .main-navbar { background-color: #1a1a2e; }
+        .main-navbar .navbar-brand { color: #fff; font-weight: bold; }
+        .main-navbar .nav-link { color: rgba(255,255,255,0.75) !important; }
+        .main-navbar .nav-link:hover, .main-navbar .nav-link.active { color: #fff !important; }
+        .main-navbar .nav-link.active { border-bottom: 2px solid #4da6ff; }
+    </style>
+</head>
+<body>
+
+<nav class="navbar main-navbar px-3">
+    <a class="navbar-brand" href="/">📡 알림 시스템</a>
+    <div class="d-flex gap-3">
+        <a href="/" class="nav-link">대시보드</a>
+        <a href="/market-cap" class="nav-link">시가총액 추이</a>
+        <a href="/investor-trend" class="nav-link active">투자자별 매매동향</a>
+        <a href="/raw-data" class="nav-link">원본 데이터</a>
+    </div>
+</nav>
+
+<div class="container-fluid dashboard-container px-4">
+    <div class="header-title">
+        <h2>📊 프로그램매매 투자자별 매매동향 (당일)</h2>
+        <div>
+            <span id="update-timer" class="badge bg-secondary">-</span>
+            <button onclick="loadAll()" class="btn btn-primary btn-sm ms-2">새로고침</button>
+            <button onclick="toggleRaw()" class="btn btn-outline-dark btn-sm ms-1">원본 JSON</button>
+            <a href="/" class="btn btn-outline-secondary btn-sm ms-1">대시보드로 돌아가기</a>
+        </div>
+    </div>
+
+    <!-- 조회 조건 -->
+    <div class="row mb-3 g-2 align-items-end">
+        <div class="col-auto">
+            <label class="form-label mb-1 small">거래소</label>
+            <select id="exchSelect" class="form-select form-select-sm" onchange="loadAll()">
+                <option value="J">KRX</option>
+                <option value="NX">NXT</option>
+                <option value="UN">통합</option>
+            </select>
+        </div>
+        <div class="col-auto">
+            <label class="form-label mb-1 small">시장</label>
+            <select id="mrktSelect" class="form-select form-select-sm" onchange="loadAll()">
+                <option value="1">코스피</option>
+                <option value="4">코스닥</option>
+            </select>
+        </div>
+        <div class="col-auto">
+            <label class="form-label mb-1 small">이력 조회 일수</label>
+            <select id="daysSelect" class="form-select form-select-sm" onchange="loadHistory()">
+                <option value="7">7일</option>
+                <option value="14">14일</option>
+                <option value="30" selected>30일</option>
+                <option value="60">60일</option>
+            </select>
+        </div>
+    </div>
+
+    <!-- 당일 현황 -->
+    <div class="section-box">
+        <div class="section-title">📌 당일 현황</div>
+        <div id="todayError" class="alert alert-danger" style="display:none"></div>
+        <div id="todaySpinner" class="text-center py-4" style="display:none">
+            <div class="spinner-border spinner-border-sm text-primary"></div> 불러오는 중...
+        </div>
+        <div class="table-responsive">
+            <table id="todayTable" class="table table-hover table-sm mb-0" style="width:100%">
+                <thead class="table-dark">
+                    <tr>
+                        <th rowspan="2" class="align-middle text-center">투자자</th>
+                        <th colspan="3" class="text-center border-start">전체</th>
+                        <th colspan="3" class="text-center border-start">차익</th>
+                        <th colspan="3" class="text-center border-start">비차익</th>
+                    </tr>
+                    <tr>
+                        <th class="text-end border-start">매수(백만)</th>
+                        <th class="text-end">매도(백만)</th>
+                        <th class="text-end">순매수(백만)</th>
+                        <th class="text-end border-start">매수(백만)</th>
+                        <th class="text-end">매도(백만)</th>
+                        <th class="text-end">순매수(백만)</th>
+                        <th class="text-end border-start">매수(백만)</th>
+                        <th class="text-end">매도(백만)</th>
+                        <th class="text-end">순매수(백만)</th>
+                    </tr>
+                </thead>
+                <tbody id="todayBody">
+                    <tr><td colspan="10" class="text-center text-muted py-3">조회 중...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- 일별 이력 -->
+    <div class="section-box">
+        <div class="section-title">📅 일별 이력</div>
+        <div id="histError" class="alert alert-danger" style="display:none"></div>
+        <div id="histSpinner" class="text-center py-4" style="display:none">
+            <div class="spinner-border spinner-border-sm text-primary"></div> 불러오는 중...
+        </div>
+        <div class="table-responsive">
+            <table id="histTable" class="table table-hover table-sm" style="width:100%">
+                <thead class="table-light">
+                    <tr>
+                        <th>날짜</th>
+                        <th>투자자</th>
+                        <th class="text-end">전체 매수(백만)</th>
+                        <th class="text-end">전체 매도(백만)</th>
+                        <th class="text-end">전체 순매수(백만)</th>
+                        <th class="text-end">차익 순매수(백만)</th>
+                        <th class="text-end">비차익 순매수(백만)</th>
+                    </tr>
+                </thead>
+                <tbody id="histBody">
+                    <tr><td colspan="7" class="text-center text-muted py-3">데이터 없음 (조회 후 자동 저장됩니다)</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="mt-2"><pre id="rawJsonBox"></pre></div>
+</div>
+
+<script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
+
+<script>
+    let histDT;
+
+    function toggleRaw() {
+        const box = document.getElementById('rawJsonBox');
+        box.style.display = box.style.display === 'none' ? 'block' : 'none';
+    }
+
+    function fmtAmt(val) {
+        const n = parseInt(val);
+        if (isNaN(n)) return '-';
+        if (n > 0) return `<span class="buy-val">+${n.toLocaleString()}</span>`;
+        if (n < 0) return `<span class="sell-val">${n.toLocaleString()}</span>`;
+        return `<span class="zero-val">0</span>`;
+    }
+
+    function fmtPos(val) {
+        const n = parseInt(val);
+        if (isNaN(n)) return '-';
+        return n.toLocaleString();
+    }
+
+    function getParams() {
+        return {
+            exch: document.getElementById('exchSelect').value,
+            mrkt: document.getElementById('mrktSelect').value,
+            days: document.getElementById('daysSelect').value,
+        };
+    }
+
+    async function loadToday() {
+        const { exch, mrkt } = getParams();
+        document.getElementById('todaySpinner').style.display = 'block';
+        document.getElementById('todayError').style.display = 'none';
+
+        try {
+            const res = await fetch(`/api/investor-trend?exch=${exch}&mrkt=${mrkt}`);
+            const data = await res.json();
+            document.getElementById('rawJsonBox').textContent = JSON.stringify(data, null, 2);
+            document.getElementById('todaySpinner').style.display = 'none';
+            document.getElementById('update-timer').innerText = `최근 업데이트: ${new Date().toLocaleTimeString()}`;
+
+            if (data.error || (data.rt_cd && data.rt_cd !== '0')) {
+                const msg = data.error || `API 오류 (${data.msg_cd}): ${data.msg1}`;
+                document.getElementById('todayError').textContent = msg;
+                document.getElementById('todayError').style.display = 'block';
+                return;
+            }
+
+            const items = data.output1 || [];
+            document.getElementById('todayBody').innerHTML = items.length === 0
+                ? '<tr><td colspan="10" class="text-center text-muted">데이터 없음</td></tr>'
+                : items.map(item => `
+                    <tr>
+                        <td><strong>${item.invr_cls_name || item.invr_cls_code}</strong></td>
+                        <td class="text-end">${fmtPos(item.all_shnu_amt)}</td>
+                        <td class="text-end">${fmtPos(item.all_seln_amt)}</td>
+                        <td class="text-end">${fmtAmt(item.all_ntby_amt)}</td>
+                        <td class="text-end">${fmtPos(item.arbt_shnu_amt)}</td>
+                        <td class="text-end">${fmtPos(item.arbt_seln_amt)}</td>
+                        <td class="text-end">${fmtAmt(item.arbt_ntby_amt)}</td>
+                        <td class="text-end">${fmtPos(item.nabt_shnu_amt)}</td>
+                        <td class="text-end">${fmtPos(item.nabt_seln_amt)}</td>
+                        <td class="text-end">${fmtAmt(item.nabt_ntby_amt)}</td>
+                    </tr>`).join('');
+        } catch (e) {
+            document.getElementById('todaySpinner').style.display = 'none';
+            document.getElementById('todayError').textContent = '서버 오류: ' + e.message;
+            document.getElementById('todayError').style.display = 'block';
+        }
+    }
+
+    async function loadHistory() {
+        const { exch, mrkt, days } = getParams();
+        document.getElementById('histSpinner').style.display = 'block';
+        document.getElementById('histError').style.display = 'none';
+
+        try {
+            const res = await fetch(`/api/investor-trend/history?exch=${exch}&mrkt=${mrkt}&days=${days}`);
+            const result = await res.json();
+            document.getElementById('histSpinner').style.display = 'none';
+
+            if (result.status !== 'success') {
+                document.getElementById('histError').textContent = result.message || '오류 발생';
+                document.getElementById('histError').style.display = 'block';
+                return;
+            }
+
+            if (histDT) { histDT.destroy(); histDT = null; }
+
+            const rows = result.data;
+            document.getElementById('histBody').innerHTML = rows.length === 0
+                ? '<tr><td colspan="7" class="text-center text-muted py-3">저장된 이력이 없습니다. 당일 데이터 조회 시 자동 저장됩니다.</td></tr>'
+                : rows.map(r => `
+                    <tr>
+                        <td>${r.date}</td>
+                        <td><strong>${r.invr_cls_name || r.invr_cls_code}</strong></td>
+                        <td class="text-end">${fmtPos(r.all_shnu_amt)}</td>
+                        <td class="text-end">${fmtPos(r.all_seln_amt)}</td>
+                        <td class="text-end">${fmtAmt(r.all_ntby_amt)}</td>
+                        <td class="text-end">${fmtAmt(r.arbt_ntby_amt)}</td>
+                        <td class="text-end">${fmtAmt(r.nabt_ntby_amt)}</td>
+                    </tr>`).join('');
+
+            if (rows.length > 0) {
+                histDT = $('#histTable').DataTable({
+                    order: [[0, 'desc']],
+                    pageLength: 50,
+                    language: {
+                        search: "검색:",
+                        lengthMenu: "_MENU_ 개씩 보기",
+                        info: "총 _TOTAL_ 건 중 _START_~_END_ 표시",
+                        emptyTable: "데이터가 없습니다."
+                    }
+                });
+            }
+        } catch (e) {
+            document.getElementById('histSpinner').style.display = 'none';
+            document.getElementById('histError').textContent = '서버 오류: ' + e.message;
+            document.getElementById('histError').style.display = 'block';
+        }
+    }
+
+    function loadAll() {
+        loadToday().then(() => loadHistory());
+    }
+
+    document.addEventListener('DOMContentLoaded', loadAll);
+</script>
+</body>
+</html>

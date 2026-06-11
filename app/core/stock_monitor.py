@@ -4,7 +4,7 @@ import time
 from datetime import datetime
 from dataclasses import asdict
 from app.config import Config
-from app.utils.db_manager import save_stock_alert_to_db, init_db, save_api_token, get_api_token, save_stock_raw_data, save_daily_market_cap
+from app.utils.db_manager import save_stock_alert_to_db, init_db, save_api_token, get_api_token, save_stock_raw_data, save_daily_market_cap, save_daily_investor_trend
 from app.core.kis_models import RequestHeader, RequestQueryParam, MarketCapQueryParam, FluctuationRankingResponse, MarketCapRankingResponse
 from app.utils.logger import get_logger
 
@@ -46,23 +46,29 @@ def get_access_token():
         logger.error(f"❌ 토큰 요청 중 에러: {e}")
         return None
 
-def fetch_market_cap_ranking():
+def fetch_market_cap_ranking(mrkt_div_code="J", input_iscd="0000", div_cls_code="0"):
     """시가총액 순위 종목 조회 (일별 1회 수집)"""
+    if ACCESS_TOKEN is None:
+        get_access_token()
     if ACCESS_TOKEN is None:
         logger.error("❌ KIS API 토큰이 없어 시가총액 데이터를 가져올 수 없습니다.")
         return
 
     url = f"{Config.KIS_URL_BASE}/uapi/domestic-stock/v1/ranking/market-cap"
-    
+
     header_obj = RequestHeader(
         authorization=f"Bearer {ACCESS_TOKEN}",
         appkey=Config.KIS_APP_KEY,
         appsecret=Config.KIS_APP_SECRET,
-        tr_id="FHPST01740000", # 시가총액 순위 거래 ID
+        tr_id="FHPST01740000",
         custtype="P"
     )
-    
-    param_obj = MarketCapQueryParam()
+
+    param_obj = MarketCapQueryParam(
+        fid_cond_mrkt_div_code=mrkt_div_code,
+        fid_input_iscd=input_iscd,
+        fid_div_cls_code=div_cls_code,
+    )
     
     logger.info("📡 [일별] 시가총액 순위 데이터 호출 중...")
 
@@ -90,7 +96,7 @@ def fetch_market_cap_ranking():
                 return
             
             parsed_output_data = response_obj.output
-            save_daily_market_cap(parsed_output_data)
+            save_daily_market_cap(parsed_output_data, fid_input_iscd=input_iscd)
             logger.info(f"✅ 일별 시가총액 순위 데이터 저장 성공 ({len(parsed_output_data)}건)")
         elif res.status_code == 401:
             logger.info("🔑 토큰 만료! 재발급을 시도합니다.")
@@ -170,6 +176,45 @@ def get_stock_ranking():
         logger.error(f"🔥 에러: {e}")
         return []
 
+def fetch_investor_trend(exch_div="J", mrkt_div="1"):
+    """투자자별 프로그램 매매동향 조회"""
+    if ACCESS_TOKEN is None:
+        get_access_token()
+    if ACCESS_TOKEN is None:
+        return {"error": "토큰 없음"}
+
+    url = f"{Config.KIS_URL_BASE}/uapi/domestic-stock/v1/quotations/investor-program-trade-today"
+
+    header_obj = RequestHeader(
+        authorization=f"Bearer {ACCESS_TOKEN}",
+        appkey=Config.KIS_APP_KEY,
+        appsecret=Config.KIS_APP_SECRET,
+        tr_id="HHPPG046600C1",
+        custtype="P"
+    )
+
+    params = {
+        "EXCH_DIV_CLS_CODE": exch_div,   # J: KRX, NX: NXT, UN: 통합
+        "MRKT_DIV_CLS_CODE": mrkt_div,   # 1: 코스피, 4: 코스닥
+    }
+
+    try:
+        res = requests.get(url, headers=header_obj.to_dict(), params=params)
+        raw_json = res.json()
+        logger.info(f"[투자자별 매매동향] Status: {res.status_code}, Response: {json.dumps(raw_json, ensure_ascii=False)[:500]}")
+
+        if res.status_code == 200 and raw_json.get('rt_cd') == '0':
+            output1 = raw_json.get('output1', [])
+            if output1:
+                save_daily_investor_trend(output1, exch_div, mrkt_div)
+                logger.info(f"[투자자별 매매동향] DB 저장 완료 ({len(output1)}건)")
+
+        return raw_json
+    except Exception as e:
+        logger.error(f"[투자자별 매매동향] 오류: {e}")
+        return {"error": str(e)}
+
+
 def run_stock_monitor():
     logger.info("🚀 한국 주식 실시간 감시 시작!")
     init_db()
@@ -180,13 +225,22 @@ def run_stock_monitor():
 
     last_notified = {}
     last_market_cap_date = None
+    last_investor_trend_date = None
 
     while True:
         try:
             now = datetime.now()
             today_str = now.strftime('%Y-%m-%d')
-            
-            # 장 운영 시간 외 대기 (예시)
+
+            # 평일 20시 — 투자자별 매매동향 일 1회 수집
+            if now.weekday() < 5 and now.hour == 20 and last_investor_trend_date != today_str:
+                for mrkt in ("1", "4"):
+                    fetch_investor_trend(exch_div="J", mrkt_div=mrkt)
+                    time.sleep(2)
+                last_investor_trend_date = today_str
+                logger.info("✅ [스케줄] 투자자별 매매동향 수집 완료 (코스피/코스닥)")
+
+            # 장 운영 시간 외 대기
             if now.hour < 8 or now.hour >= 20:
                 time.sleep(240) # 60 * 4
                 continue

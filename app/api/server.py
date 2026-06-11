@@ -2,11 +2,12 @@ from flask import Flask, jsonify, render_template, request
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
 from app.utils.db_manager import (
-    get_latest_alerts, delete_alert, 
+    get_latest_alerts, delete_alert,
     get_latest_stock_alerts, delete_stock_alert,
-    get_latest_stock_raw_data, get_market_cap_history
+    get_latest_stock_raw_data, get_market_cap_history,
+    get_investor_trend_history
 )
-from app.core.stock_monitor import fetch_market_cap_ranking
+from app.core.stock_monitor import fetch_market_cap_ranking, fetch_investor_trend
 from app.config import Config
 import json
 import os
@@ -30,13 +31,43 @@ def market_cap_view():
     """일별 시가총액 추이 페이지를 보여줍니다."""
     return render_template('market_cap.html')
 
+@app.route('/investor-trend')
+def investor_trend_view():
+    """투자자별 매매동향 페이지"""
+    return render_template('investor_trend.html')
+
+@app.route('/api/investor-trend', methods=['GET'])
+def get_investor_trend_api():
+    """투자자별 프로그램 매매동향 데이터를 JSON으로 반환"""
+    try:
+        exch_div = request.args.get('exch', 'J')
+        mrkt_div = request.args.get('mrkt', '1')
+        data = fetch_investor_trend(exch_div=exch_div, mrkt_div=mrkt_div)
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/investor-trend/history', methods=['GET'])
+def get_investor_trend_history_api():
+    """투자자별 매매동향 일별 이력 조회"""
+    try:
+        exch_div = request.args.get('exch', 'J')
+        mrkt_div = request.args.get('mrkt', '1')
+        limit_days = int(request.args.get('days', 30))
+        data = get_investor_trend_history(exch_div=exch_div, mrkt_div=mrkt_div, limit_days=limit_days)
+        return jsonify({"status": "success", "data": data})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 @app.route('/api/market-cap', methods=['GET'])
 def get_market_cap_api():
     """일별 시가총액 데이터를 JSON 형식으로 반환합니다."""
     try:
-        code = request.args.get('code')
-        limit_dates = int(request.args.get('limit', 7))
-        data = get_market_cap_history(code=code, limit_dates=limit_dates)
+        code           = request.args.get('code')
+        limit_dates    = int(request.args.get('limit', 7))
+        fid_input_iscd = request.args.get('iscd', 'combined')
+        date           = request.args.get('date')
+        data = get_market_cap_history(code=code, limit_dates=limit_dates, fid_input_iscd=fid_input_iscd, date=date)
         
         return jsonify({
             "status": "success",
@@ -50,7 +81,12 @@ def get_market_cap_api():
 def fetch_market_cap_api():
     """시가총액 데이터를 즉시 수집하도록 요청합니다."""
     try:
-        fetch_market_cap_ranking()
+        data = request.get_json(silent=True) or {}
+        div_cls_code = data.get('div_cls_code', '0')
+        # 거래소(0001) + 코스닥(1001) 순차 수집
+        for iscd in ('0001', '1001'):
+            fetch_market_cap_ranking(mrkt_div_code='J', input_iscd=iscd, div_cls_code=div_cls_code)
+        import time; time.sleep(1)
         return jsonify({
             "status": "success",
             "message": "시가총액 데이터 수집이 성공적으로 완료되었습니다."
