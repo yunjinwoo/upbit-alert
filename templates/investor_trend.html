@@ -182,7 +182,7 @@
         document.getElementById('todayError').style.display = 'none';
 
         try {
-            const res = await fetch(`/api/investor-trend?exch=${exch}&mrkt=${mrkt}`);
+            const res = await fetch(`api/investor-trend?exch=${exch}&mrkt=${mrkt}`);
             const data = await res.json();
             document.getElementById('rawJsonBox').textContent = JSON.stringify(data, null, 2);
             document.getElementById('todaySpinner').style.display = 'none';
@@ -224,7 +224,7 @@
         document.getElementById('histError').style.display = 'none';
 
         try {
-            const res = await fetch(`/api/investor-trend/history?exch=${exch}&mrkt=${mrkt}&days=${days}`);
+            const res = await fetch(`api/investor-trend/history?exch=${exch}&mrkt=${mrkt}&days=${days}`);
             const result = await res.json();
             document.getElementById('histSpinner').style.display = 'none';
 

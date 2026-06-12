@@ -232,7 +232,7 @@
     async function loadData() {
         const iscd = document.getElementById('selIscd').value;
         const date = document.getElementById('selDate').value.replace(/-/g, '');
-        let url = `/api/sector-index?iscd=${iscd}`;
+        let url = `api/sector-index?iscd=${iscd}`;
         if (date) url += `&date=${date}`;
 
         try {

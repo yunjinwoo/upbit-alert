@@ -73,7 +73,7 @@
         container.innerHTML = '<div class="text-center"><div class="spinner-border text-primary" role="status"></div><p>데이터를 불러오는 중...</p></div>';
 
         try {
-            const response = await fetch('/api/stock-raw-data');
+            const response = await fetch('api/stock-raw-data');
             const result = await response.json();
 
             if (result.status !== 'success') {

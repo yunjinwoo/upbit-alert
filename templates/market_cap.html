@@ -139,7 +139,7 @@
 
         try {
             const { mrktDivCode, inputIscd, divClsCode } = getFilters();
-            const res = await fetch('/api/market-cap/fetch', {
+            const res = await fetch('api/market-cap/fetch', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ mrkt_div_code: mrktDivCode, input_iscd: inputIscd, div_cls_code: divClsCode })
@@ -166,7 +166,7 @@
         const searchCode = document.getElementById('searchInput').value.trim();
         const dateVal    = document.getElementById('dateSearch').value.trim();
         const { inputIscd } = getFilters();
-        let url = `/api/market-cap?iscd=${inputIscd}`;
+        let url = `api/market-cap?iscd=${inputIscd}`;
         if (searchCode) url += `&code=${searchCode}`;
         if (dateVal)    url += `&date=${dateVal}`;
 
