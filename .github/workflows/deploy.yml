@@ -26,8 +26,11 @@ jobs:
             # 2. 소스 코드 업데이트 (강제 업데이트 방식)
             git fetch --all
             git reset --hard origin/main
-            
-            # 3. 필요한 라이브러리 설치
+
+            # 3. 필요한 환경변수 보장 (.env에 없으면 추가)
+            grep -q "APP_ROOT" .env 2>/dev/null || echo "APP_ROOT=/upbit" >> .env
+
+            # 4. 필요한 라이브러리 설치
             pip install -r requirements.txt
             
             # 4. PM2를 이용한 프로세스 재시작
