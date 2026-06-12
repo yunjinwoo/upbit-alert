@@ -46,6 +46,45 @@ def get_access_token():
         logger.error(f"❌ 토큰 요청 중 에러: {e}")
         return None
 
+def fetch_sector_index_daily(iscd="0001", base_date=None):
+    """업종 일자별지수 조회 (FHPUP02120000) — output2 배열 반환"""
+    if ACCESS_TOKEN is None:
+        get_access_token()
+    if ACCESS_TOKEN is None:
+        logger.error("❌ KIS API 토큰이 없어 업종지수 데이터를 가져올 수 없습니다.")
+        return []
+
+    if base_date is None:
+        base_date = datetime.now().strftime("%Y%m%d")
+
+    url = f"{Config.KIS_URL_BASE}/uapi/domestic-stock/v1/quotations/inquire-index-daily-price"
+    headers = {
+        "content-type": "application/json",
+        "authorization": f"Bearer {ACCESS_TOKEN}",
+        "appkey": Config.KIS_APP_KEY,
+        "appsecret": Config.KIS_APP_SECRET,
+        "tr_id": "FHPUP02120000",
+        "custtype": "P",
+    }
+    params = {
+        "FID_COND_MRKT_DIV_CODE": "U",
+        "FID_INPUT_ISCD": iscd,
+        "FID_INPUT_DATE_1": base_date,
+        "FID_PERIOD_DIV_CODE": "D",
+    }
+
+    try:
+        res = requests.get(url, headers=headers, params=params)
+        data = res.json()
+        if data.get("rt_cd") != "0":
+            logger.error(f"❌ 업종지수 API 오류: {data.get('msg1')}")
+            return []
+        return data.get("output2", [])
+    except Exception as e:
+        logger.error(f"❌ 업종지수 조회 에러: {e}")
+        return []
+
+
 def fetch_market_cap_ranking(mrkt_div_code="J", input_iscd="0000", div_cls_code="0"):
     """시가총액 순위 종목 조회 (일별 1회 수집)"""
     if ACCESS_TOKEN is None:

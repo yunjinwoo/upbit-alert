@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>국내업종 일자별지수</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        body { background-color: #f4f7f6; font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; }
+        .main-navbar { background-color: #1a1a2e; }
+        .main-navbar .navbar-brand { color: #fff; font-weight: bold; }
+        .main-navbar .nav-link { color: rgba(255,255,255,0.75) !important; }
+        .main-navbar .nav-link:hover,
+        .main-navbar .nav-link.active { color: #fff !important; }
+        .main-navbar .nav-link.active { border-bottom: 2px solid #4da6ff; }
+
+        .dashboard-container { margin-top: 30px; margin-bottom: 50px; }
+        .card-panel { background: white; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); padding: 20px 24px; }
+
+        .up-rate   { color: #d60000; font-weight: bold; }
+        .down-rate { color: #0049af; font-weight: bold; }
+        .sign-badge-상승 { background: #fee2e2; color: #dc2626; }
+        .sign-badge-하락 { background: #dbeafe; color: #1d4ed8; }
+        .sign-badge-보합 { background: #f3f4f6; color: #6b7280; }
+        .sign-badge-상한 { background: #dc2626; color: #fff; }
+        .sign-badge-하한 { background: #1d4ed8; color: #fff; }
+
+        .stat-card { border-radius: 10px; padding: 14px 18px; }
+        .stat-label { font-size: 11px; color: #888; margin-bottom: 2px; }
+        .stat-value { font-size: 1.3rem; font-weight: 700; }
+        .stat-sub   { font-size: 12px; margin-top: 2px; }
+    </style>
+</head>
+<body>
+
+<nav class="navbar main-navbar px-3">
+    <a class="navbar-brand" href="{{ url_for('index') }}">📡 알림 시스템</a>
+    <div class="d-flex gap-3">
+        <a href="{{ url_for('index') }}" class="nav-link">대시보드</a>
+        <a href="{{ url_for('market_cap_view') }}" class="nav-link">시가총액 추이</a>
+        <a href="{{ url_for('investor_trend_view') }}" class="nav-link">투자자별 매매동향</a>
+        <a href="{{ url_for('sector_index_view') }}" class="nav-link active">업종 일자별지수</a>
+        <a href="{{ url_for('raw_data_view') }}" class="nav-link">원본 데이터</a>
+    </div>
+</nav>
+
+<div class="container dashboard-container">
+
+    <!-- 헤더 + 필터 -->
+    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+        <h2>📈 국내업종 일자별지수</h2>
+        <span id="update-timer" class="badge bg-secondary">로딩 중...</span>
+    </div>
+
+    <div class="card-panel mb-3 d-flex align-items-end gap-2 flex-wrap">
+        <div>
+            <label class="form-label mb-1 small">업종 선택</label>
+            <select id="selIscd" class="form-select form-select-sm">
+                <option value="0001">코스피 (KOSPI)</option>
+                <option value="1001">코스닥 (KOSDAQ)</option>
+                <option value="2001">코스피200</option>
+            </select>
+        </div>
+        <div>
+            <label class="form-label mb-1 small">기준일 (최근 100거래일 조회)</label>
+            <input type="date" id="selDate" class="form-control form-control-sm" style="width:145px">
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="loadData()">조회</button>
+        <button class="btn btn-outline-secondary btn-sm" onclick="resetFilters()">초기화</button>
+    </div>
+
+    <!-- 요약 카드 -->
+    <div class="row g-3 mb-3" id="summaryCards" style="display:none!important">
+        <div class="col-6 col-md-3">
+            <div class="stat-card bg-light">
+                <div class="stat-label">최근 종가</div>
+                <div class="stat-value" id="statClose">-</div>
+                <div class="stat-sub" id="statChange">-</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="stat-card bg-light">
+                <div class="stat-label">기간 고가</div>
+                <div class="stat-value text-danger" id="statHigh">-</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="stat-card bg-light">
+                <div class="stat-label">기간 저가</div>
+                <div class="stat-value text-primary" id="statLow">-</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="stat-card bg-light">
+                <div class="stat-label">평균 20일 이격도</div>
+                <div class="stat-value" id="statD20">-</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 차트 -->
+    <div class="card-panel mb-3">
+        <canvas id="indexChart" height="90"></canvas>
+    </div>
+
+    <!-- 테이블 -->
+    <div class="card-panel">
+        <table id="sectorTable" class="table table-hover" style="width:100%">
+            <thead class="table-light">
+                <tr>
+                    <th>날짜</th>
+                    <th class="text-end">종가</th>
+                    <th>등락</th>
+                    <th class="text-end">등락률</th>
+                    <th class="text-end">시가</th>
+                    <th class="text-end">고가</th>
+                    <th class="text-end">저가</th>
+                    <th class="text-end">거래량(천주)</th>
+                    <th class="text-end">투자자순매수도</th>
+                    <th class="text-end">20일이격도</th>
+                </tr>
+            </thead>
+            <tbody id="tableBody"></tbody>
+        </table>
+    </div>
+</div>
+
+<script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
+
+<script>
+    let dataTable = null;
+    let chartInstance = null;
+
+    function resetFilters() {
+        document.getElementById('selDate').value = '';
+        document.getElementById('selIscd').value = '0001';
+        loadData();
+    }
+
+    function fmt(v, decimals = 2) {
+        const n = parseFloat(v);
+        return isNaN(n) ? '-' : n.toLocaleString('ko-KR', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+    }
+
+    function fmtVol(v) {
+        const n = parseInt(v);
+        return isNaN(n) ? '-' : n.toLocaleString('ko-KR');
+    }
+
+    function signBadge(sign, rate) {
+        const cls = `sign-badge-${sign}`;
+        const arrow = sign === '상승' || sign === '상한' ? '▲' : sign === '하락' || sign === '하한' ? '▼' : '–';
+        return `<span class="badge ${cls}">${arrow} ${sign}</span>`;
+    }
+
+    function renderChart(data) {
+        const sorted = [...data].reverse(); // 오래된 날짜 → 최근
+        const labels = sorted.map(d => d.date);
+        const closes = sorted.map(d => parseFloat(d.close));
+        const d20    = sorted.map(d => parseFloat(d.d20_dsrt));
+
+        if (chartInstance) chartInstance.destroy();
+
+        chartInstance = new Chart(document.getElementById('indexChart'), {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [
+                    {
+                        label: '종가',
+                        data: closes,
+                        borderColor: '#2563eb',
+                        backgroundColor: 'rgba(37,99,235,0.08)',
+                        tension: 0.3,
+                        pointRadius: 2,
+                        yAxisID: 'y',
+                    },
+                    {
+                        label: '20일 이격도',
+                        data: d20,
+                        borderColor: '#f59e0b',
+                        borderDash: [4, 3],
+                        tension: 0.3,
+                        pointRadius: 0,
+                        yAxisID: 'y2',
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { position: 'top' },
+                    tooltip: { callbacks: {
+                        label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toLocaleString('ko-KR', {minimumFractionDigits:2})}`
+                    }}
+                },
+                scales: {
+                    x: { ticks: { maxTicksLimit: 15, font: { size: 11 } } },
+                    y:  { position: 'left',  ticks: { font: { size: 11 } } },
+                    y2: { position: 'right', grid: { drawOnChartArea: false },
+                          ticks: { font: { size: 11 }, callback: v => v + '%' } }
+                }
+            }
+        });
+    }
+
+    function renderSummary(data) {
+        if (!data.length) return;
+        const latest = data[0];
+        const closes = data.map(d => parseFloat(d.close));
+        const d20s   = data.map(d => parseFloat(d.d20_dsrt)).filter(v => !isNaN(v));
+
+        const rate = parseFloat(latest.change_rate);
+        const rateStr = (rate >= 0 ? '+' : '') + fmt(rate) + '%';
+        const rateClass = rate > 0 ? 'text-danger' : rate < 0 ? 'text-primary' : '';
+
+        document.getElementById('statClose').textContent = fmt(latest.close);
+        document.getElementById('statChange').innerHTML = `<span class="${rateClass}">${rateStr} (${latest.change_sign})</span>`;
+        document.getElementById('statHigh').textContent  = fmt(Math.max(...closes));
+        document.getElementById('statLow').textContent   = fmt(Math.min(...closes));
+        document.getElementById('statD20').textContent   = d20s.length ? fmt(d20s.reduce((a,b)=>a+b,0)/d20s.length) + '%' : '-';
+
+        document.getElementById('summaryCards').style.display = '';
+    }
+
+    async function loadData() {
+        const iscd = document.getElementById('selIscd').value;
+        const date = document.getElementById('selDate').value.replace(/-/g, '');
+        let url = `/api/sector-index?iscd=${iscd}`;
+        if (date) url += `&date=${date}`;
+
+        try {
+            const res    = await fetch(url);
+            const result = await res.json();
+            if (result.status !== 'success') { alert('조회 실패: ' + result.message); return; }
+
+            const data = result.data;
+
+            renderSummary(data);
+            renderChart(data);
+
+            if (dataTable) { dataTable.destroy(); dataTable = null; }
+
+            document.getElementById('tableBody').innerHTML = data.map(d => {
+                const rate  = parseFloat(d.change_rate);
+                const cls   = rate > 0 ? 'up-rate' : rate < 0 ? 'down-rate' : '';
+                const sign  = (rate > 0 ? '+' : '') + fmt(rate) + '%';
+                const netBuy = parseFloat(d.net_buy);
+                const netCls = netBuy > 0 ? 'up-rate' : netBuy < 0 ? 'down-rate' : '';
+                return `
+                <tr>
+                    <td><b>${d.date}</b></td>
+                    <td class="text-end">${fmt(d.close)}</td>
+                    <td>${signBadge(d.change_sign)}</td>
+                    <td class="text-end"><span class="${cls}">${sign}</span></td>
+                    <td class="text-end">${fmt(d.open)}</td>
+                    <td class="text-end text-danger">${fmt(d.high)}</td>
+                    <td class="text-end text-primary">${fmt(d.low)}</td>
+                    <td class="text-end">${fmtVol(d.volume)}</td>
+                    <td class="text-end"><span class="${netCls}">${fmt(d.net_buy)}</span></td>
+                    <td class="text-end">${fmt(d.d20_dsrt)}%</td>
+                </tr>`;
+            }).join('');
+
+            dataTable = $('#sectorTable').DataTable({
+                order: [[0, 'desc']],
+                pageLength: 50,
+                language: {
+                    search: "결과 내 검색:",
+                    lengthMenu: "_MENU_ 개씩 보기",
+                    info: "총 _TOTAL_ 건 중 _START_~_END_ 표시"
+                }
+            });
+
+            const sectorName = document.getElementById('selIscd').selectedOptions[0].text;
+            document.getElementById('update-timer').textContent = `${sectorName} · ${result.count}건 · ${new Date().toLocaleTimeString()}`;
+
+        } catch(e) {
+            console.error(e);
+            alert('데이터를 불러오는데 실패했습니다.');
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', loadData);
+</script>
+</body>
+</html>

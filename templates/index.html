@@ -37,12 +37,13 @@
 <body>
 
 <nav class="navbar main-navbar px-3">
-    <a class="navbar-brand" href="/">📡 알림 시스템</a>
+    <a class="navbar-brand" href="{{ url_for('index') }}">📡 알림 시스템</a>
     <div class="d-flex gap-3">
-        <a href="/" class="nav-link active">대시보드</a>
-        <a href="/market-cap" class="nav-link">시가총액 추이</a>
-        <a href="/investor-trend" class="nav-link">투자자별 매매동향</a>
-        <a href="/raw-data" class="nav-link">원본 데이터</a>
+        <a href="{{ url_for('index') }}" class="nav-link active">대시보드</a>
+        <a href="{{ url_for('market_cap_view') }}" class="nav-link">시가총액 추이</a>
+        <a href="{{ url_for('investor_trend_view') }}" class="nav-link">투자자별 매매동향</a>
+        <a href="{{ url_for('sector_index_view') }}" class="nav-link">업종 일자별지수</a>
+        <a href="{{ url_for('raw_data_view') }}" class="nav-link">원본 데이터</a>
     </div>
 </nav>
 
@@ -53,8 +54,8 @@
             <span id="update-timer" class="badge bg-secondary">로딩 중...</span>
             <button onclick="loadData()" class="btn btn-primary btn-sm ms-2">새로고침</button>
             <a id="sheet-link" href="#" target="_blank" class="btn btn-success btn-sm ms-1">📊 시트</a>
-            <a href="/raw-data" class="btn btn-info btn-sm ms-1 text-white">🗄️ 원본 데이터</a>
-            <a href="/market-cap" class="btn btn-warning btn-sm ms-1 text-dark">📈 시총 추이</a>
+            <a href="{{ url_for('raw_data_view') }}" class="btn btn-info btn-sm ms-1 text-white">🗄️ 원본 데이터</a>
+            <a href="{{ url_for('market_cap_view') }}" class="btn btn-warning btn-sm ms-1 text-dark">📈 시총 추이</a>
         </div>
     </div>
 

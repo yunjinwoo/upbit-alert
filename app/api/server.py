@@ -7,7 +7,7 @@ from app.utils.db_manager import (
     get_latest_stock_raw_data, get_market_cap_history,
     get_investor_trend_history
 )
-from app.core.stock_monitor import fetch_market_cap_ranking, fetch_investor_trend
+from app.core.stock_monitor import fetch_market_cap_ranking, fetch_investor_trend, fetch_sector_index_daily
 from app.config import Config
 import json
 import os
@@ -30,6 +30,49 @@ def raw_data_view():
 def market_cap_view():
     """일별 시가총액 추이 페이지를 보여줍니다."""
     return render_template('market_cap.html')
+
+@app.route('/sector-index')
+def sector_index_view():
+    """업종 일자별지수 조회 페이지"""
+    return render_template('sector_index.html')
+
+@app.route('/api/sector-index', methods=['GET'])
+def get_sector_index_api():
+    """업종 일자별지수 API — KIS 실시간 조회"""
+    try:
+        iscd      = request.args.get('iscd', '0001')
+        base_date = request.args.get('date')          # YYYYMMDD, 없으면 오늘
+
+        SECTOR_NAMES = {'0001': '코스피', '1001': '코스닥', '2001': '코스피200'}
+        sector_name  = SECTOR_NAMES.get(iscd, iscd)
+
+        records = fetch_sector_index_daily(iscd=iscd, base_date=base_date)
+
+        SIGN = {'1': '상한', '2': '상승', '3': '보합', '4': '하한', '5': '하락'}
+        result = []
+        for r in records:
+            d = r.get('stck_bsop_date', '')
+            result.append({
+                'date':        f"{d[:4]}-{d[4:6]}-{d[6:]}",
+                'sector_code': iscd,
+                'sector_name': sector_name,
+                'close':       r.get('bstp_nmix_prpr', ''),
+                'open':        r.get('bstp_nmix_oprc', ''),
+                'high':        r.get('bstp_nmix_hgpr', ''),
+                'low':         r.get('bstp_nmix_lwpr', ''),
+                'change':      r.get('bstp_nmix_prdy_vrss', ''),
+                'change_sign': SIGN.get(r.get('prdy_vrss_sign', '3'), '보합'),
+                'change_rate': r.get('bstp_nmix_prdy_ctrt', ''),
+                'volume':      r.get('acml_vol', ''),
+                'trade_amount':r.get('acml_tr_pbmn', ''),
+                'vol_ratio':   r.get('acml_vol_rlim', ''),
+                'net_buy':     r.get('invt_new_psdg', ''),
+                'd20_dsrt':    r.get('d20_dsrt', ''),
+            })
+
+        return jsonify({'status': 'success', 'count': len(result), 'data': result})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/investor-trend')
 def investor_trend_view():
