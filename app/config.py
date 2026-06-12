@@ -39,3 +39,4 @@ class Config:
     API_HOST = '0.0.0.0'
     API_PORT = 5000
     DEBUG = True
+    APP_ROOT = os.getenv("APP_ROOT", "/")

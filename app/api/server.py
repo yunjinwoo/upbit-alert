@@ -13,6 +13,7 @@ import json
 import os
 
 app = Flask(__name__, template_folder='../../templates')
+app.config['APPLICATION_ROOT'] = Config.APP_ROOT
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 CORS(app)
 
