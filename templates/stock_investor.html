@@ -433,7 +433,7 @@
     async function fetchInvestor() {
         const date = document.getElementById('dateSearch').value;
         const dateLabel = date || '오늘';
-        if (!confirm(`[${dateLabel}] 시총 상위 종목의 투자자 데이터를 KIS API로 수집합니까?\n(종목 수만큼 API 호출, 약 10~15초 소요)`)) return;
+        if (!confirm(`[${dateLabel}] 시총 상위 종목의 투자자 데이터를 KIS API로 수집합니까?`)) return;
         const btn = document.querySelector('button[onclick="fetchInvestor()"]');
         btn.innerText = "수집 중..."; btn.disabled = true;
         try {
@@ -444,9 +444,30 @@
                 body: JSON.stringify({ iscd, date })
             });
             const result = await res.json();
-            btn.innerText = "투자자 수집"; btn.disabled = false;
-            if (result.status === 'success') { alert(result.message); loadData(); }
-            else alert("수집 실패: " + result.message);
+            if (result.status === 'error') {
+                btn.innerText = "투자자 수집"; btn.disabled = false;
+                alert("수집 실패: " + result.message);
+                return;
+            }
+            // 백그라운드 수집 시작 — 완료될 때까지 폴링
+            const taskId = result.task_id;
+            document.getElementById('update-timer').innerText = result.message;
+            const poll = setInterval(async () => {
+                try {
+                    const sr = await fetch(`api/stock-investor/fetch/status/${taskId}`);
+                    const st = await sr.json();
+                    document.getElementById('update-timer').innerText = st.message;
+                    if (st.status === 'done') {
+                        clearInterval(poll);
+                        btn.innerText = "투자자 수집"; btn.disabled = false;
+                        loadData();
+                    } else if (st.status === 'error') {
+                        clearInterval(poll);
+                        btn.innerText = "투자자 수집"; btn.disabled = false;
+                        alert("수집 오류: " + st.message);
+                    }
+                } catch { clearInterval(poll); btn.innerText = "투자자 수집"; btn.disabled = false; }
+            }, 2000);
         } catch (e) {
             console.error(e);
             btn.innerText = "투자자 수집"; btn.disabled = false;

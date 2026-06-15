@@ -13,6 +13,7 @@ from app.core.stock_monitor import fetch_market_cap_ranking, fetch_investor_tren
 from app.config import Config
 import json
 import os
+import threading
 
 app = Flask(__name__, template_folder='../../templates')
 app.config['APPLICATION_ROOT'] = Config.APP_ROOT
@@ -171,29 +172,43 @@ def get_stock_investor_trend_api():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+_fetch_status = {}  # task_id → {status, message}
+
 @app.route('/api/stock-investor/fetch', methods=['POST'])
 def fetch_stock_investor_api():
-    """시총 상위 종목의 투자자 데이터 즉시 수집"""
-    try:
-        from datetime import datetime as dt
-        req = request.get_json(silent=True) or {}
-        iscd = req.get('iscd', 'combined')
-        # 날짜: YYYY-MM-DD → YYYYMMDD 변환, 없으면 오늘
-        raw_date = req.get('date', '').strip()
-        date_str = raw_date.replace('-', '') if raw_date else dt.now().strftime('%Y%m%d')
-        date_db = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"  # DB 조회용 YYYY-MM-DD
+    """시총 상위 종목의 투자자 데이터 백그라운드 수집 (즉시 202 반환)"""
+    from datetime import datetime as dt
+    import uuid
+    req = request.get_json(silent=True) or {}
+    iscd = req.get('iscd', 'combined')
+    raw_date = req.get('date', '').strip()
+    date_str = raw_date.replace('-', '') if raw_date else dt.now().strftime('%Y%m%d')
+    date_db = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
 
-        # 해당 날짜의 시총 코드 조회, 없으면 최신 날짜 코드 사용
-        cap_rows = get_market_cap_history(limit_dates=1, fid_input_iscd=iscd, date=date_db)
-        if not cap_rows:
-            cap_rows = get_market_cap_history(limit_dates=1, fid_input_iscd=iscd)
-        codes = [(r['code'], r['name']) for r in cap_rows]
-        if not codes:
-            return jsonify({"status": "error", "message": "시총 데이터 없음. 먼저 시총 데이터를 수집하세요."}), 400
-        fetch_stock_investor_daily(codes, date_str=date_str)
-        return jsonify({"status": "success", "message": f"{date_db} 기준 {len(codes)}개 종목 투자자 데이터 수집 완료"})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+    cap_rows = get_market_cap_history(limit_dates=1, fid_input_iscd=iscd, date=date_db)
+    if not cap_rows:
+        cap_rows = get_market_cap_history(limit_dates=1, fid_input_iscd=iscd)
+    codes = [(r['code'], r['name']) for r in cap_rows]
+    if not codes:
+        return jsonify({"status": "error", "message": "시총 데이터 없음. 먼저 시총 데이터를 수집하세요."}), 400
+
+    task_id = str(uuid.uuid4())[:8]
+    _fetch_status[task_id] = {"status": "running", "message": f"{date_db} 기준 {len(codes)}개 종목 수집 중..."}
+
+    def run():
+        try:
+            fetch_stock_investor_daily(codes, date_str=date_str)
+            _fetch_status[task_id] = {"status": "done", "message": f"{date_db} 기준 {len(codes)}개 종목 수집 완료"}
+        except Exception as e:
+            _fetch_status[task_id] = {"status": "error", "message": str(e)}
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify({"status": "started", "task_id": task_id, "message": f"{date_db} 기준 {len(codes)}개 종목 수집 시작"}), 202
+
+@app.route('/api/stock-investor/fetch/status/<task_id>', methods=['GET'])
+def fetch_stock_investor_status(task_id):
+    result = _fetch_status.get(task_id, {"status": "unknown", "message": "작업을 찾을 수 없습니다."})
+    return jsonify(result)
 
 @app.route('/api/stock-raw-data', methods=['GET'])
 def get_stock_raw_data_api():
