@@ -4,8 +4,8 @@ import time
 from datetime import datetime
 from dataclasses import asdict
 from app.config import Config
-from app.utils.db_manager import save_stock_alert_to_db, init_db, save_api_token, get_api_token, save_stock_raw_data, save_daily_market_cap, save_daily_investor_trend
-from app.core.kis_models import RequestHeader, RequestQueryParam, MarketCapQueryParam, FluctuationRankingResponse, MarketCapRankingResponse
+from app.utils.db_manager import save_stock_alert_to_db, init_db, save_api_token, get_api_token, save_stock_raw_data, save_daily_market_cap, save_daily_investor_trend, save_stock_investor_daily
+from app.core.kis_models import RequestHeader, RequestQueryParam, MarketCapQueryParam, FluctuationRankingResponse, MarketCapRankingResponse, StockInvestorDailyItem
 from app.utils.logger import get_logger
 
 logger = get_logger()
@@ -254,6 +254,58 @@ def fetch_investor_trend(exch_div="J", mrkt_div="1"):
         return {"error": str(e)}
 
 
+def fetch_stock_investor_daily(codes: list, date_str: str = None):
+    """시총 상위 종목들의 투자자매매동향(일별) 수집 및 저장.
+    codes: [(code, name), ...] 형태의 리스트
+    date_str: 'YYYYMMDD' 형식, 없으면 오늘
+    """
+    if ACCESS_TOKEN is None:
+        get_access_token()
+    if ACCESS_TOKEN is None:
+        logger.error("토큰 없음 — 종목별 투자자 수집 중단")
+        return
+
+    if not date_str:
+        date_str = datetime.now().strftime('%Y%m%d')
+
+    url = f"{Config.KIS_URL_BASE}/uapi/domestic-stock/v1/quotations/investor-trade-by-stock-daily"
+
+    for code, name in codes:
+        try:
+            headers = RequestHeader(
+                authorization=f"Bearer {ACCESS_TOKEN}",
+                appkey=Config.KIS_APP_KEY,
+                appsecret=Config.KIS_APP_SECRET,
+                tr_id="FHPTJ04160001",
+                custtype="P"
+            ).to_dict()
+
+            params = {
+                "FID_COND_MRKT_DIV_CODE": "J",
+                "FID_INPUT_ISCD": code,
+                "FID_INPUT_DATE_1": date_str,
+                "FID_ORG_ADJ_PRC": "",
+                "FID_ETC_CLS_CODE": "1",
+            }
+
+            res = requests.get(url, headers=headers, params=params)
+            data = res.json()
+
+            if data.get("rt_cd") != "0":
+                logger.warning(f"[투자자일별] {code} {name} — {data.get('msg1')}")
+                time.sleep(0.3)
+                continue
+
+            items = [StockInvestorDailyItem.from_json(d) for d in data.get("output2", [])]
+            if items:
+                save_stock_investor_daily(code, name, items)
+                logger.info(f"[투자자일별] {code} {name} — {len(items)}건 저장")
+            time.sleep(0.35)  # API 호출 간격
+        except Exception as e:
+            logger.error(f"[투자자일별] {code} 에러: {e}")
+            time.sleep(0.5)
+
+
 def run_stock_monitor():
     logger.info("🚀 한국 주식 실시간 감시 시작!")
     init_db()
@@ -287,11 +339,19 @@ def run_stock_monitor():
                 time.sleep(14400) # 3600 * 4
                 continue
 
-            # 일 1회 시가총액 데이터 수집 (오후 3시 40분쯤, 장 마감 후)
+            # 일 1회 시가총액 데이터 수집 + 종목별 투자자 수집 (오후 3시 40분쯤, 장 마감 후)
             if now.hour == 15 and now.minute >= 40 and last_market_cap_date != today_str:
-                fetch_market_cap_ranking()
+                from app.utils.db_manager import get_market_cap_history
+                for iscd in ('0001', '1001'):
+                    fetch_market_cap_ranking(mrkt_div_code='J', input_iscd=iscd)
+                    time.sleep(2)
+                # 시총 상위 종목 코드 추출 → 투자자 데이터 수집
+                cap_rows = get_market_cap_history(limit_dates=1, fid_input_iscd='combined')
+                codes = [(r['code'], r['name']) for r in cap_rows]
+                if codes:
+                    fetch_stock_investor_daily(codes, date_str=now.strftime('%Y%m%d'))
                 last_market_cap_date = today_str
-                time.sleep(5) # API 과부하 방지
+                time.sleep(3)
 
             stocks = get_stock_ranking()
             for stock in stocks:

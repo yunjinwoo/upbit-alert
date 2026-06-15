@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
@@ -11,16 +11,23 @@
         .dashboard-container { margin-top: 30px; margin-bottom: 50px; }
         .header-title { margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
         .table-container { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
+        .chart-container { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); margin-bottom: 20px; }
         .up-rate { color: #d60000; font-weight: bold; }
         .down-rate { color: #0049af; font-weight: bold; }
         .ticker-link { text-decoration: none; color: #0049af; font-weight: bold; cursor: pointer; }
         .ticker-link:hover { text-decoration: underline; }
         .rank-badge { font-size: 0.9rem; padding: 0.3em 0.6em; }
+        .rank-up   { color: #d60000; font-weight: bold; font-size: 0.85rem; }
+        .rank-down { color: #0049af; font-weight: bold; font-size: 0.85rem; }
+        .rank-same { color: #888; font-size: 0.85rem; }
+        .badge-new { background-color: #ff6b35; color: #fff; font-size: 0.7rem; padding: 0.2em 0.5em; border-radius: 4px; vertical-align: middle; margin-left: 4px; }
         .main-navbar { background-color: #1a1a2e; }
         .main-navbar .navbar-brand { color: #fff; font-weight: bold; }
         .main-navbar .nav-link { color: rgba(255,255,255,0.75) !important; }
         .main-navbar .nav-link:hover, .main-navbar .nav-link.active { color: #fff !important; }
         .main-navbar .nav-link.active { border-bottom: 2px solid #4da6ff; }
+        .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px; }
+        .chart-hint { font-size: 0.8rem; color: #888; }
     </style>
 </head>
 <body>
@@ -30,6 +37,7 @@
     <div class="d-flex gap-3">
         <a href="{{ url_for('index') }}" class="nav-link">대시보드</a>
         <a href="{{ url_for('market_cap_view') }}" class="nav-link active">시가총액 추이</a>
+        <a href="{{ url_for('stock_investor_view') }}" class="nav-link">시총×투자자</a>
         <a href="{{ url_for('investor_trend_view') }}" class="nav-link">투자자별 매매동향</a>
         <a href="{{ url_for('sector_index_view') }}" class="nav-link">업종 일자별지수</a>
         <a href="{{ url_for('raw_data_view') }}" class="nav-link">원본 데이터</a>
@@ -80,7 +88,35 @@
             <input type="text" id="nameSearch" class="form-control form-control-sm" placeholder="예: 삼성" style="width:110px"
                    oninput="filterByName()">
         </div>
+        <div>
+            <label class="form-label mb-1 small">조회 일수</label>
+            <select id="limitDays" class="form-select form-select-sm" style="width:90px">
+                <option value="7">7일</option>
+                <option value="14">14일</option>
+                <option value="30">30일</option>
+                <option value="60">60일</option>
+            </select>
+        </div>
         <button class="btn btn-primary btn-sm" onclick="loadData()">조회</button>
+    </div>
+
+    <!-- 순위 추이 차트 -->
+    <div class="chart-container" id="chartSection">
+        <div class="chart-header">
+            <div>
+                <strong>📈 시가총액 순위 추이</strong>
+                <span class="chart-hint ms-2">최근 날짜 기준 선택 구간 종목의 순위 변화</span>
+            </div>
+            <div class="d-flex align-items-center gap-2">
+                <label class="small mb-0">순위</label>
+                <input type="number" id="rankFrom" class="form-control form-control-sm text-center" value="15" min="1" max="30" style="width:60px" onchange="renderChart()">
+                <label class="small mb-0">~</label>
+                <input type="number" id="rankTo" class="form-control form-control-sm text-center" value="30" min="1" max="30" style="width:60px" onchange="renderChart()">
+                <label class="small mb-0">위</label>
+            </div>
+        </div>
+        <canvas id="bumpChart" height="120"></canvas>
+        <p id="chartEmpty" class="text-center text-muted mt-3" style="display:none">날짜가 2일 이상인 데이터를 조회하면 추이를 볼 수 있습니다.</p>
     </div>
 
     <div class="table-container">
@@ -89,6 +125,7 @@
                 <tr>
                     <th>날짜</th>
                     <th>순위</th>
+                    <th class="text-center">순위 변동</th>
                     <th>종목명 (코드)</th>
                     <th class="text-end">시가총액 (억 원)</th>
                     <th class="text-end">시총 비중</th>
@@ -105,9 +142,31 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
 <script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 
 <script>
     let dataTable;
+    let bumpChartInstance = null;
+    let lastData = [];
+
+    // 종목별 고정 색상 팔레트
+    const PALETTE = [
+        '#e6194b','#3cb44b','#4363d8','#f58231','#911eb4',
+        '#42d4f4','#f032e6','#bfef45','#fabed4','#469990',
+        '#dcbeff','#9A6324','#800000','#aaffc3','#808000',
+        '#ffd8b1','#000075','#a9a9a9','#ffe119','#000000',
+        '#e6beff','#8B0000','#008080','#FF1493','#00CED1',
+        '#FF8C00','#7B68EE','#20B2AA','#DC143C','#4682B4'
+    ];
+    const codeColorMap = {};
+    let colorIdx = 0;
+    function colorFor(code) {
+        if (!codeColorMap[code]) {
+            codeColorMap[code] = PALETTE[colorIdx % PALETTE.length];
+            colorIdx++;
+        }
+        return codeColorMap[code];
+    }
 
     function clearAll() {
         document.getElementById('searchInput').value = '';
@@ -115,6 +174,7 @@
         document.getElementById('dateSearch').value = '';
         document.getElementById('inputIscd').value = 'combined';
         document.getElementById('divClsCode').value = '0';
+        document.getElementById('limitDays').value = '7';
         if (dataTable) dataTable.search('').draw();
         loadData();
     }
@@ -162,11 +222,96 @@
         }
     }
 
+    function renderChart() {
+        const rankFrom = parseInt(document.getElementById('rankFrom').value) || 1;
+        const rankTo   = parseInt(document.getElementById('rankTo').value) || 40;
+        const data = lastData;
+        if (!data.length) return;
+
+        // 날짜별 그룹핑
+        const byDate = {};
+        data.forEach(item => {
+            if (!byDate[item.date]) byDate[item.date] = {};
+            byDate[item.date][item.code] = { rank: parseInt(item.rank), name: item.name };
+        });
+        const sortedDates = Object.keys(byDate).sort();
+
+        if (sortedDates.length < 2) {
+            document.getElementById('chartEmpty').style.display = '';
+            if (bumpChartInstance) { bumpChartInstance.destroy(); bumpChartInstance = null; }
+            return;
+        }
+        document.getElementById('chartEmpty').style.display = 'none';
+
+        // 최근 날짜 기준 rankFrom~rankTo 구간 종목 선택
+        const latestDate = sortedDates[sortedDates.length - 1];
+        const latestEntries = Object.entries(byDate[latestDate])
+            .sort((a, b) => a[1].rank - b[1].rank)
+            .filter(([, v]) => v.rank >= rankFrom && v.rank <= rankTo);
+        const targetCodes = latestEntries.map(([code]) => code);
+
+        // 각 종목별 날짜별 순위 데이터셋 구성
+        const datasets = targetCodes.map(code => {
+            const name = byDate[latestDate][code]?.name || code;
+            const rankData = sortedDates.map(date => byDate[date][code]?.rank ?? null);
+            const color = colorFor(code);
+            return {
+                label: name,
+                data: rankData,
+                borderColor: color,
+                backgroundColor: color,
+                borderWidth: 2,
+                pointRadius: 4,
+                pointHoverRadius: 7,
+                tension: 0.3,
+                spanGaps: false,
+            };
+        });
+
+        if (bumpChartInstance) bumpChartInstance.destroy();
+
+        bumpChartInstance = new Chart(document.getElementById('bumpChart'), {
+            type: 'line',
+            data: { labels: sortedDates, datasets },
+            options: {
+                responsive: true,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: {
+                        position: 'right',
+                        labels: { font: { size: 11 }, boxWidth: 12, padding: 8 }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y}위`
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        reverse: true,
+                        min: Math.max(1, rankFrom - 2),
+                        max: rankTo + 2,
+                        ticks: {
+                            stepSize: 1,
+                            callback: v => `${v}위`
+                        },
+                        title: { display: true, text: '순위 (↑ 높을수록 상위)' }
+                    },
+                    x: {
+                        title: { display: true, text: '날짜' }
+                    }
+                }
+            }
+        });
+    }
+
     async function loadData() {
         const searchCode = document.getElementById('searchInput').value.trim();
         const dateVal    = document.getElementById('dateSearch').value.trim();
+        const limitDays  = document.getElementById('limitDays').value;
         const { inputIscd } = getFilters();
-        let url = `api/market-cap?iscd=${inputIscd}`;
+        let url = `api/market-cap?iscd=${inputIscd}&limit=${limitDays}`;
         if (searchCode) url += `&code=${searchCode}`;
         if (dateVal)    url += `&date=${dateVal}`;
 
@@ -175,7 +320,32 @@
             const result = await res.json();
             if (result.status !== 'success') return;
 
+            lastData = result.data;
+
             if (dataTable) dataTable.destroy();
+
+            // 날짜별 그룹핑 → 이전 날짜 순위 맵 구성
+            const byDate = {};
+            result.data.forEach(item => {
+                if (!byDate[item.date]) byDate[item.date] = {};
+                byDate[item.date][item.code] = parseInt(item.rank);
+            });
+            const sortedDates = Object.keys(byDate).sort();
+
+            function getPrevRank(date, code) {
+                const idx = sortedDates.indexOf(date);
+                if (idx <= 0) return null;
+                const prevDate = sortedDates[idx - 1];
+                return byDate[prevDate][code] ?? null;
+            }
+
+            function rankBadge(currRank, prevRank) {
+                if (prevRank === null) return `<span class="badge-new">NEW</span>`;
+                const diff = prevRank - currRank;
+                if (diff > 0) return `<span class="rank-up">▲${diff}</span>`;
+                if (diff < 0) return `<span class="rank-down">▼${Math.abs(diff)}</span>`;
+                return `<span class="rank-same">-</span>`;
+            }
 
             document.getElementById('tableBody').innerHTML = result.data.map(item => {
                 const mCap = parseInt(item.market_cap_amount).toLocaleString();
@@ -184,14 +354,18 @@
                 const rateClass = rate > 0 ? 'up-rate' : (rate < 0 ? 'down-rate' : '');
                 const rateSign = rate > 0 ? '+' : '';
                 const weight = parseFloat(item.market_weight || 0).toFixed(2);
+                const prevRank = getPrevRank(item.date, item.code);
+                const badge = rankBadge(parseInt(item.rank), prevRank);
+                const isNew = prevRank === null && sortedDates.indexOf(item.date) > 0;
 
                 return `
-                    <tr>
+                    <tr${isNew ? ' class="table-warning"' : ''}>
                         <td><b>${item.date}</b></td>
                         <td><span class="badge rank-badge ${item.fid_input_iscd === '1001' ? 'bg-success' : 'bg-primary'}">${item.rank}위</span></td>
+                        <td class="text-center">${badge}</td>
                         <td>
                             <a href="https://finance.naver.com/item/main.nhn?code=${item.code}" target="_blank" class="ticker-link">
-                                ${item.name} <small class="text-muted">(${item.code})</small>
+                                ${item.name}${isNew ? '<span class="badge-new ms-1">NEW</span>' : ''} <small class="text-muted">(${item.code})</small>
                             </a>
                         </td>
                         <td class="text-end">${mCap}</td>
@@ -201,10 +375,10 @@
                     </tr>`;
             }).join('');
 
-            // 날짜 내림차순 → 시가총액(3번째 컬럼) 내림차순
-            const orderOption = [[0, 'desc'], [3, 'desc']];
+            // 날짜 내림차순 → 시가총액(4번째 컬럼) 내림차순
+            const latestDateForTable = sortedDates[sortedDates.length - 1];
             dataTable = $('#marketCapTable').DataTable({
-                order: orderOption,
+                order: [[0, 'desc'], [4, 'desc']],
                 pageLength: 100,
                 language: {
                     search: "결과 내 검색:",
@@ -212,6 +386,12 @@
                     info: "총 _TOTAL_ 건 중 _START_~_END_ 표시"
                 }
             });
+            // 기본으로 최신 날짜만 표시 (날짜 필터가 지정되지 않은 경우)
+            if (!dateVal) {
+                dataTable.column(0).search(latestDateForTable).draw();
+            }
+
+            renderChart();
             document.getElementById('update-timer').innerText = `최근 업데이트: ${new Date().toLocaleTimeString()}`;
         } catch (e) {
             console.error(e);

@@ -123,6 +123,33 @@ class MarketCapRankingResponse:
         )
 
 @dataclass
+class StockInvestorDailyItem:
+    """종목별 투자자매매동향(일별) output2 개별 행"""
+    stck_bsop_date: str       # 영업일자
+    stck_clpr: str            # 종가
+    prdy_ctrt: str            # 등락률
+    frgn_ntby_qty: str        # 외국인 순매수 수량
+    frgn_ntby_tr_pbmn: str    # 외국인 순매수 금액(억원)
+    prsn_ntby_qty: str        # 개인 순매수 수량
+    prsn_ntby_tr_pbmn: str    # 개인 순매수 금액
+    orgn_ntby_qty: str        # 기관 순매수 수량
+    orgn_ntby_tr_pbmn: str    # 기관 순매수 금액
+
+    @classmethod
+    def from_json(cls, d: dict):
+        return cls(
+            stck_bsop_date=d.get("stck_bsop_date", ""),
+            stck_clpr=d.get("stck_clpr", "0"),
+            prdy_ctrt=d.get("prdy_ctrt", "0"),
+            frgn_ntby_qty=d.get("frgn_ntby_qty", "0"),
+            frgn_ntby_tr_pbmn=d.get("frgn_ntby_tr_pbmn", "0"),
+            prsn_ntby_qty=d.get("prsn_ntby_qty", "0"),
+            prsn_ntby_tr_pbmn=d.get("prsn_ntby_tr_pbmn", "0"),
+            orgn_ntby_qty=d.get("orgn_ntby_qty", "0"),
+            orgn_ntby_tr_pbmn=d.get("orgn_ntby_tr_pbmn", "0"),
+        )
+
+@dataclass
 class FluctuationRankingItem:
     """국내주식 등락률 순위 개별 종목 정보 (Response Output)"""
     hts_kor_isnm: str        # HTS 한글 종목명

@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
@@ -41,6 +41,7 @@
     <div class="d-flex gap-3">
         <a href="{{ url_for('index') }}" class="nav-link active">대시보드</a>
         <a href="{{ url_for('market_cap_view') }}" class="nav-link">시가총액 추이</a>
+        <a href="{{ url_for('stock_investor_view') }}" class="nav-link">시총×투자자</a>
         <a href="{{ url_for('investor_trend_view') }}" class="nav-link">투자자별 매매동향</a>
         <a href="{{ url_for('sector_index_view') }}" class="nav-link">업종 일자별지수</a>
         <a href="{{ url_for('raw_data_view') }}" class="nav-link">원본 데이터</a>

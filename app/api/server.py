@@ -5,9 +5,11 @@ from app.utils.db_manager import (
     get_latest_alerts, delete_alert,
     get_latest_stock_alerts, delete_stock_alert,
     get_latest_stock_raw_data, get_market_cap_history,
-    get_investor_trend_history
+    get_investor_trend_history,
+    get_stock_investor_combined, get_latest_market_cap_date,
+    get_stock_investor_trend
 )
-from app.core.stock_monitor import fetch_market_cap_ranking, fetch_investor_trend, fetch_sector_index_daily
+from app.core.stock_monitor import fetch_market_cap_ranking, fetch_investor_trend, fetch_sector_index_daily, fetch_stock_investor_daily
 from app.config import Config
 import json
 import os
@@ -140,6 +142,58 @@ def fetch_market_cap_api():
             "status": "error",
             "message": f"시가총액 데이터 수집 중 오류 발생: {str(e)}"
         }), 500
+
+@app.route('/stock-investor')
+def stock_investor_view():
+    return render_template('stock_investor.html')
+
+@app.route('/api/stock-investor', methods=['GET'])
+def get_stock_investor_api():
+    """시총 순위 + 투자자 순매수 합산 데이터 반환"""
+    try:
+        iscd = request.args.get('iscd', 'combined')
+        date = request.args.get('date') or get_latest_market_cap_date(iscd)
+        data = get_stock_investor_combined(date=date, fid_input_iscd=iscd)
+        return jsonify({"status": "success", "date": date, "data": data})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/stock-investor/trend', methods=['GET'])
+def get_stock_investor_trend_api():
+    """특정 종목의 날짜별 투자자 순매수 추이 반환"""
+    try:
+        code = request.args.get('code', '').strip()
+        if not code:
+            return jsonify({"status": "error", "message": "종목코드 필요"}), 400
+        data = get_stock_investor_trend(code)
+        name = data[0]['name'] if data else code
+        return jsonify({"status": "success", "code": code, "name": name, "data": data})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/stock-investor/fetch', methods=['POST'])
+def fetch_stock_investor_api():
+    """시총 상위 종목의 투자자 데이터 즉시 수집"""
+    try:
+        from datetime import datetime as dt
+        req = request.get_json(silent=True) or {}
+        iscd = req.get('iscd', 'combined')
+        # 날짜: YYYY-MM-DD → YYYYMMDD 변환, 없으면 오늘
+        raw_date = req.get('date', '').strip()
+        date_str = raw_date.replace('-', '') if raw_date else dt.now().strftime('%Y%m%d')
+        date_db = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"  # DB 조회용 YYYY-MM-DD
+
+        # 해당 날짜의 시총 코드 조회, 없으면 최신 날짜 코드 사용
+        cap_rows = get_market_cap_history(limit_dates=1, fid_input_iscd=iscd, date=date_db)
+        if not cap_rows:
+            cap_rows = get_market_cap_history(limit_dates=1, fid_input_iscd=iscd)
+        codes = [(r['code'], r['name']) for r in cap_rows]
+        if not codes:
+            return jsonify({"status": "error", "message": "시총 데이터 없음. 먼저 시총 데이터를 수집하세요."}), 400
+        fetch_stock_investor_daily(codes, date_str=date_str)
+        return jsonify({"status": "success", "message": f"{date_db} 기준 {len(codes)}개 종목 투자자 데이터 수집 완료"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/stock-raw-data', methods=['GET'])
 def get_stock_raw_data_api():

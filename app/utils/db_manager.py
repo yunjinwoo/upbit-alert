@@ -4,7 +4,7 @@ import os
 import json
 from typing import List
 from app.config import Config
-from app.core.kis_models import MarketCapRankingItem # MarketCapRankingItem 임포트
+from app.core.kis_models import MarketCapRankingItem, StockInvestorDailyItem
 
 DB_PATH = Config.DB_NAME
 
@@ -118,6 +118,24 @@ def init_db():
             nabt_seln_qty TEXT,
             nabt_ntby_qty TEXT,
             timestamp TEXT
+        )
+    ''')
+
+    # 종목별 투자자매매동향(일별) 저장 테이블
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS stock_investor_daily (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT,
+            code TEXT,
+            name TEXT,
+            frgn_ntby_qty TEXT,
+            frgn_ntby_tr_pbmn TEXT,
+            prsn_ntby_qty TEXT,
+            prsn_ntby_tr_pbmn TEXT,
+            orgn_ntby_qty TEXT,
+            orgn_ntby_tr_pbmn TEXT,
+            timestamp TEXT,
+            UNIQUE(date, code)
         )
     ''')
 
@@ -406,6 +424,116 @@ def get_investor_trend_history(exch_div: str, mrkt_div: str, limit_days: int = 3
     rows = cursor.fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def save_stock_investor_daily(code: str, name: str, items: list):
+    """종목별 투자자매매동향 일별 저장 (날짜별 upsert)"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    for item in items:
+        date = item.stck_bsop_date[:4] + '-' + item.stck_bsop_date[4:6] + '-' + item.stck_bsop_date[6:]
+        cursor.execute('''
+            INSERT INTO stock_investor_daily
+                (date, code, name, frgn_ntby_qty, frgn_ntby_tr_pbmn,
+                 prsn_ntby_qty, prsn_ntby_tr_pbmn, orgn_ntby_qty, orgn_ntby_tr_pbmn, timestamp)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(date, code) DO UPDATE SET
+                frgn_ntby_qty=excluded.frgn_ntby_qty,
+                frgn_ntby_tr_pbmn=excluded.frgn_ntby_tr_pbmn,
+                prsn_ntby_qty=excluded.prsn_ntby_qty,
+                prsn_ntby_tr_pbmn=excluded.prsn_ntby_tr_pbmn,
+                orgn_ntby_qty=excluded.orgn_ntby_qty,
+                orgn_ntby_tr_pbmn=excluded.orgn_ntby_tr_pbmn,
+                timestamp=excluded.timestamp
+        ''', (date, code, name,
+              item.frgn_ntby_qty, item.frgn_ntby_tr_pbmn,
+              item.prsn_ntby_qty, item.prsn_ntby_tr_pbmn,
+              item.orgn_ntby_qty, item.orgn_ntby_tr_pbmn,
+              timestamp))
+    conn.commit()
+    conn.close()
+
+
+def get_stock_investor_combined(date: str, fid_input_iscd: str = "combined"):
+    """시총 순위 + 투자자 순매수 합산 조회 (특정 날짜)"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    if fid_input_iscd == "combined":
+        iscd_list = ("0001", "1001")
+    else:
+        iscd_list = (fid_input_iscd,)
+
+    placeholders = ",".join("?" * len(iscd_list))
+
+    cursor.execute(f'''
+        SELECT
+            m.date, m.code, m.name, m.rank, m.price, m.change_rate,
+            m.market_cap_amount, m.market_weight, m.fid_input_iscd,
+            COALESCE(i.frgn_ntby_qty, '0')       AS frgn_ntby_qty,
+            COALESCE(i.frgn_ntby_tr_pbmn, '0')   AS frgn_ntby_tr_pbmn,
+            COALESCE(i.prsn_ntby_qty, '0')        AS prsn_ntby_qty,
+            COALESCE(i.prsn_ntby_tr_pbmn, '0')   AS prsn_ntby_tr_pbmn,
+            COALESCE(i.orgn_ntby_qty, '0')        AS orgn_ntby_qty,
+            COALESCE(i.orgn_ntby_tr_pbmn, '0')   AS orgn_ntby_tr_pbmn
+        FROM stock_market_cap_daily m
+        LEFT JOIN stock_investor_daily i ON m.date = i.date AND m.code = i.code
+        WHERE m.date = ? AND m.fid_input_iscd IN ({placeholders})
+        ORDER BY m.rank ASC
+    ''', (date, *iscd_list))
+
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_stock_investor_trend(code: str):
+    """특정 종목의 날짜별 투자자 순매수 + 시총 이력 조회"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT
+            i.date, i.code, i.name,
+            i.frgn_ntby_qty, i.frgn_ntby_tr_pbmn,
+            i.prsn_ntby_qty, i.prsn_ntby_tr_pbmn,
+            i.orgn_ntby_qty, i.orgn_ntby_tr_pbmn,
+            COALESCE(m.rank, 0)               AS rank,
+            COALESCE(m.market_cap_amount, '0') AS market_cap_amount,
+            COALESCE(m.price, '0')            AS price,
+            COALESCE(m.change_rate, '0')      AS change_rate
+        FROM stock_investor_daily i
+        LEFT JOIN (
+            SELECT date, code, rank, market_cap_amount, price, change_rate
+            FROM stock_market_cap_daily
+            GROUP BY date, code
+        ) m ON i.date = m.date AND i.code = m.code
+        WHERE i.code = ?
+        ORDER BY i.date ASC
+    ''', (code,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_latest_market_cap_date(fid_input_iscd: str = "combined") -> str:
+    """가장 최근 시총 데이터 날짜 반환"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    if fid_input_iscd == "combined":
+        iscd_list = ("0001", "1001")
+    else:
+        iscd_list = (fid_input_iscd,)
+    placeholders = ",".join("?" * len(iscd_list))
+    cursor.execute(f'''
+        SELECT MAX(date) FROM stock_market_cap_daily
+        WHERE fid_input_iscd IN ({placeholders})
+    ''', iscd_list)
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row and row[0] else ""
 
 
 # Initialize DB on load
