@@ -214,6 +214,32 @@ def fetch_stock_investor_status(task_id):
     result = _fetch_status.get(task_id, {"status": "unknown", "message": "작업을 찾을 수 없습니다."})
     return jsonify(result)
 
+@app.route('/api/debug/token', methods=['GET'])
+def debug_token():
+    """KIS 토큰 발급 상태 진단"""
+    import requests as _req
+    from app.config import Config as _C
+    from app.utils.db_manager import get_api_token as _get_tok
+    try:
+        db_token = _get_tok('KIS')
+        result = {
+            "app_key_set": bool(_C.KIS_APP_KEY),
+            "app_secret_set": bool(_C.KIS_APP_SECRET),
+            "app_key_prefix": (_C.KIS_APP_KEY or '')[:8] + '...',
+            "db_token_today": bool(db_token),
+        }
+        # 실제 토큰 발급 시도
+        url = f"{_C.KIS_URL_BASE}/oauth2/tokenP"
+        body = {"grant_type": "client_credentials",
+                "appkey": _C.KIS_APP_KEY, "appsecret": _C.KIS_APP_SECRET}
+        res = _req.post(url, headers={"content-type": "application/json"},
+                        json=body, timeout=10)
+        result["token_api_status"] = res.status_code
+        result["token_api_response"] = res.text[:300]
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/debug/investor-dates', methods=['GET'])
 def debug_investor_dates():
     """DB 상태 진단용 — investor + market_cap 날짜/건수 확인"""
