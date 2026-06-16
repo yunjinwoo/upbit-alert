@@ -197,8 +197,12 @@ def fetch_stock_investor_api():
 
     def run():
         try:
-            fetch_stock_investor_daily(codes, date_str=date_str)
-            _fetch_status[task_id] = {"status": "done", "message": f"{date_db} 기준 {len(codes)}개 종목 수집 완료"}
+            saved, first_error = fetch_stock_investor_daily(codes, date_str=date_str)
+            if saved == 0:
+                err = first_error or "API 응답 없음"
+                _fetch_status[task_id] = {"status": "error", "message": f"저장된 종목 없음 — {err}"}
+            else:
+                _fetch_status[task_id] = {"status": "done", "message": f"{date_db} 기준 {saved}개 종목 저장 완료"}
         except Exception as e:
             _fetch_status[task_id] = {"status": "error", "message": str(e)}
 

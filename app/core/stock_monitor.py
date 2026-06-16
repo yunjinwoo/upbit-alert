@@ -258,17 +258,22 @@ def fetch_stock_investor_daily(codes: list, date_str: str = None):
     """시총 상위 종목들의 투자자매매동향(일별) 수집 및 저장.
     codes: [(code, name), ...] 형태의 리스트
     date_str: 'YYYYMMDD' 형식, 없으면 오늘
+    반환: (saved_count, first_error_msg)
     """
     if ACCESS_TOKEN is None:
         get_access_token()
     if ACCESS_TOKEN is None:
-        logger.error("토큰 없음 — 종목별 투자자 수집 중단")
-        return
+        msg = "KIS 토큰 없음 — 수집 중단"
+        logger.error(msg)
+        return 0, msg
 
     if not date_str:
         date_str = datetime.now().strftime('%Y%m%d')
 
     url = f"{Config.KIS_URL_BASE}/uapi/domestic-stock/v1/quotations/investor-trade-by-stock-daily"
+
+    saved = 0
+    first_error = None
 
     for code, name in codes:
         try:
@@ -292,18 +297,26 @@ def fetch_stock_investor_daily(codes: list, date_str: str = None):
             data = res.json()
 
             if data.get("rt_cd") != "0":
-                logger.warning(f"[투자자일별] {code} {name} — {data.get('msg1')}")
+                err_msg = data.get('msg1', '알 수 없는 오류')
+                logger.warning(f"[투자자일별] {code} {name} — {err_msg}")
+                if first_error is None:
+                    first_error = f"{code} {name}: {err_msg}"
                 time.sleep(0.3)
                 continue
 
             items = [StockInvestorDailyItem.from_json(d) for d in data.get("output2", [])]
             if items:
                 save_stock_investor_daily(code, name, items)
+                saved += 1
                 logger.info(f"[투자자일별] {code} {name} — {len(items)}건 저장")
             time.sleep(0.35)  # API 호출 간격
         except Exception as e:
             logger.error(f"[투자자일별] {code} 에러: {e}")
+            if first_error is None:
+                first_error = f"{code}: {e}"
             time.sleep(0.5)
+
+    return saved, first_error
 
 
 def run_stock_monitor():
