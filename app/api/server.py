@@ -210,6 +210,43 @@ def fetch_stock_investor_status(task_id):
     result = _fetch_status.get(task_id, {"status": "unknown", "message": "작업을 찾을 수 없습니다."})
     return jsonify(result)
 
+@app.route('/api/debug/investor-dates', methods=['GET'])
+def debug_investor_dates():
+    """DB 상태 진단용 — investor + market_cap 날짜/건수 확인"""
+    import sqlite3 as _sq
+    from app.config import Config as _C
+    try:
+        conn = _sq.connect(_C.DB_NAME)
+        conn.row_factory = _sq.Row
+        cur = conn.cursor()
+
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        tables = [r[0] for r in cur.fetchall()]
+
+        investor = {}
+        if 'stock_investor_daily' in tables:
+            cur.execute("SELECT COUNT(*) as cnt FROM stock_investor_daily")
+            investor['total'] = cur.fetchone()[0]
+            cur.execute("SELECT DISTINCT date FROM stock_investor_daily ORDER BY date DESC LIMIT 10")
+            investor['dates'] = [r[0] for r in cur.fetchall()]
+            cur.execute("SELECT code, name, date, frgn_ntby_qty, orgn_ntby_qty FROM stock_investor_daily ORDER BY date DESC LIMIT 5")
+            investor['samples'] = [dict(r) for r in cur.fetchall()]
+        else:
+            investor['error'] = 'stock_investor_daily 테이블 없음'
+
+        mktcap = {}
+        if 'stock_market_cap_daily' in tables:
+            cur.execute("SELECT COUNT(*) as cnt FROM stock_market_cap_daily")
+            mktcap['total'] = cur.fetchone()[0]
+            cur.execute("SELECT DISTINCT date FROM stock_market_cap_daily ORDER BY date DESC LIMIT 10")
+            mktcap['dates'] = [r[0] for r in cur.fetchall()]
+
+        conn.close()
+        return jsonify({"status": "ok", "db_path": _C.DB_NAME, "tables": tables,
+                        "stock_investor_daily": investor, "stock_market_cap_daily": mktcap})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 @app.route('/api/stock-raw-data', methods=['GET'])
 def get_stock_raw_data_api():
     """최근 수집된 주식 원본 데이터를 JSON 형식으로 반환합니다."""
