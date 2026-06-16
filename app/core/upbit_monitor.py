@@ -61,13 +61,9 @@ def run_upbit_monitor():
             if ticker in skip_cache and datetime.now() < skip_cache[ticker]:
                 continue
 
-            logger.info("-" * 10)
-            logger.info(f"{time.strftime('%H:%M:%S')} :: [{i}/{len(target_tickers)}] ticker = {ticker}")
-
             # ① 일봉 먼저 체크
             daily = get_daily_volume_info(ticker)
             if daily is None:
-                logger.info(f"[{ticker}] 일봉 전일 이하 → 스킵")
                 time.sleep(2.0)
                 continue
 
