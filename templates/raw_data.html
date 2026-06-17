@@ -28,9 +28,45 @@
         .main-navbar .nav-link { color: rgba(255,255,255,0.75) !important; }
         .main-navbar .nav-link:hover, .main-navbar .nav-link.active { color: #fff !important; }
         .main-navbar .nav-link.active { border-bottom: 2px solid #4da6ff; }
+
+        .info-btn { position: fixed; right: 0; top: 50%; transform: translateY(-50%); z-index: 1050; background: #1a1a2e; color: #fff; border: none; border-radius: 8px 0 0 8px; padding: 16px 14px 24px 14px; min-width: 36px; writing-mode: vertical-rl; overflow: visible; font-size: 0.8rem; cursor: pointer; letter-spacing: 2px; }
+        .info-btn:hover { background: #4da6ff; }
+        .offcanvas-info .offcanvas-header { background: #2a2a4a; color: #fff; padding: 0 1rem; height: 56px; min-height: 56px; display: flex; align-items: center; }
+        .offcanvas-info .offcanvas-header .btn-close { filter: invert(1); }
+        .info-section { margin-bottom: 1.2rem; }
+        .info-section h6 { font-weight: bold; color: #1a1a2e; border-bottom: 2px solid #4da6ff; padding-bottom: 4px; margin-bottom: 8px; }
+        .info-tag { display: inline-block; background: #e8f0fe; color: #1a1a2e; border-radius: 4px; padding: 2px 8px; font-size: 0.8rem; margin: 2px; font-family: monospace; }
+        .info-tip { background: #fff8e1; border-left: 3px solid #ffc107; padding: 6px 10px; border-radius: 0 4px 4px 0; font-size: 0.85rem; margin-bottom: 4px; }
+        .info-warn { background: #fce4ec; border-left: 3px solid #e91e63; padding: 6px 10px; border-radius: 0 4px 4px 0; font-size: 0.85rem; margin-bottom: 4px; }
     </style>
 </head>
 <body>
+
+<!-- 페이지 안내 슬라이드 패널 -->
+<button class="info-btn" data-bs-toggle="offcanvas" data-bs-target="#infoPanel" title="페이지 안내">ℹ 안내</button>
+<div class="offcanvas offcanvas-end offcanvas-info" tabindex="-1" id="infoPanel" style="width:35vw">
+    <div class="offcanvas-header">
+        <h5 class="offcanvas-title">🗂 원본 데이터 페이지 안내</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body">
+
+        <div class="info-section">
+            <h6>📌 목적</h6>
+            <p class="small">KIS API에서 수집한 원본 JSON 데이터를 직접 확인합니다. 개발·디버깅 용도입니다.</p>
+        </div>
+        <div class="info-section">
+            <h6>🔌 데이터 소스</h6>
+            <span class="info-tag">stock_raw_data</span> 테이블
+            <p class="small mt-1">수집 시 저장된 원본 API 응답값 그대로 표시</p>
+        </div>
+        <div class="info-section">
+            <h6>💡 활용 팁</h6>
+            <div class="info-tip">API 응답 이상 시 여기서 raw 데이터 확인</div>
+            <div class="info-tip">최근 50건만 표시됨</div>
+        </div>
+    </div>
+</div>
 
 <nav class="navbar main-navbar px-3">
     <a class="navbar-brand" href="{{ url_for('index') }}">📡 알림 시스템</a>
@@ -122,6 +158,10 @@
     }
 
     document.addEventListener("DOMContentLoaded", loadData);
+</script>
+<script>
+    document.getElementById('infoPanel').addEventListener('show.bs.offcanvas', () => document.querySelector('.info-btn').style.display = 'none');
+    document.getElementById('infoPanel').addEventListener('hidden.bs.offcanvas', () => document.querySelector('.info-btn').style.display = '');
 </script>
 </body>
 </html>

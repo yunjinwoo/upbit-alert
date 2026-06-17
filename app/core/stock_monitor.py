@@ -293,7 +293,7 @@ def fetch_stock_investor_daily(codes: list, date_str: str = None):
                 "FID_ETC_CLS_CODE": "1",
             }
 
-            res = requests.get(url, headers=headers, params=params)
+            res = requests.get(url, headers=headers, params=params, timeout=8)
             data = res.json()
 
             if data.get("rt_cd") != "0":

@@ -214,6 +214,11 @@ def fetch_stock_investor_status(task_id):
     result = _fetch_status.get(task_id, {"status": "unknown", "message": "작업을 찾을 수 없습니다."})
     return jsonify(result)
 
+@app.route('/api/stock-investor/fetch/tasks', methods=['GET'])
+def fetch_stock_investor_tasks():
+    tasks = [{"task_id": k, **v} for k, v in reversed(list(_fetch_status.items()))]
+    return jsonify(tasks)
+
 @app.route('/api/debug/token', methods=['GET'])
 def debug_token():
     """KIS 토큰 발급 상태 진단"""

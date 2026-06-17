@@ -29,9 +29,63 @@
         .legend { display: flex; gap: 16px; font-size: 0.8rem; color: #555; }
         .legend span { display: flex; align-items: center; gap: 4px; }
         .legend .dot { width: 12px; height: 12px; border-radius: 2px; display: inline-block; }
+
+        .info-btn { position: fixed; right: 0; top: 50%; transform: translateY(-50%); z-index: 1050; background: #1a1a2e; color: #fff; border: none; border-radius: 8px 0 0 8px; padding: 16px 14px 24px 14px; min-width: 36px; writing-mode: vertical-rl; overflow: visible; font-size: 0.8rem; cursor: pointer; letter-spacing: 2px; }
+        .info-btn:hover { background: #4da6ff; }
+        .offcanvas-info .offcanvas-header { background: #2a2a4a; color: #fff; padding: 0 1rem; height: 56px; min-height: 56px; display: flex; align-items: center; }
+        .offcanvas-info .offcanvas-header .btn-close { filter: invert(1); }
+        .info-section { margin-bottom: 1.2rem; }
+        .info-section h6 { font-weight: bold; color: #1a1a2e; border-bottom: 2px solid #4da6ff; padding-bottom: 4px; margin-bottom: 8px; }
+        .info-tag { display: inline-block; background: #e8f0fe; color: #1a1a2e; border-radius: 4px; padding: 2px 8px; font-size: 0.8rem; margin: 2px; font-family: monospace; }
+        .info-tip { background: #fff8e1; border-left: 3px solid #ffc107; padding: 6px 10px; border-radius: 0 4px 4px 0; font-size: 0.85rem; margin-bottom: 4px; }
+        .info-warn { background: #fce4ec; border-left: 3px solid #e91e63; padding: 6px 10px; border-radius: 0 4px 4px 0; font-size: 0.85rem; margin-bottom: 4px; }
     </style>
 </head>
 <body>
+
+<!-- 페이지 안내 슬라이드 패널 -->
+<button class="info-btn" data-bs-toggle="offcanvas" data-bs-target="#infoPanel" title="페이지 안내">ℹ 안내</button>
+<div class="offcanvas offcanvas-end offcanvas-info" tabindex="-1" id="infoPanel" style="width:35vw">
+    <div class="offcanvas-header">
+        <h5 class="offcanvas-title">💹 시총×투자자 페이지 안내</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body">
+
+        <div class="info-section">
+            <h6>📌 목적</h6>
+            <p class="small">시가총액 순위와 투자자별(외국인·기관·개인) 순매수를 결합해 수급 강도를 분석합니다. 시총 상위 종목 중 외국인·기관이 동시 매수하는 종목을 포착합니다.</p>
+        </div>
+        <div class="info-section">
+            <h6>🔌 사용 API</h6>
+            <div class="mb-1"><span class="info-tag">KIS FHPST01740000</span> <span class="small">시가총액 순위</span></div>
+            <div><span class="info-tag">KIS FHPTJ04160001</span> <span class="small">종목별 투자자매매동향 일별</span></div>
+        </div>
+        <div class="info-section">
+            <h6>⏱ 수집 주기</h6>
+            <p class="small">시총: 자동 스케줄러<br>투자자: 수동 수집 버튼 (과거 날짜도 가능)</p>
+        </div>
+        <div class="info-section">
+            <h6>🎨 히트맵 색상</h6>
+            <p class="small">
+                <span style="background:#ffe0e0;padding:2px 6px;border-radius:3px">빨강</span> 외국인 강매수<br>
+                <span style="background:#e0e8ff;padding:2px 6px;border-radius:3px">파랑</span> 기관 강매수<br>
+                <span style="background:#fff3cd;padding:2px 6px;border-radius:3px">노랑</span> 외국인 강매도
+            </p>
+        </div>
+        <div class="info-section">
+            <h6>💡 활용 팁</h6>
+            <div class="info-tip">외국인+기관 동시 순매수 종목을 집중 주목</div>
+            <div class="info-tip">📈 추이 버튼으로 종목별 누적 순매수 흐름 확인</div>
+            <div class="info-tip">금액(억원) 단위로 전환하면 실제 자금 규모 파악 가능</div>
+        </div>
+        <div class="info-section">
+            <h6>⚠️ 한계</h6>
+            <div class="info-warn">투자자 데이터는 장마감 후 15:30 이후 확정</div>
+            <div class="info-warn">KIS API 서버 연결 필요 (포트 9443)</div>
+        </div>
+    </div>
+</div>
 
 <nav class="navbar main-navbar px-3">
     <a class="navbar-brand" href="{{ url_for('index') }}">📡 알림 시스템</a>
@@ -59,6 +113,7 @@
         <div class="d-flex gap-2 align-items-center flex-wrap">
             <span id="update-timer" class="badge bg-secondary">로딩 중...</span>
             <button onclick="fetchInvestor()" class="btn btn-warning btn-sm text-dark">투자자 수집</button>
+            <button onclick="showTaskHistory()" class="btn btn-secondary btn-sm">작업 이력</button>
             <button onclick="loadData()" class="btn btn-primary btn-sm">새로고침</button>
         </div>
     </div>
@@ -107,6 +162,32 @@
         </table>
     </div>
     <p class="text-muted small mt-2">* 순매수 수량(주), 금액(억원) · 음수=순매도 · 투자자 데이터 없으면 — 표시 · 추이 버튼으로 종목별 날짜별 차트 확인</p>
+</div>
+
+<!-- 작업 이력 모달 -->
+<div class="modal fade" id="taskHistoryModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">수집 작업 이력</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body p-0">
+                <table class="table table-sm table-hover mb-0">
+                    <thead class="table-dark">
+                        <tr>
+                            <th style="width:100px">Task ID</th>
+                            <th style="width:80px">상태</th>
+                            <th>메시지</th>
+                        </tr>
+                    </thead>
+                    <tbody id="taskHistoryBody">
+                        <tr><td colspan="3" class="text-center text-muted py-3">로딩 중...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
 </div>
 
 <!-- 종목별 추이 모달 -->
@@ -431,6 +512,33 @@
         }
     }
 
+    async function showTaskHistory() {
+        const modal = new bootstrap.Modal(document.getElementById('taskHistoryModal'));
+        modal.show();
+        const tbody = document.getElementById('taskHistoryBody');
+        try {
+            const res = await fetch('api/stock-investor/fetch/tasks', {headers: {'Accept': 'application/json'}});
+            const tasks = await res.json();
+            if (!tasks.length) {
+                tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted py-3">작업 이력 없음 (서버 재시작 시 초기화)</td></tr>';
+                return;
+            }
+            tbody.innerHTML = tasks.map(t => {
+                const badge = t.status === 'done' ? 'bg-success'
+                            : t.status === 'error' ? 'bg-danger'
+                            : t.status === 'running' ? 'bg-warning text-dark'
+                            : 'bg-secondary';
+                return `<tr>
+                    <td><code>${t.task_id}</code></td>
+                    <td><span class="badge ${badge}">${t.status}</span></td>
+                    <td class="small">${t.message || ''}</td>
+                </tr>`;
+            }).join('');
+        } catch(e) {
+            tbody.innerHTML = `<tr><td colspan="3" class="text-danger">${e.message}</td></tr>`;
+        }
+    }
+
     async function fetchInvestor() {
         const date = document.getElementById('dateSearch').value;
         const dateLabel = date || '오늘';
@@ -477,6 +585,10 @@
     }
 
     document.addEventListener("DOMContentLoaded", loadData);
+</script>
+<script>
+    document.getElementById('infoPanel').addEventListener('show.bs.offcanvas', () => document.querySelector('.info-btn').style.display = 'none');
+    document.getElementById('infoPanel').addEventListener('hidden.bs.offcanvas', () => document.querySelector('.info-btn').style.display = '');
 </script>
 </body>
 </html>

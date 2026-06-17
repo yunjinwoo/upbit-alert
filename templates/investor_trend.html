@@ -22,9 +22,53 @@
         .main-navbar .nav-link { color: rgba(255,255,255,0.75) !important; }
         .main-navbar .nav-link:hover, .main-navbar .nav-link.active { color: #fff !important; }
         .main-navbar .nav-link.active { border-bottom: 2px solid #4da6ff; }
+
+        .info-btn { position: fixed; right: 0; top: 50%; transform: translateY(-50%); z-index: 1050; background: #1a1a2e; color: #fff; border: none; border-radius: 8px 0 0 8px; padding: 16px 14px 24px 14px; min-width: 36px; writing-mode: vertical-rl; overflow: visible; font-size: 0.8rem; cursor: pointer; letter-spacing: 2px; }
+        .info-btn:hover { background: #4da6ff; }
+        .offcanvas-info .offcanvas-header { background: #2a2a4a; color: #fff; padding: 0 1rem; height: 56px; min-height: 56px; display: flex; align-items: center; }
+        .offcanvas-info .offcanvas-header .btn-close { filter: invert(1); }
+        .info-section { margin-bottom: 1.2rem; }
+        .info-section h6 { font-weight: bold; color: #1a1a2e; border-bottom: 2px solid #4da6ff; padding-bottom: 4px; margin-bottom: 8px; }
+        .info-tag { display: inline-block; background: #e8f0fe; color: #1a1a2e; border-radius: 4px; padding: 2px 8px; font-size: 0.8rem; margin: 2px; font-family: monospace; }
+        .info-tip { background: #fff8e1; border-left: 3px solid #ffc107; padding: 6px 10px; border-radius: 0 4px 4px 0; font-size: 0.85rem; margin-bottom: 4px; }
+        .info-warn { background: #fce4ec; border-left: 3px solid #e91e63; padding: 6px 10px; border-radius: 0 4px 4px 0; font-size: 0.85rem; margin-bottom: 4px; }
     </style>
 </head>
 <body>
+
+<!-- 페이지 안내 슬라이드 패널 -->
+<button class="info-btn" data-bs-toggle="offcanvas" data-bs-target="#infoPanel" title="페이지 안내">ℹ 안내</button>
+<div class="offcanvas offcanvas-end offcanvas-info" tabindex="-1" id="infoPanel" style="width:35vw">
+    <div class="offcanvas-header">
+        <h5 class="offcanvas-title">📉 투자자별 매매동향 페이지 안내</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body">
+
+        <div class="info-section">
+            <h6>📌 목적</h6>
+            <p class="small">코스피·코스닥 전체 시장에서 외국인·기관·개인의 프로그램 매매동향을 일별로 추적합니다.</p>
+        </div>
+        <div class="info-section">
+            <h6>🔌 사용 API</h6>
+            <span class="info-tag">KIS HHPPG046600C1</span>
+            <p class="small mt-1">투자자별 프로그램 매매동향 (한국투자증권 Open API)</p>
+        </div>
+        <div class="info-section">
+            <h6>⏱ 수집 주기</h6>
+            <p class="small">자동: 스케줄러 자동 수집<br>수동: 즉시 수집 버튼</p>
+        </div>
+        <div class="info-section">
+            <h6>💡 활용 팁</h6>
+            <div class="info-tip">외국인 순매수 지속 → 중장기 상승 신호</div>
+            <div class="info-tip">기관+외국인 동반 매도 → 시장 위험 신호</div>
+        </div>
+        <div class="info-section">
+            <h6>⚠️ 한계</h6>
+            <div class="info-warn">당일 장중 데이터는 잠정치</div>
+        </div>
+    </div>
+</div>
 
 <nav class="navbar main-navbar px-3">
     <a class="navbar-brand" href="{{ url_for('index') }}">📡 알림 시스템</a>
@@ -276,6 +320,10 @@
     }
 
     document.addEventListener('DOMContentLoaded', loadAll);
+</script>
+<script>
+    document.getElementById('infoPanel').addEventListener('show.bs.offcanvas', () => document.querySelector('.info-btn').style.display = 'none');
+    document.getElementById('infoPanel').addEventListener('hidden.bs.offcanvas', () => document.querySelector('.info-btn').style.display = '');
 </script>
 </body>
 </html>
