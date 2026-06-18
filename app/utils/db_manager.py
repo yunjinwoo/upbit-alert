@@ -139,11 +139,29 @@ def init_db():
         )
     ''')
 
+    # 업종 일자별지수 캐시 테이블
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS sector_index_daily (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT,
+            sector_code TEXT,
+            sector_name TEXT,
+            close TEXT, open TEXT, high TEXT, low TEXT,
+            change TEXT, change_sign TEXT, change_rate TEXT,
+            volume TEXT, trade_amount TEXT, vol_ratio TEXT,
+            net_buy TEXT, d20_dsrt TEXT,
+            timestamp TEXT,
+            UNIQUE(date, sector_code)
+        )
+    ''')
+
     # 기존 테이블 컬럼 마이그레이션
     migrations = [
         'ALTER TABLE stock_market_cap_daily ADD COLUMN market_weight TEXT DEFAULT "0"',
         'ALTER TABLE stock_market_cap_daily ADD COLUMN fid_input_iscd TEXT DEFAULT "0000"',
         'ALTER TABLE stock_raw_data ADD COLUMN api_type TEXT DEFAULT "UNKNOWN"',
+        'CREATE UNIQUE INDEX IF NOT EXISTS idx_mktcap_unique ON stock_market_cap_daily(date, code, fid_input_iscd)',
+        'CREATE UNIQUE INDEX IF NOT EXISTS idx_invtrend_unique ON investor_trend_daily(date, exch_div, mrkt_div, invr_cls_code)',
     ]
     for sql in migrations:
         try:
@@ -538,3 +556,171 @@ def get_latest_market_cap_date(fid_input_iscd: str = "combined") -> str:
 
 # Initialize DB on load
 init_db()
+
+
+# ──────────────────────────────────────────────
+# 데이터 동기화 (로컬 → 서버 push) 함수들
+# ──────────────────────────────────────────────
+
+def sync_upsert_market_cap(rows: list) -> int:
+    """stock_market_cap_daily upsert (date+code+fid_input_iscd 기준)"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    saved = 0
+    for r in rows:
+        cursor.execute('''
+            INSERT INTO stock_market_cap_daily
+                (date, code, name, market_cap_amount, rank, price, change_rate, market_weight, fid_input_iscd, timestamp)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(date, code, fid_input_iscd) DO UPDATE SET
+                name=excluded.name, market_cap_amount=excluded.market_cap_amount,
+                rank=excluded.rank, price=excluded.price, change_rate=excluded.change_rate,
+                market_weight=excluded.market_weight, timestamp=excluded.timestamp
+        ''', (r.get('date'), r.get('code'), r.get('name'), r.get('market_cap_amount'),
+              r.get('rank'), r.get('price'), r.get('change_rate'),
+              r.get('market_weight', '0'), r.get('fid_input_iscd', '0001'),
+              r.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))))
+        saved += 1
+    conn.commit()
+    conn.close()
+    return saved
+
+
+def sync_upsert_investor_daily(rows: list) -> int:
+    """stock_investor_daily upsert (date+code 기준)"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    saved = 0
+    for r in rows:
+        cursor.execute('''
+            INSERT INTO stock_investor_daily
+                (date, code, name, frgn_ntby_qty, frgn_ntby_tr_pbmn,
+                 prsn_ntby_qty, prsn_ntby_tr_pbmn, orgn_ntby_qty, orgn_ntby_tr_pbmn, timestamp)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(date, code) DO UPDATE SET
+                name=excluded.name, frgn_ntby_qty=excluded.frgn_ntby_qty,
+                frgn_ntby_tr_pbmn=excluded.frgn_ntby_tr_pbmn,
+                prsn_ntby_qty=excluded.prsn_ntby_qty, prsn_ntby_tr_pbmn=excluded.prsn_ntby_tr_pbmn,
+                orgn_ntby_qty=excluded.orgn_ntby_qty, orgn_ntby_tr_pbmn=excluded.orgn_ntby_tr_pbmn,
+                timestamp=excluded.timestamp
+        ''', (r.get('date'), r.get('code'), r.get('name'),
+              r.get('frgn_ntby_qty', '0'), r.get('frgn_ntby_tr_pbmn', '0'),
+              r.get('prsn_ntby_qty', '0'), r.get('prsn_ntby_tr_pbmn', '0'),
+              r.get('orgn_ntby_qty', '0'), r.get('orgn_ntby_tr_pbmn', '0'),
+              r.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))))
+        saved += 1
+    conn.commit()
+    conn.close()
+    return saved
+
+
+def sync_upsert_investor_trend(rows: list) -> int:
+    """investor_trend_daily upsert (date+exch_div+mrkt_div+invr_cls_code 기준)"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    saved = 0
+    for r in rows:
+        cursor.execute('''
+            INSERT INTO investor_trend_daily
+                (date, exch_div, mrkt_div, invr_cls_code, invr_cls_name,
+                 all_shnu_amt, all_seln_amt, all_ntby_amt, all_shnu_qty, all_seln_qty, all_ntby_qty,
+                 arbt_shnu_amt, arbt_seln_amt, arbt_ntby_amt, arbt_shnu_qty, arbt_seln_qty, arbt_ntby_qty,
+                 nabt_shnu_amt, nabt_seln_amt, nabt_ntby_amt, nabt_shnu_qty, nabt_seln_qty, nabt_ntby_qty,
+                 timestamp)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(date, exch_div, mrkt_div, invr_cls_code) DO UPDATE SET
+                invr_cls_name=excluded.invr_cls_name,
+                all_shnu_amt=excluded.all_shnu_amt, all_seln_amt=excluded.all_seln_amt, all_ntby_amt=excluded.all_ntby_amt,
+                all_shnu_qty=excluded.all_shnu_qty, all_seln_qty=excluded.all_seln_qty, all_ntby_qty=excluded.all_ntby_qty,
+                timestamp=excluded.timestamp
+        ''', (r.get('date'), r.get('exch_div'), r.get('mrkt_div'), r.get('invr_cls_code'), r.get('invr_cls_name'),
+              r.get('all_shnu_amt','0'), r.get('all_seln_amt','0'), r.get('all_ntby_amt','0'),
+              r.get('all_shnu_qty','0'), r.get('all_seln_qty','0'), r.get('all_ntby_qty','0'),
+              r.get('arbt_shnu_amt','0'), r.get('arbt_seln_amt','0'), r.get('arbt_ntby_amt','0'),
+              r.get('arbt_shnu_qty','0'), r.get('arbt_seln_qty','0'), r.get('arbt_ntby_qty','0'),
+              r.get('nabt_shnu_amt','0'), r.get('nabt_seln_amt','0'), r.get('nabt_ntby_amt','0'),
+              r.get('nabt_shnu_qty','0'), r.get('nabt_seln_qty','0'), r.get('nabt_ntby_qty','0'),
+              r.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))))
+        saved += 1
+    conn.commit()
+    conn.close()
+    return saved
+
+
+def sync_upsert_sector_index(rows: list) -> int:
+    """sector_index_daily upsert (date+sector_code 기준)"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    saved = 0
+    for r in rows:
+        cursor.execute('''
+            INSERT INTO sector_index_daily
+                (date, sector_code, sector_name, close, open, high, low,
+                 change, change_sign, change_rate, volume, trade_amount, vol_ratio, net_buy, d20_dsrt, timestamp)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(date, sector_code) DO UPDATE SET
+                sector_name=excluded.sector_name, close=excluded.close, open=excluded.open,
+                high=excluded.high, low=excluded.low, change=excluded.change,
+                change_sign=excluded.change_sign, change_rate=excluded.change_rate,
+                volume=excluded.volume, trade_amount=excluded.trade_amount,
+                vol_ratio=excluded.vol_ratio, net_buy=excluded.net_buy,
+                d20_dsrt=excluded.d20_dsrt, timestamp=excluded.timestamp
+        ''', (r.get('date'), r.get('sector_code'), r.get('sector_name'),
+              r.get('close','0'), r.get('open','0'), r.get('high','0'), r.get('low','0'),
+              r.get('change','0'), r.get('change_sign','3'), r.get('change_rate','0'),
+              r.get('volume','0'), r.get('trade_amount','0'), r.get('vol_ratio','0'),
+              r.get('net_buy','0'), r.get('d20_dsrt','0'),
+              r.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))))
+        saved += 1
+    conn.commit()
+    conn.close()
+    return saved
+
+
+def get_sector_index_cached(sector_code: str, limit: int = 30) -> list:
+    """sector_index_daily 캐시 조회"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT * FROM sector_index_daily
+        WHERE sector_code = ?
+        ORDER BY date DESC LIMIT ?
+    ''', (sector_code, limit))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_investor_trend_cached(exch_div: str = 'J', mrkt_div: str = '1') -> list:
+    """investor_trend_daily 최신 날짜 데이터 조회"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT * FROM investor_trend_daily
+        WHERE exch_div = ? AND mrkt_div = ?
+        ORDER BY date DESC, invr_cls_code ASC
+        LIMIT 20
+    ''', (exch_div, mrkt_div))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_stock_investor_raw(limit_dates: int = 30) -> list:
+    """stock_investor_daily 원시 데이터 조회 (sync export용)"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT * FROM stock_investor_daily
+        WHERE date IN (
+            SELECT DISTINCT date FROM stock_investor_daily
+            ORDER BY date DESC LIMIT ?
+        )
+        ORDER BY date DESC, code ASC
+    ''', (limit_dates,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]

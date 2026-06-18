@@ -7,13 +7,20 @@ from app.utils.db_manager import (
     get_latest_stock_raw_data, get_market_cap_history,
     get_investor_trend_history,
     get_stock_investor_combined, get_latest_market_cap_date,
-    get_stock_investor_trend
+    get_stock_investor_trend,
+    sync_upsert_market_cap, sync_upsert_investor_daily,
+    sync_upsert_investor_trend, sync_upsert_sector_index,
+    get_sector_index_cached, get_investor_trend_cached,
+    get_stock_investor_raw
 )
 from app.core.stock_monitor import fetch_market_cap_ranking, fetch_investor_trend, fetch_sector_index_daily, fetch_stock_investor_daily
 from app.config import Config
 import json
 import os
 import threading
+import secrets
+import time as _time
+from datetime import datetime as _dt
 
 app = Flask(__name__, template_folder='../../templates')
 app.config['APPLICATION_ROOT'] = Config.APP_ROOT
@@ -74,8 +81,25 @@ def get_sector_index_api():
                 'd20_dsrt':    r.get('d20_dsrt', ''),
             })
 
-        return jsonify({'status': 'success', 'count': len(result), 'data': result})
+        if result:
+            return jsonify({'status': 'success', 'count': len(result), 'data': result})
+
+        # KIS API 결과 없음 → DB 캐시 폴백
+        cached = get_sector_index_cached(iscd)
+        if cached:
+            app.logger.info(f"[sector-index] KIS API 결과 없음 → DB 캐시 {len(cached)}건 반환 (iscd={iscd})")
+            return jsonify({'status': 'success', 'count': len(cached), 'data': cached, 'source': 'cache'})
+
+        return jsonify({'status': 'success', 'count': 0, 'data': []})
     except Exception as e:
+        # KIS API 오류 → DB 캐시 폴백
+        try:
+            cached = get_sector_index_cached(request.args.get('iscd', '0001'))
+            if cached:
+                app.logger.warning(f"[sector-index] KIS API 오류 → DB 캐시 반환: {e}")
+                return jsonify({'status': 'success', 'count': len(cached), 'data': cached, 'source': 'cache'})
+        except Exception:
+            pass
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/investor-trend')
@@ -85,13 +109,28 @@ def investor_trend_view():
 
 @app.route('/api/investor-trend', methods=['GET'])
 def get_investor_trend_api():
-    """투자자별 프로그램 매매동향 데이터를 JSON으로 반환"""
+    """투자자별 프로그램 매매동향 데이터를 JSON으로 반환. KIS API 실패 시 DB 캐시 폴백."""
+    exch_div = request.args.get('exch', 'J')
+    mrkt_div = request.args.get('mrkt', '1')
     try:
-        exch_div = request.args.get('exch', 'J')
-        mrkt_div = request.args.get('mrkt', '1')
         data = fetch_investor_trend(exch_div=exch_div, mrkt_div=mrkt_div)
+        # 정상 응답
+        if data.get('rt_cd') == '0' and data.get('output1'):
+            return jsonify(data)
+        # KIS API 오류 코드 → 캐시 폴백
+        cached = get_investor_trend_cached(exch_div, mrkt_div)
+        if cached:
+            app.logger.warning(f"[investor-trend] KIS API 오류 → DB 캐시 {len(cached)}건 반환")
+            return jsonify({'rt_cd': '0', 'output1': cached, 'source': 'cache'})
         return jsonify(data)
     except Exception as e:
+        try:
+            cached = get_investor_trend_cached(exch_div, mrkt_div)
+            if cached:
+                app.logger.warning(f"[investor-trend] KIS API 예외 → DB 캐시 반환: {e}")
+                return jsonify({'rt_cd': '0', 'output1': cached, 'source': 'cache'})
+        except Exception:
+            pass
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/investor-trend/history', methods=['GET'])
@@ -356,6 +395,162 @@ def delete_stock_alert_api(alert_id):
         return jsonify({"status": "success", "message": f"Stock alert {alert_id} deleted."})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+# ──────────────────────────────────────────────
+# 데이터 동기화 API (로컬 → 서버 push)
+# ──────────────────────────────────────────────
+_sync_sessions = {}   # token → session info
+_sync_blocked  = False
+
+SYNC_TABLE_MAP = {
+    'stock_market_cap_daily':  sync_upsert_market_cap,
+    'stock_investor_daily':    sync_upsert_investor_daily,
+    'investor_trend_daily':    sync_upsert_investor_trend,
+    'sector_index_daily':      sync_upsert_sector_index,
+}
+
+def _get_client_ip():
+    return request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
+
+def _verify_sync_token(token):
+    """토큰 유효성 검사 (만료 체크)"""
+    sess = _sync_sessions.get(token)
+    if not sess:
+        return None
+    if _time.time() > sess['expires_at']:
+        _sync_sessions.pop(token, None)
+        return None
+    return sess
+
+@app.route('/api/sync/start', methods=['POST'])
+def sync_start():
+    """동기화 세션 시작 — IP 검증 후 토큰 발급"""
+    global _sync_blocked
+    if _sync_blocked:
+        return jsonify({"error": "동기화가 차단되어 있습니다."}), 403
+    ip = _get_client_ip()
+    allowed = Config.SYNC_ALLOWED_IPS
+    if allowed and ip not in allowed:
+        app.logger.warning(f"[SYNC] 차단된 IP 접근 시도: {ip}")
+        return jsonify({"error": f"허용되지 않은 IP: {ip}"}), 403
+    token = secrets.token_hex(20)
+    now = _dt.now()
+    _sync_sessions[token] = {
+        "ip": ip, "token": token,
+        "started_at": now.strftime('%Y-%m-%d %H:%M:%S'),
+        "expires_at": _time.time() + Config.SYNC_TOKEN_TTL,
+        "tables_synced": [], "rows_synced": 0, "status": "active"
+    }
+    app.logger.info(f"[SYNC] 세션 시작 | IP: {ip} | token: {token[:8]}...")
+    return jsonify({"token": token, "expires_in": Config.SYNC_TOKEN_TTL,
+                    "message": "동기화 세션이 시작되었습니다."})
+
+@app.route('/api/sync/push', methods=['POST'])
+def sync_push():
+    """데이터 수신 및 upsert"""
+    token = request.headers.get('X-Sync-Token', '')
+    sess = _verify_sync_token(token)
+    if not sess:
+        return jsonify({"error": "유효하지 않거나 만료된 토큰"}), 401
+    body = request.get_json(silent=True) or {}
+    table = body.get('table', '')
+    rows  = body.get('rows', [])
+    if table not in SYNC_TABLE_MAP:
+        return jsonify({"error": f"지원하지 않는 테이블: {table}"}), 400
+    if not rows:
+        return jsonify({"status": "ok", "saved": 0})
+    try:
+        saved = SYNC_TABLE_MAP[table](rows)
+        sess['tables_synced'].append(table)
+        sess['rows_synced'] += saved
+        app.logger.info(f"[SYNC] {table} {saved}건 저장 | IP: {sess['ip']}")
+        return jsonify({"status": "ok", "table": table, "saved": saved})
+    except Exception as e:
+        app.logger.error(f"[SYNC] {table} 저장 오류: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/sync/end', methods=['POST'])
+def sync_end():
+    """동기화 세션 종료"""
+    token = request.headers.get('X-Sync-Token', '')
+    sess = _sync_sessions.get(token)
+    if not sess:
+        return jsonify({"error": "세션 없음"}), 404
+    sess['status'] = 'completed'
+    sess['ended_at'] = _dt.now().strftime('%Y-%m-%d %H:%M:%S')
+    sess['expires_at'] = 0  # 즉시 만료
+    app.logger.info(f"[SYNC] 세션 종료 | IP: {sess['ip']} | "
+                    f"테이블: {sess['tables_synced']} | 총 {sess['rows_synced']}건")
+    return jsonify({"status": "ok", "summary": {
+        "tables": sess['tables_synced'], "rows": sess['rows_synced'],
+        "started_at": sess['started_at'], "ended_at": sess['ended_at']
+    }})
+
+@app.route('/api/sync/sessions', methods=['GET'])
+def sync_sessions():
+    """세션 이력 조회"""
+    return jsonify(list(_sync_sessions.values()))
+
+@app.route('/api/sync/block', methods=['POST'])
+def sync_block():
+    global _sync_blocked
+    _sync_blocked = True
+    app.logger.warning("[SYNC] 동기화 차단 활성화")
+    return jsonify({"status": "blocked"})
+
+@app.route('/api/sync/unblock', methods=['POST'])
+def sync_unblock():
+    global _sync_blocked
+    _sync_blocked = False
+    app.logger.info("[SYNC] 동기화 차단 해제")
+    return jsonify({"status": "unblocked"})
+
+@app.route('/api/sync/status', methods=['GET'])
+def sync_status():
+    return jsonify({
+        "blocked": _sync_blocked,
+        "active_sessions": sum(1 for s in _sync_sessions.values() if s['status'] == 'active'),
+        "allowed_ips": Config.SYNC_ALLOWED_IPS
+    })
+
+# ──────────────────────────────────────────────
+# Sync export — 로컬 DB 데이터를 서버로 전송하기 위한 원시 데이터 조회
+# ──────────────────────────────────────────────
+
+@app.route('/api/sync/export/market-cap', methods=['GET'])
+def sync_export_market_cap():
+    limit = int(request.args.get('limit', 30))
+    data = get_market_cap_history(limit_dates=limit, fid_input_iscd='combined')
+    return jsonify({"status": "success", "count": len(data), "data": data})
+
+@app.route('/api/sync/export/stock-investor', methods=['GET'])
+def sync_export_stock_investor():
+    limit = int(request.args.get('limit', 30))
+    data = get_stock_investor_raw(limit_dates=limit)
+    return jsonify({"status": "success", "count": len(data), "data": data})
+
+@app.route('/api/sync/export/investor-trend', methods=['GET'])
+def sync_export_investor_trend():
+    exch = request.args.get('exch', 'J')
+    mrkt = request.args.get('mrkt', '1')
+    days = int(request.args.get('days', 30))
+    data = get_investor_trend_history(exch_div=exch, mrkt_div=mrkt, limit_days=days)
+    return jsonify({"status": "success", "count": len(data), "data": data})
+
+# sector_index 캐시 폴백
+@app.route('/api/sector-index/cached', methods=['GET'])
+def get_sector_index_cached_api():
+    iscd = request.args.get('iscd', '0001')
+    data = get_sector_index_cached(iscd)
+    return jsonify({'status': 'success', 'count': len(data), 'data': data, 'source': 'cache'})
+
+# investor_trend 캐시 폴백
+@app.route('/api/investor-trend/cached', methods=['GET'])
+def get_investor_trend_cached_api():
+    exch = request.args.get('exch', 'J')
+    mrkt = request.args.get('mrkt', '1')
+    data = get_investor_trend_cached(exch, mrkt)
+    return jsonify({'status': 'success', 'data': data, 'source': 'cache'})
 
 def run_server(use_reloader=False):
     app.run(host=Config.API_HOST, port=Config.API_PORT, debug=Config.DEBUG, use_reloader=use_reloader)

@@ -40,3 +40,7 @@ class Config:
     API_PORT = 5000
     DEBUG = True
     APP_ROOT = os.getenv("APP_ROOT", "/")
+
+    # 데이터 동기화 설정
+    SYNC_ALLOWED_IPS = [ip.strip() for ip in os.getenv("SYNC_ALLOWED_IPS", "127.0.0.1").split(",") if ip.strip()]
+    SYNC_TOKEN_TTL = 600  # 세션 유효시간(초) — 10분

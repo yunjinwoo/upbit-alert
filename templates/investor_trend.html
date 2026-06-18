@@ -90,6 +90,7 @@
             <span id="update-timer" class="badge bg-secondary">-</span>
             <button onclick="loadAll()" class="btn btn-primary btn-sm ms-2">새로고침</button>
             <button onclick="toggleRaw()" class="btn btn-outline-dark btn-sm ms-1">원본 JSON</button>
+            <button onclick="openSyncModal()" class="btn btn-outline-info btn-sm ms-1">🔄 서버 전송</button>
             <a href="/" class="btn btn-outline-secondary btn-sm ms-1">대시보드로 돌아가기</a>
         </div>
     </div>
@@ -324,6 +325,118 @@
 <script>
     document.getElementById('infoPanel').addEventListener('show.bs.offcanvas', () => document.querySelector('.info-btn').style.display = 'none');
     document.getElementById('infoPanel').addEventListener('hidden.bs.offcanvas', () => document.querySelector('.info-btn').style.display = '');
+</script>
+
+<!-- 서버 동기화 모달 -->
+<div class="modal fade" id="syncModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h6 class="modal-title mb-0">🔄 서버로 데이터 전송</h6>
+        <button type="button" class="btn-close btn-sm" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body pb-2">
+        <div class="mb-2">
+          <label class="form-label small mb-1">서버 URL</label>
+          <input type="text" id="syncServerUrl" class="form-control form-control-sm font-monospace"
+                 value="http://49.247.202.50/upbit">
+        </div>
+        <div class="mb-2 d-flex gap-2 align-items-center">
+          <label class="form-label small mb-0">최근 날짜 수</label>
+          <input type="number" id="syncLimitDays" class="form-control form-control-sm" value="30" min="1" max="90" style="width:70px">
+        </div>
+        <div class="mb-2 small text-muted">※ 현재 선택된 거래소·시장 구분의 DB 이력을 전송합니다.</div>
+        <div id="syncLog" class="p-2 rounded font-monospace small border"
+             style="background:#f8f9fa;min-height:80px;max-height:220px;overflow-y:auto;white-space:pre-wrap"></div>
+      </div>
+      <div class="modal-footer py-2">
+        <button id="syncStartBtn" class="btn btn-success btn-sm" onclick="startPageSync()">전송 시작</button>
+        <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">닫기</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+    let _syncToken = null;
+
+    function syncLog(msg, cls) {
+        const el = document.getElementById('syncLog');
+        const line = document.createElement('div');
+        if (cls) line.className = cls;
+        line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+        el.appendChild(line);
+        el.scrollTop = el.scrollHeight;
+    }
+
+    async function doSync(serverUrl, tableName, rows) {
+        const CHUNK = 500;
+        syncLog('세션 시작 중...');
+        const startRes = await fetch(`${serverUrl}/api/sync/start`, { method: 'POST' });
+        const startData = await startRes.json();
+        if (!startData.token) throw new Error(startData.error || '토큰 발급 실패');
+        _syncToken = startData.token;
+        syncLog('토큰 발급 완료 (유효 10분)');
+
+        let totalSaved = 0;
+        for (let i = 0; i < rows.length; i += CHUNK) {
+            const chunk = rows.slice(i, i + CHUNK);
+            syncLog(`전송 중 ${i + 1}~${Math.min(i + CHUNK, rows.length)} / ${rows.length}건...`);
+            const pushRes = await fetch(`${serverUrl}/api/sync/push`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Sync-Token': _syncToken },
+                body: JSON.stringify({ table: tableName, rows: chunk })
+            });
+            const pushData = await pushRes.json();
+            if (pushData.error) throw new Error(pushData.error);
+            totalSaved += pushData.saved || 0;
+        }
+        syncLog(`저장 완료: ${totalSaved}건`);
+
+        await fetch(`${serverUrl}/api/sync/end`, {
+            method: 'POST', headers: { 'X-Sync-Token': _syncToken }
+        });
+        syncLog('세션 종료 완료 ✓', 'text-success fw-bold');
+        _syncToken = null;
+    }
+
+    window.openSyncModal = function() {
+        document.getElementById('syncLog').innerHTML = '';
+        new bootstrap.Modal(document.getElementById('syncModal')).show();
+    };
+
+    window.startPageSync = async function() {
+        const btn = document.getElementById('syncStartBtn');
+        const serverUrl = document.getElementById('syncServerUrl').value.trim().replace(/\/$/, '');
+        const limit = parseInt(document.getElementById('syncLimitDays').value) || 30;
+        const exch = document.getElementById('exchSelect').value;
+        const mrkt = document.getElementById('mrktSelect').value;
+        btn.disabled = true;
+        btn.textContent = '전송 중...';
+        document.getElementById('syncLog').innerHTML = '';
+
+        try {
+            syncLog(`로컬 DB 이력 조회 중... (거래소:${exch} 시장:${mrkt} 최근 ${limit}일)`);
+            const res = await fetch(`api/sync/export/investor-trend?exch=${exch}&mrkt=${mrkt}&days=${limit}`);
+            const result = await res.json();
+            if (result.status !== 'success') throw new Error(result.message || '로컬 데이터 조회 실패');
+            syncLog(`${result.count}건 로드 완료`);
+
+            if (result.count === 0) { syncLog('전송할 데이터가 없습니다. (먼저 당일 조회를 실행하세요)', 'text-warning'); return; }
+            await doSync(serverUrl, 'investor_trend_daily', result.data);
+        } catch (e) {
+            syncLog(`오류: ${e.message}`, 'text-danger fw-bold');
+            if (_syncToken) {
+                try { await fetch(`${serverUrl}/api/sync/end`, { method: 'POST', headers: { 'X-Sync-Token': _syncToken } }); } catch {}
+                _syncToken = null;
+            }
+        } finally {
+            btn.disabled = false;
+            btn.textContent = '전송 시작';
+        }
+    };
+})();
 </script>
 </body>
 </html>
