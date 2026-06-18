@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>동기화 관리</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f4f7f6; font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; }
+        .main-navbar { background-color: #1a1a2e; }
+        .main-navbar .navbar-brand { color: #fff; font-weight: bold; }
+        .main-navbar .nav-link { color: rgba(255,255,255,0.75) !important; }
+        .main-navbar .nav-link:hover,
+        .main-navbar .nav-link.active { color: #fff !important; }
+        .main-navbar .nav-link.active { border-bottom: 2px solid #4da6ff; }
+
+        .dashboard-container { margin-top: 30px; margin-bottom: 50px; }
+        .card-panel { background: white; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); padding: 20px 24px; margin-bottom: 20px; }
+        .card-panel h5 { font-weight: 700; color: #1a1a2e; border-bottom: 2px solid #4da6ff; padding-bottom: 6px; margin-bottom: 16px; }
+
+        .status-badge { font-size: 1rem; padding: 0.4em 0.9em; border-radius: 20px; }
+        .session-row { font-size: 0.85rem; }
+        .log-box { background: #1a1a2e; color: #7dffb3; font-family: monospace; font-size: 0.82rem;
+                   border-radius: 8px; padding: 14px; max-height: 260px; overflow-y: auto; white-space: pre-wrap; }
+        .table-sm td, .table-sm th { vertical-align: middle; font-size: 0.83rem; }
+        .ip-badge { background: #e8f0fe; color: #1a1a2e; border-radius: 4px; padding: 2px 8px; font-family: monospace; font-size: 0.8rem; }
+    </style>
+</head>
+<body>
+
+<nav class="navbar main-navbar px-3">
+    <a class="navbar-brand" href="{{ url_for('index') }}">📡 알림 시스템</a>
+    <div class="d-flex gap-3">
+        <a href="{{ url_for('index') }}" class="nav-link">대시보드</a>
+        <a href="{{ url_for('market_cap_view') }}" class="nav-link">시가총액 추이</a>
+        <a href="{{ url_for('stock_investor_view') }}" class="nav-link">시총×투자자</a>
+        <a href="{{ url_for('investor_trend_view') }}" class="nav-link">투자자별 매매동향</a>
+        <a href="{{ url_for('sector_index_view') }}" class="nav-link">업종 일자별지수</a>
+        <a href="{{ url_for('raw_data_view') }}" class="nav-link">원본 데이터</a>
+        <a href="/grid" class="nav-link">리비전 관리</a>
+        <a href="/sync-admin" class="nav-link active">동기화 관리</a>
+    </div>
+</nav>
+
+<div class="container dashboard-container">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h2>🔄 동기화 관리</h2>
+        <button onclick="refresh()" class="btn btn-outline-primary btn-sm">새로고침</button>
+    </div>
+
+    <!-- 현재 상태 -->
+    <div class="card-panel">
+        <h5>📡 현재 상태</h5>
+        <div class="d-flex gap-4 align-items-center flex-wrap">
+            <div>
+                <div class="text-muted small mb-1">동기화 상태</div>
+                <span id="syncStateLabel" class="status-badge bg-secondary text-white">확인 중...</span>
+            </div>
+            <div>
+                <div class="text-muted small mb-1">활성 세션</div>
+                <span id="activeSessions" class="fs-5 fw-bold">-</span>
+            </div>
+            <div>
+                <div class="text-muted small mb-1">허용 IP</div>
+                <div id="allowedIps">-</div>
+            </div>
+            <div class="ms-auto d-flex gap-2">
+                <button id="blockBtn" onclick="setBlock(true)" class="btn btn-danger btn-sm">차단</button>
+                <button id="unblockBtn" onclick="setBlock(false)" class="btn btn-success btn-sm">허용</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 세션 이력 -->
+    <div class="card-panel">
+        <h5>📋 세션 이력</h5>
+        <div class="table-responsive">
+            <table class="table table-sm table-hover align-middle mb-0">
+                <thead class="table-dark">
+                    <tr>
+                        <th>시작 시각</th>
+                        <th>종료 시각</th>
+                        <th>IP</th>
+                        <th>상태</th>
+                        <th class="text-end">전송 건수</th>
+                        <th>전송 테이블</th>
+                    </tr>
+                </thead>
+                <tbody id="sessionsBody">
+                    <tr><td colspan="6" class="text-center text-muted py-3">세션 없음</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- DB 현황 -->
+    <div class="card-panel">
+        <h5>🗄 로컬 DB 현황</h5>
+        <div id="dbStats" class="row g-3">
+            <div class="col-12 text-muted small">조회 중...</div>
+        </div>
+    </div>
+
+    <!-- export 엔드포인트 안내 -->
+    <div class="card-panel">
+        <h5>🔗 Export 엔드포인트</h5>
+        <table class="table table-sm mb-0">
+            <thead class="table-light">
+                <tr><th>엔드포인트</th><th>설명</th><th>파라미터</th></tr>
+            </thead>
+            <tbody class="font-monospace">
+                <tr>
+                    <td><a href="api/sync/export/market-cap?limit=7" target="_blank">/api/sync/export/market-cap</a></td>
+                    <td>시총 순위 원시 데이터</td>
+                    <td>limit (기본 30일)</td>
+                </tr>
+                <tr>
+                    <td><a href="api/sync/export/stock-investor?limit=7" target="_blank">/api/sync/export/stock-investor</a></td>
+                    <td>종목별 투자자 원시 데이터</td>
+                    <td>limit (기본 30일)</td>
+                </tr>
+                <tr>
+                    <td><a href="api/sync/export/investor-trend?exch=J&mrkt=1&days=30" target="_blank">/api/sync/export/investor-trend</a></td>
+                    <td>투자자별 매매동향 이력</td>
+                    <td>exch, mrkt, days</td>
+                </tr>
+                <tr>
+                    <td><a href="api/sector-index?iscd=0001" target="_blank">/api/sector-index</a></td>
+                    <td>업종 일자별지수 (실시간)</td>
+                    <td>iscd, date</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    async function loadStatus() {
+        const res = await fetch('api/sync/status');
+        const d = await res.json();
+        const label = document.getElementById('syncStateLabel');
+        if (d.blocked) {
+            label.textContent = '차단됨';
+            label.className = 'status-badge bg-danger text-white';
+        } else {
+            label.textContent = '허용';
+            label.className = 'status-badge bg-success text-white';
+        }
+        document.getElementById('activeSessions').textContent = d.active_sessions ?? '-';
+        document.getElementById('allowedIps').innerHTML = (d.allowed_ips || [])
+            .map(ip => `<span class="ip-badge me-1">${ip}</span>`).join('') || '<span class="text-muted small">설정 없음</span>';
+    }
+
+    async function loadSessions() {
+        const res = await fetch('api/sync/sessions');
+        const sessions = await res.json();
+        const tbody = document.getElementById('sessionsBody');
+        if (!sessions.length) {
+            tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-3">세션 없음</td></tr>';
+            return;
+        }
+        tbody.innerHTML = [...sessions].reverse().map(s => {
+            const statusBadge = s.status === 'active'
+                ? '<span class="badge bg-success">진행중</span>'
+                : s.status === 'done'
+                ? '<span class="badge bg-primary">완료</span>'
+                : '<span class="badge bg-secondary">종료</span>';
+            const tables = (s.tables_synced || []).join(', ') || '-';
+            return `<tr class="session-row">
+                <td>${s.started_at || '-'}</td>
+                <td>${s.ended_at || '-'}</td>
+                <td><span class="ip-badge">${s.ip}</span></td>
+                <td>${statusBadge}</td>
+                <td class="text-end fw-bold">${(s.rows_synced || 0).toLocaleString()}</td>
+                <td class="text-muted">${tables}</td>
+            </tr>`;
+        }).join('');
+    }
+
+    async function loadDbStats() {
+        try {
+            const res = await fetch('api/debug/investor-dates');
+            const d = await res.json();
+            const el = document.getElementById('dbStats');
+            const tables = [
+                { label: '시총 순위 (stock_market_cap_daily)', key: 'market_cap' },
+                { label: '종목별 투자자 (stock_investor_daily)', key: 'investor' },
+            ];
+            // Use a simpler approach - just show counts from export endpoints
+            const [mktRes, invRes] = await Promise.all([
+                fetch('api/sync/export/market-cap?limit=999').then(r => r.json()).catch(() => ({ count: '?' })),
+                fetch('api/sync/export/stock-investor?limit=999').then(r => r.json()).catch(() => ({ count: '?' })),
+            ]);
+
+            el.innerHTML = `
+            <div class="col-6 col-md-3">
+                <div class="border rounded p-3 text-center">
+                    <div class="text-muted small">시총 순위</div>
+                    <div class="fs-4 fw-bold text-primary">${(mktRes.count || 0).toLocaleString()}</div>
+                    <div class="small text-muted">건</div>
+                </div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="border rounded p-3 text-center">
+                    <div class="text-muted small">종목별 투자자</div>
+                    <div class="fs-4 fw-bold text-primary">${(invRes.count || 0).toLocaleString()}</div>
+                    <div class="small text-muted">건</div>
+                </div>
+            </div>`;
+        } catch (e) {
+            document.getElementById('dbStats').innerHTML = `<div class="col-12 text-danger small">조회 실패: ${e.message}</div>`;
+        }
+    }
+
+    async function setBlock(blocked) {
+        const url = blocked ? 'api/sync/block' : 'api/sync/unblock';
+        await fetch(url, { method: 'POST' });
+        await loadStatus();
+    }
+
+    async function refresh() {
+        await Promise.all([loadStatus(), loadSessions(), loadDbStats()]);
+    }
+
+    refresh();
+    setInterval(loadSessions, 5000); // 세션 목록 5초마다 갱신
+</script>
+</body>
+</html>

@@ -552,6 +552,11 @@ def get_investor_trend_cached_api():
     data = get_investor_trend_cached(exch, mrkt)
     return jsonify({'status': 'success', 'data': data, 'source': 'cache'})
 
+@app.route('/sync-admin')
+def sync_admin_view():
+    """동기화 관리 페이지"""
+    return render_template('sync_admin.html')
+
 def run_server(use_reloader=False):
     app.run(host=Config.API_HOST, port=Config.API_PORT, debug=Config.DEBUG, use_reloader=use_reloader)
 
