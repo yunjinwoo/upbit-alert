@@ -4,7 +4,7 @@ import time
 from datetime import datetime
 from dataclasses import asdict
 from app.config import Config
-from app.utils.db_manager import save_stock_alert_to_db, init_db, save_api_token, get_api_token, save_stock_raw_data, save_daily_market_cap, save_daily_investor_trend, save_stock_investor_daily
+from app.utils.db_manager import save_stock_alert_to_db, init_db, save_api_token, get_api_token, save_stock_raw_data, save_daily_market_cap, save_daily_investor_trend, save_stock_investor_daily, save_sector_index_daily
 from app.core.kis_models import RequestHeader, RequestQueryParam, MarketCapQueryParam, FluctuationRankingResponse, MarketCapRankingResponse, StockInvestorDailyItem
 from app.utils.logger import get_logger
 
@@ -73,13 +73,20 @@ def fetch_sector_index_daily(iscd="0001", base_date=None):
         "FID_PERIOD_DIV_CODE": "D",
     }
 
+    SECTOR_NAMES = {'0001': '코스피', '1001': '코스닥', '2001': '코스피200'}
+    sector_name = SECTOR_NAMES.get(iscd, iscd)
+
     try:
         res = requests.get(url, headers=headers, params=params)
         data = res.json()
         if data.get("rt_cd") != "0":
             logger.error(f"❌ 업종지수 API 오류: {data.get('msg1')}")
             return []
-        return data.get("output2", [])
+        records = data.get("output2", [])
+        if records:
+            saved = save_sector_index_daily(records, iscd, sector_name)
+            logger.info(f"[업종지수] {sector_name}({iscd}) {saved}건 DB 저장")
+        return records
     except Exception as e:
         logger.error(f"❌ 업종지수 조회 에러: {e}")
         return []
@@ -329,20 +336,29 @@ def run_stock_monitor():
 
     last_notified = {}
     last_market_cap_date = None
-    last_investor_trend_date = None
+    last_close_data_hour = None  # 18시 or 19시 수집 여부 (시간 단위로 추적)
 
     while True:
         try:
             now = datetime.now()
             today_str = now.strftime('%Y-%m-%d')
 
-            # 평일 20시 — 투자자별 매매동향 일 1회 수집
-            if now.weekday() < 5 and now.hour == 20 and last_investor_trend_date != today_str:
-                for mrkt in ("1", "4"):
-                    fetch_investor_trend(exch_div="J", mrkt_div=mrkt)
-                    time.sleep(2)
-                last_investor_trend_date = today_str
-                logger.info("✅ [스케줄] 투자자별 매매동향 수집 완료 (코스피/코스닥)")
+            # 평일 18시 또는 19시 — 투자자별 매매동향 + 업종지수 수집 (시간당 1회)
+            if now.weekday() < 5 and now.hour in (18, 19):
+                run_key = f"{today_str}-{now.hour}"
+                if last_close_data_hour != run_key:
+                    logger.info(f"⏰ [스케줄] {now.hour}시 장마감 데이터 수집 시작")
+                    # 투자자별 매매동향
+                    for mrkt in ("1", "4"):
+                        fetch_investor_trend(exch_div="J", mrkt_div=mrkt)
+                        time.sleep(2)
+                    logger.info("✅ [스케줄] 투자자별 매매동향 수집 완료 (코스피/코스닥)")
+                    # 업종 일자별지수
+                    for iscd in ("0001", "1001", "2001"):
+                        fetch_sector_index_daily(iscd=iscd)
+                        time.sleep(2)
+                    logger.info("✅ [스케줄] 업종 일자별지수 수집 완료 (코스피/코스닥/코스피200)")
+                    last_close_data_hour = run_key
 
             # 장 운영 시간 외 대기
             if now.hour < 8 or now.hour >= 20:

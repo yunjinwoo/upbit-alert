@@ -708,6 +708,47 @@ def get_investor_trend_cached(exch_div: str = 'J', mrkt_div: str = '1') -> list:
     return [dict(r) for r in rows]
 
 
+def save_sector_index_daily(records: list, iscd: str, sector_name: str):
+    """업종 일자별지수 저장 (KIS API output2 원시 레코드 → sector_index_daily upsert)"""
+    SIGN = {'1': '상한', '2': '상승', '3': '보합', '4': '하한', '5': '하락'}
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    saved = 0
+    for r in records:
+        d = r.get('stck_bsop_date', '')
+        if len(d) != 8:
+            continue
+        date = f"{d[:4]}-{d[4:6]}-{d[6:]}"
+        cursor.execute('''
+            INSERT INTO sector_index_daily
+                (date, sector_code, sector_name, close, open, high, low,
+                 change, change_sign, change_rate, volume, trade_amount, vol_ratio, net_buy, d20_dsrt, timestamp)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(date, sector_code) DO UPDATE SET
+                sector_name=excluded.sector_name, close=excluded.close, open=excluded.open,
+                high=excluded.high, low=excluded.low, change=excluded.change,
+                change_sign=excluded.change_sign, change_rate=excluded.change_rate,
+                volume=excluded.volume, trade_amount=excluded.trade_amount,
+                vol_ratio=excluded.vol_ratio, net_buy=excluded.net_buy,
+                d20_dsrt=excluded.d20_dsrt, timestamp=excluded.timestamp
+        ''', (
+            date, iscd, sector_name,
+            r.get('bstp_nmix_prpr', '0'), r.get('bstp_nmix_oprc', '0'),
+            r.get('bstp_nmix_hgpr', '0'), r.get('bstp_nmix_lwpr', '0'),
+            r.get('bstp_nmix_prdy_vrss', '0'),
+            SIGN.get(r.get('prdy_vrss_sign', '3'), '보합'),
+            r.get('bstp_nmix_prdy_ctrt', '0'),
+            r.get('acml_vol', '0'), r.get('acml_tr_pbmn', '0'),
+            r.get('acml_vol_rlim', '0'), r.get('invt_new_psdg', '0'),
+            r.get('d20_dsrt', '0'), timestamp
+        ))
+        saved += 1
+    conn.commit()
+    conn.close()
+    return saved
+
+
 def get_stock_investor_raw(limit_dates: int = 30) -> list:
     """stock_investor_daily 원시 데이터 조회 (sync export용)"""
     conn = sqlite3.connect(DB_PATH)
