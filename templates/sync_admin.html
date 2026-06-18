@@ -24,6 +24,13 @@
                    border-radius: 8px; padding: 14px; max-height: 260px; overflow-y: auto; white-space: pre-wrap; }
         .table-sm td, .table-sm th { vertical-align: middle; font-size: 0.83rem; }
         .ip-badge { background: #e8f0fe; color: #1a1a2e; border-radius: 4px; padding: 2px 8px; font-family: monospace; font-size: 0.8rem; }
+        .step-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid #f1f5f9; font-size: 0.85rem; }
+        .step-row:last-child { border-bottom: none; }
+        .step-icon { width: 22px; text-align: center; font-size: 1rem; flex-shrink: 0; }
+        .step-label { flex: 1; }
+        .step-count { font-family: monospace; font-size: 0.8rem; color: #64748b; min-width: 60px; text-align: right; }
+        .sync-log { background: #0f172a; color: #7dffb3; font-family: monospace; font-size: 0.8rem;
+                    border-radius: 8px; padding: 12px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; margin-top: 12px; }
     </style>
 </head>
 <body>
@@ -47,6 +54,37 @@
     <div class="d-flex justify-content-between align-items-center mb-3">
         <h2>🔄 동기화 관리</h2>
         <button onclick="refresh()" class="btn btn-outline-primary btn-sm">새로고침</button>
+    </div>
+
+    <!-- 전체 전송 -->
+    <div class="card-panel">
+        <h5>🚀 전체 데이터 서버 전송</h5>
+        <div class="row g-3 mb-3">
+            <div class="col-md-6">
+                <label class="form-label small mb-1">서버 URL</label>
+                <input type="text" id="bulkServerUrl" class="form-control form-control-sm font-monospace"
+                       value="http://49.247.202.50/upbit">
+            </div>
+            <div class="col-auto">
+                <label class="form-label small mb-1">최근 날짜 수</label>
+                <input type="number" id="bulkLimit" class="form-control form-control-sm" value="7" min="1" max="90" style="width:70px">
+            </div>
+            <div class="col-auto d-flex align-items-end">
+                <button id="bulkSyncBtn" onclick="startBulkSync()" class="btn btn-success">전체 전송 시작</button>
+            </div>
+        </div>
+
+        <!-- 단계별 진행 현황 -->
+        <div id="bulkSteps">
+            <div class="step-row"><span class="step-icon" id="si-mkt">⏳</span><span class="step-label">시총 순위 (stock_market_cap_daily)</span><span class="step-count" id="sc-mkt">-</span></div>
+            <div class="step-row"><span class="step-icon" id="si-inv">⏳</span><span class="step-label">종목별 투자자 (stock_investor_daily)</span><span class="step-count" id="sc-inv">-</span></div>
+            <div class="step-row"><span class="step-icon" id="si-trJ1">⏳</span><span class="step-label">투자자별 매매동향 — KRX 코스피</span><span class="step-count" id="sc-trJ1">-</span></div>
+            <div class="step-row"><span class="step-icon" id="si-trJ4">⏳</span><span class="step-label">투자자별 매매동향 — KRX 코스닥</span><span class="step-count" id="sc-trJ4">-</span></div>
+            <div class="step-row"><span class="step-icon" id="si-sec0001">⏳</span><span class="step-label">업종 일자별지수 — 코스피 (0001)</span><span class="step-count" id="sc-sec0001">-</span></div>
+            <div class="step-row"><span class="step-icon" id="si-sec1001">⏳</span><span class="step-label">업종 일자별지수 — 코스닥 (1001)</span><span class="step-count" id="sc-sec1001">-</span></div>
+            <div class="step-row"><span class="step-icon" id="si-sec2001">⏳</span><span class="step-label">업종 일자별지수 — 코스피200 (2001)</span><span class="step-count" id="sc-sec2001">-</span></div>
+        </div>
+        <div id="bulkLog" class="sync-log" style="display:none"></div>
     </div>
 
     <!-- 현재 상태 -->
@@ -225,7 +263,110 @@
     }
 
     refresh();
-    setInterval(loadSessions, 5000); // 세션 목록 5초마다 갱신
+    setInterval(loadSessions, 5000);
+
+    // ── 전체 전송 ──────────────────────────────
+    let _bulkToken = null;
+
+    function bulkLog(msg, cls) {
+        const el = document.getElementById('bulkLog');
+        el.style.display = '';
+        const line = document.createElement('div');
+        if (cls) line.className = cls;
+        line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+        el.appendChild(line);
+        el.scrollTop = el.scrollHeight;
+    }
+
+    function stepIcon(id, state) {
+        const icons = { wait: '⏳', run: '🔄', ok: '✅', err: '❌', skip: '➖' };
+        document.getElementById('si-' + id).textContent = icons[state] || state;
+    }
+    function stepCount(id, n) {
+        document.getElementById('sc-' + id).textContent = n == null ? '-' : `${Number(n).toLocaleString()}건`;
+    }
+    function resetSteps() {
+        ['mkt','inv','trJ1','trJ4','sec0001','sec1001','sec2001'].forEach(id => {
+            stepIcon(id, 'wait'); stepCount(id, null);
+        });
+    }
+
+    async function pushTable(serverUrl, token, tableName, rows) {
+        const CHUNK = 500;
+        let saved = 0;
+        for (let i = 0; i < rows.length; i += CHUNK) {
+            const res = await fetch(`${serverUrl}/api/sync/push`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Sync-Token': token },
+                body: JSON.stringify({ table: tableName, rows: rows.slice(i, i + CHUNK) })
+            });
+            const d = await res.json();
+            if (d.error) throw new Error(d.error);
+            saved += d.saved || 0;
+        }
+        return saved;
+    }
+
+    async function startBulkSync() {
+        const btn = document.getElementById('bulkSyncBtn');
+        const serverUrl = document.getElementById('bulkServerUrl').value.trim().replace(/\/$/, '');
+        const limit = parseInt(document.getElementById('bulkLimit').value) || 7;
+
+        btn.disabled = true; btn.textContent = '전송 중...';
+        document.getElementById('bulkLog').innerHTML = '';
+        resetSteps();
+
+        const steps = [
+            { id: 'mkt',    fetch: () => fetch(`api/sync/export/market-cap?limit=${limit}`).then(r=>r.json()),    table: 'stock_market_cap_daily' },
+            { id: 'inv',    fetch: () => fetch(`api/sync/export/stock-investor?limit=${limit}`).then(r=>r.json()), table: 'stock_investor_daily' },
+            { id: 'trJ1',   fetch: () => fetch(`api/sync/export/investor-trend?exch=J&mrkt=1&days=${limit}`).then(r=>r.json()), table: 'investor_trend_daily' },
+            { id: 'trJ4',   fetch: () => fetch(`api/sync/export/investor-trend?exch=J&mrkt=4&days=${limit}`).then(r=>r.json()), table: 'investor_trend_daily' },
+            { id: 'sec0001',fetch: () => fetch(`api/sector-index/cached?iscd=0001`).then(r=>r.json()),             table: 'sector_index_daily' },
+            { id: 'sec1001',fetch: () => fetch(`api/sector-index/cached?iscd=1001`).then(r=>r.json()),             table: 'sector_index_daily' },
+            { id: 'sec2001',fetch: () => fetch(`api/sector-index/cached?iscd=2001`).then(r=>r.json()),             table: 'sector_index_daily' },
+        ];
+
+        try {
+            // 세션 시작
+            bulkLog('세션 시작 중...');
+            const startRes = await fetch(`${serverUrl}/api/sync/start`, { method: 'POST' });
+            const startData = await startRes.json();
+            if (!startData.token) throw new Error(startData.error || '토큰 발급 실패');
+            _bulkToken = startData.token;
+            bulkLog('토큰 발급 완료');
+
+            let totalSaved = 0;
+            for (const step of steps) {
+                stepIcon(step.id, 'run');
+                try {
+                    const result = await step.fetch();
+                    const rows = result.data || [];
+                    if (!rows.length) { stepIcon(step.id, 'skip'); stepCount(step.id, 0); continue; }
+                    const saved = await pushTable(serverUrl, _bulkToken, step.table, rows);
+                    stepIcon(step.id, 'ok'); stepCount(step.id, saved);
+                    totalSaved += saved;
+                    bulkLog(`${step.id}: ${saved}건 저장`);
+                } catch(e) {
+                    stepIcon(step.id, 'err');
+                    bulkLog(`${step.id} 실패: ${e.message}`, 'text-danger');
+                }
+            }
+
+            // 세션 종료
+            await fetch(`${serverUrl}/api/sync/end`, { method: 'POST', headers: { 'X-Sync-Token': _bulkToken } });
+            _bulkToken = null;
+            bulkLog(`✅ 전체 전송 완료 — 총 ${totalSaved.toLocaleString()}건`, 'text-success fw-bold');
+            await loadSessions();
+        } catch(e) {
+            bulkLog(`오류: ${e.message}`, 'text-danger fw-bold');
+            if (_bulkToken) {
+                try { await fetch(`${serverUrl}/api/sync/end`, { method: 'POST', headers: { 'X-Sync-Token': _bulkToken } }); } catch {}
+                _bulkToken = null;
+            }
+        } finally {
+            btn.disabled = false; btn.textContent = '전체 전송 시작';
+        }
+    }
 </script>
 </body>
 </html>
