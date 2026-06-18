@@ -19,6 +19,7 @@ import json
 import os
 import threading
 import secrets
+import subprocess
 import time as _time
 from datetime import datetime as _dt
 
@@ -556,6 +557,33 @@ def get_investor_trend_cached_api():
 def sync_admin_view():
     """동기화 관리 페이지"""
     return render_template('sync_admin.html')
+
+@app.route('/history')
+def history_view():
+    """프로젝트 히스토리 페이지"""
+    return render_template('history.html')
+
+@app.route('/api/history/git-log', methods=['GET'])
+def git_log_api():
+    """git 커밋 로그 반환"""
+    try:
+        limit = int(request.args.get('limit', 60))
+        result = subprocess.run(
+            ['git', 'log', f'-{limit}', '--pretty=format:%H|%h|%ad|%an|%s', '--date=format:%Y-%m-%d %H:%M'],
+            capture_output=True, text=True, encoding='utf-8',
+            cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        )
+        commits = []
+        for line in result.stdout.strip().splitlines():
+            parts = line.split('|', 4)
+            if len(parts) == 5:
+                commits.append({
+                    'hash': parts[0], 'short': parts[1],
+                    'date': parts[2], 'author': parts[3], 'message': parts[4]
+                })
+        return jsonify({'status': 'success', 'commits': commits})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 def run_server(use_reloader=False):
     app.run(host=Config.API_HOST, port=Config.API_PORT, debug=Config.DEBUG, use_reloader=use_reloader)
