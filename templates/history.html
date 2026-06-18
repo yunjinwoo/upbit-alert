@@ -43,6 +43,9 @@
                       border-radius: 6px; padding: 3px 10px; font-size: 0.8rem; }
         .cond-badge { background: #e0f2fe; color: #0369a1; border-radius: 4px;
                       padding: 2px 8px; font-size: 0.78rem; }
+        .filter-btn { border: 1px solid #e2e8f0; background: #f8fafc; color: #475569; font-size: 0.82rem; padding: 3px 10px; }
+        .filter-btn:hover { background: #f1f5f9; }
+        .filter-btn.active { background: #1a1a2e !important; color: #fff !important; border-color: #1a1a2e; }
     </style>
 </head>
 <body>
@@ -137,11 +140,12 @@
     <div class="card-panel">
         <h5>🗂 개발 히스토리 (Git 커밋)</h5>
         <div class="mb-3 d-flex gap-2 align-items-center flex-wrap">
-            <span class="small text-muted">색상 구분:</span>
-            <span class="tag tag-feat">feat</span> <span class="small text-muted">신기능</span>
-            <span class="tag tag-fix ms-2">fix</span> <span class="small text-muted">버그수정</span>
-            <span class="tag tag-chore ms-2">chore</span> <span class="small text-muted">설정·정리</span>
-            <span class="tag tag-debug ms-2">debug</span> <span class="small text-muted">디버그</span>
+            <span class="small text-muted me-1">필터:</span>
+            <button class="filter-btn btn btn-sm active" data-type="all"    onclick="setFilter('all')">전체</button>
+            <button class="filter-btn btn btn-sm"        data-type="feat"   onclick="setFilter('feat')"><span class="tag tag-feat">feat</span> 신기능</button>
+            <button class="filter-btn btn btn-sm"        data-type="fix"    onclick="setFilter('fix')"><span class="tag tag-fix">fix</span> 버그수정</button>
+            <button class="filter-btn btn btn-sm"        data-type="chore"  onclick="setFilter('chore')"><span class="tag tag-chore">chore</span> 설정·정리</button>
+            <button class="filter-btn btn btn-sm"        data-type="debug"  onclick="setFilter('debug')"><span class="tag tag-debug">debug</span> 디버그</button>
         </div>
         <div id="commitList" class="timeline">
             <div class="text-muted small">로딩 중...</div>
@@ -157,6 +161,16 @@
 <script>
     let _limit = 30;
     let _commits = [];
+    let _activeFilter = 'all';
+
+    function setFilter(type) {
+        _activeFilter = type;
+        document.querySelectorAll('.filter-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.type === type);
+        });
+        const filtered = type === 'all' ? _commits : _commits.filter(c => tagType(c.message) === type);
+        renderCommits(filtered);
+    }
 
     function tagType(msg) {
         if (msg.startsWith('feat')) return 'feat';
@@ -198,7 +212,7 @@
             const res = await fetch(`api/history/git-log?limit=${_limit}`);
             const data = await res.json();
             _commits = data.commits || [];
-            renderCommits(_commits);
+            setFilter(_activeFilter);
             document.getElementById('loadMoreBtn').style.display = _commits.length < _limit ? 'none' : '';
         } catch(e) {
             document.getElementById('commitList').innerHTML = `<div class="text-danger small">로딩 실패: ${e.message}</div>`;
