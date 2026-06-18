@@ -90,7 +90,8 @@
         <h2>📊 프로그램매매 투자자별 매매동향 (당일)</h2>
         <div>
             <span id="update-timer" class="badge bg-secondary">-</span>
-            <button onclick="loadAll()" class="btn btn-primary btn-sm ms-2">새로고침</button>
+            <button onclick="loadHistory()" class="btn btn-primary btn-sm ms-2">새로고침</button>
+            <button onclick="fetchLive()" class="btn btn-warning btn-sm ms-1 text-dark">실시간 수집</button>
             <button onclick="toggleRaw()" class="btn btn-outline-dark btn-sm ms-1">원본 JSON</button>
             <button onclick="openSyncModal()" class="btn btn-outline-info btn-sm ms-1">🔄 서버 전송</button>
             <a href="/" class="btn btn-outline-secondary btn-sm ms-1">대시보드로 돌아가기</a>
@@ -101,7 +102,7 @@
     <div class="row mb-3 g-2 align-items-end">
         <div class="col-auto">
             <label class="form-label mb-1 small">거래소</label>
-            <select id="exchSelect" class="form-select form-select-sm" onchange="loadAll()">
+            <select id="exchSelect" class="form-select form-select-sm" onchange="loadHistory()">
                 <option value="J">KRX</option>
                 <option value="NX">NXT</option>
                 <option value="UN">통합</option>
@@ -109,7 +110,7 @@
         </div>
         <div class="col-auto">
             <label class="form-label mb-1 small">시장</label>
-            <select id="mrktSelect" class="form-select form-select-sm" onchange="loadAll()">
+            <select id="mrktSelect" class="form-select form-select-sm" onchange="loadHistory()">
                 <option value="1">코스피</option>
                 <option value="4">코스닥</option>
             </select>
@@ -318,11 +319,20 @@
         }
     }
 
-    function loadAll() {
-        loadToday().then(() => loadHistory());
+    async function fetchLive() {
+        const btn = event.target;
+        btn.disabled = true;
+        btn.textContent = '수집 중...';
+        try {
+            await loadToday();
+            await loadHistory();
+        } finally {
+            btn.disabled = false;
+            btn.textContent = '실시간 수집';
+        }
     }
 
-    document.addEventListener('DOMContentLoaded', loadAll);
+    document.addEventListener('DOMContentLoaded', loadHistory);
 </script>
 <script>
     document.getElementById('infoPanel').addEventListener('show.bs.offcanvas', () => document.querySelector('.info-btn').style.display = 'none');

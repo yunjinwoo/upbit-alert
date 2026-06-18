@@ -118,7 +118,8 @@
             <label class="form-label mb-1 small">기준일 (최근 100거래일 조회)</label>
             <input type="date" id="selDate" class="form-control form-control-sm" style="width:145px">
         </div>
-        <button class="btn btn-primary btn-sm" onclick="loadData()">조회</button>
+        <button class="btn btn-primary btn-sm" onclick="loadFromDb()">DB 조회</button>
+        <button class="btn btn-warning btn-sm text-dark" onclick="loadData()">API 조회</button>
         <button class="btn btn-outline-secondary btn-sm" onclick="resetFilters()">초기화</button>
     </div>
 
@@ -190,7 +191,7 @@
     function resetFilters() {
         document.getElementById('selDate').value = '';
         document.getElementById('selIscd').value = '0001';
-        loadData();
+        loadFromDb();
     }
 
     function fmt(v, decimals = 2) {
@@ -280,6 +281,50 @@
         document.getElementById('summaryCards').style.display = '';
     }
 
+    async function loadFromDb() {
+        const iscd = document.getElementById('selIscd').value;
+        const url = `api/sector-index/cached?iscd=${iscd}`;
+        try {
+            const res    = await fetch(url);
+            const result = await res.json();
+            if (result.status !== 'success' || !result.data.length) {
+                document.getElementById('update-timer').textContent = 'DB 데이터 없음 — API 조회 버튼을 눌러주세요';
+                return;
+            }
+            renderSummary(result.data);
+            renderChart(result.data);
+            if (dataTable) { dataTable.destroy(); dataTable = null; }
+            document.getElementById('tableBody').innerHTML = result.data.map(d => {
+                const rate   = parseFloat(d.change_rate);
+                const cls    = rate > 0 ? 'up-rate' : rate < 0 ? 'down-rate' : '';
+                const sign   = (rate > 0 ? '+' : '') + fmt(rate) + '%';
+                const netBuy = parseFloat(d.net_buy);
+                const netCls = netBuy > 0 ? 'up-rate' : netBuy < 0 ? 'down-rate' : '';
+                return `<tr>
+                    <td><b>${d.date}</b></td>
+                    <td class="text-end">${fmt(d.close)}</td>
+                    <td>${signBadge(d.change_sign)}</td>
+                    <td class="text-end"><span class="${cls}">${sign}</span></td>
+                    <td class="text-end">${fmt(d.open)}</td>
+                    <td class="text-end text-danger">${fmt(d.high)}</td>
+                    <td class="text-end text-primary">${fmt(d.low)}</td>
+                    <td class="text-end">${fmtVol(d.volume)}</td>
+                    <td class="text-end"><span class="${netCls}">${fmt(d.net_buy)}</span></td>
+                    <td class="text-end">${fmt(d.d20_dsrt)}%</td>
+                </tr>`;
+            }).join('');
+            dataTable = $('#sectorTable').DataTable({
+                order: [[0, 'desc']], pageLength: 50,
+                language: { search: "결과 내 검색:", lengthMenu: "_MENU_ 개씩 보기", info: "총 _TOTAL_ 건 중 _START_~_END_ 표시" }
+            });
+            const sectorName = document.getElementById('selIscd').selectedOptions[0].text;
+            document.getElementById('update-timer').textContent = `${sectorName} · ${result.count}건 (DB) · ${new Date().toLocaleTimeString()}`;
+        } catch(e) {
+            console.error(e);
+            document.getElementById('update-timer').textContent = 'DB 조회 실패';
+        }
+    }
+
     async function loadData() {
         const iscd = document.getElementById('selIscd').value;
         const date = document.getElementById('selDate').value.replace(/-/g, '');
@@ -338,7 +383,7 @@
         }
     }
 
-    document.addEventListener('DOMContentLoaded', loadData);
+    document.addEventListener('DOMContentLoaded', loadFromDb);
 </script>
 <script>
     document.getElementById('infoPanel').addEventListener('show.bs.offcanvas', () => document.querySelector('.info-btn').style.display = 'none');
