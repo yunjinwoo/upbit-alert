@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>투자자별 순매수/순매도 랭킹</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f4f7f6; font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; }
+        .main-navbar { background-color: #1a1a2e; }
+        .main-navbar .navbar-brand { color: #fff; font-weight: bold; }
+        .main-navbar .nav-link { color: rgba(255,255,255,0.75) !important; }
+        .main-navbar .nav-link:hover,
+        .main-navbar .nav-link.active { color: #fff !important; }
+        .main-navbar .nav-link.active { border-bottom: 2px solid #4da6ff; }
+
+        .dashboard-container { margin-top: 24px; margin-bottom: 60px; }
+        .card-panel { background: white; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); padding: 16px 18px; height: 100%; }
+        .chart-panel { background: white; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); padding: 16px 18px; height: 100%; }
+
+        /* 탭 */
+        .type-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+        .type-tab {
+            padding: 6px 16px; border-radius: 20px; border: 1.5px solid #e2e8f0;
+            background: #f8fafc; color: #475569; font-size: 0.84rem;
+            cursor: pointer; font-weight: 600; transition: all .15s;
+        }
+        .type-tab:hover { background: #f1f5f9; }
+        .type-tab.active-buy  { background: #fef2f2; border-color: #ef4444; color: #b91c1c; }
+        .type-tab.active-sell { background: #eff6ff; border-color: #3b82f6; color: #1d4ed8; }
+
+        /* 날짜 입력 */
+        .date-inputs { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .date-inputs input[type=date] {
+            border: 1.5px solid #e2e8f0; border-radius: 8px;
+            padding: 4px 10px; font-size: 0.83rem; color: #1e293b;
+            background: #f8fafc; outline: none;
+        }
+        .date-inputs input[type=date]:focus { border-color: #4da6ff; background: #fff; }
+        .btn-search {
+            background: #1a1a2e; color: #fff; border: none; border-radius: 8px;
+            padding: 5px 16px; font-size: 0.83rem; cursor: pointer; font-weight: 600;
+        }
+        .btn-search:hover { background: #2d2d4e; }
+        .date-sep { color: #94a3b8; font-size: 0.85rem; }
+
+        /* 차트 패널 */
+        .chart-title { font-size: 0.82rem; font-weight: 700; color: #64748b; margin-bottom: 10px; }
+
+        /* 랭킹 테이블 */
+        .ranking-wrap { overflow-x: auto; }
+        table.rank-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+        .rank-table th {
+            background: #1a1a2e; color: #fff;
+            padding: 6px 8px; text-align: center;
+            white-space: nowrap; font-weight: 600;
+            position: sticky; top: 0; z-index: 1;
+        }
+        .rank-table th.date-head { background: #2d3a5c; font-size: 0.76rem; }
+        .rank-table th.date-head span { display: block; font-size: 0.66rem; color: #94a3b8; font-weight: 400; }
+        .rank-table td { padding: 4px 7px; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
+        .rank-table tr:hover td { background: #f8fafc; }
+        .date-col { border-left: 2px solid #e2e8f0; }
+        .stock-name { font-weight: 600; color: #1e293b; font-size: 0.79rem; white-space: nowrap; }
+        .stock-code { font-size: 0.68rem; color: #94a3b8; font-family: monospace; }
+        .amount-buy  { color: #b91c1c; font-weight: 700; text-align: right; white-space: nowrap; font-size: 0.79rem; }
+        .amount-sell { color: #1d4ed8; font-weight: 700; text-align: right; white-space: nowrap; font-size: 0.79rem; }
+        .qty-cell { color: #64748b; text-align: right; white-space: nowrap; font-size: 0.72rem; }
+        .rank-no { color: #94a3b8; font-size: 0.72rem; text-align: center; width: 20px; }
+        .loading-row td { text-align: center; color: #94a3b8; padding: 30px; }
+        .empty-cell { color: #cbd5e1; font-size: 0.72rem; text-align: center; }
+        .top5-sep td { border-top: 2px solid #e2e8f0; }
+        .top10-sep td { border-top: 1px dashed #e2e8f0; }
+
+        /* 날짜 컬럼 헤더 네비 */
+        .col-nav { display: flex; align-items: center; gap: 4px; font-size: 0.78rem; color: #94a3b8; }
+        .col-nav button { background: none; border: 1px solid #e2e8f0; border-radius: 4px; padding: 1px 7px; cursor: pointer; font-size: 0.78rem; color: #475569; }
+        .col-nav button:hover { background: #f1f5f9; }
+        .col-nav span { min-width: 90px; text-align: center; }
+    </style>
+</head>
+<body>
+
+<nav class="navbar main-navbar px-3">
+    <a class="navbar-brand" href="{{ url_for('index') }}">📡 알림 시스템</a>
+    <div class="d-flex gap-3 flex-wrap">
+        <a href="{{ url_for('index') }}" class="nav-link">대시보드</a>
+        <a href="{{ url_for('market_cap_view') }}" class="nav-link">시가총액 추이</a>
+        <a href="{{ url_for('stock_investor_view') }}" class="nav-link">시총×투자자</a>
+        <a href="{{ url_for('investor_trend_view') }}" class="nav-link">투자자별 매매동향</a>
+        <a href="{{ url_for('investor_ranking_view') }}" class="nav-link active">순매수 랭킹</a>
+        <a href="{{ url_for('sector_index_view') }}" class="nav-link">업종 일자별지수</a>
+        <a href="{{ url_for('raw_data_view') }}" class="nav-link">원본 데이터</a>
+        <a href="/grid" class="nav-link">리비전 관리</a>
+        <a href="{{ url_for('history_view') }}" class="nav-link">히스토리</a>
+        <a href="{{ url_for('sync_admin_view') }}" class="nav-link">동기화 관리</a>
+    </div>
+</nav>
+
+<div class="container-fluid dashboard-container px-4" style="max-width:1500px">
+
+    <!-- 헤더 -->
+    <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+        <h2 class="mb-0" style="font-size:1.2rem; font-weight:700; color:#1a1a2e">📊 투자자별 순매수/순매도 랭킹</h2>
+        <div class="date-inputs">
+            <input type="date" id="dateFrom">
+            <span class="date-sep">~</span>
+            <input type="date" id="dateTo">
+            <span class="date-sep">종목</span>
+            <select id="topNSelect" style="border:1.5px solid #e2e8f0;border-radius:8px;padding:4px 8px;font-size:0.83rem;background:#f8fafc;color:#1e293b;">
+                <option value="20">20개</option>
+                <option value="40" selected>40개</option>
+                <option value="60">60개</option>
+                <option value="100">100개</option>
+            </select>
+            <button class="btn-search" onclick="load()">조회</button>
+        </div>
+    </div>
+
+    <!-- 탭 (테이블 전용) -->
+    <div class="type-tabs mb-3">
+        <button class="type-tab active-buy"  data-inv="frgn" data-dir="buy"  onclick="switchTab(this)">🟥 외국인 순매수</button>
+        <button class="type-tab"             data-inv="frgn" data-dir="sell" onclick="switchTab(this)">🟦 외국인 순매도</button>
+        <button class="type-tab"             data-inv="orgn" data-dir="buy"  onclick="switchTab(this)">🟥 기관 순매수</button>
+        <button class="type-tab"             data-inv="orgn" data-dir="sell" onclick="switchTab(this)">🟦 기관 순매도</button>
+        <span class="ms-3 small text-muted align-self-center">← 테이블 필터</span>
+    </div>
+
+    <!-- 차트 -->
+    <div class="chart-panel mb-3">
+        <div class="chart-title" id="chartTitle">상위 종목 금액 추이 (백만원)</div>
+        <canvas id="trendChart" style="height:1000px !important; max-height:1000px"></canvas>
+    </div>
+
+    <!-- 테이블 -->
+    <div class="card-panel">
+        <div class="ranking-wrap">
+            <table class="rank-table" id="rankTable">
+                <thead id="rankHead"></thead>
+                <tbody id="rankBody">
+                    <tr class="loading-row"><td colspan="99">로딩 중...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="mt-2 text-muted" style="font-size:0.72rem">
+            * 수량: 천주 &nbsp;|&nbsp; 금액: 백만원 &nbsp;|&nbsp; 시총 상위 종목 기준
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+    let _investor  = 'frgn';
+    let _direction = 'buy';
+    const TOP_N    = 20;
+
+    let _allDates = [];
+    let _allData  = {};
+
+    let _chart = null;
+    const PALETTE = [
+        '#ef4444','#f97316','#eab308','#22c55e','#14b8a6',
+        '#3b82f6','#8b5cf6','#ec4899','#06b6d4','#a855f7'
+    ];
+
+    // 날짜 유틸
+    function fmt(d) { return d.toISOString().slice(0, 10); }
+    function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate() + n); return r; }
+    function shortDate(str) { return str.slice(5).replace('-', '.'); }
+
+    // 초기 날짜 세팅 (기본 최근 30일)
+    function initDates() {
+        const today = fmt(new Date());
+        const from  = fmt(addDays(new Date(), -29));
+        document.getElementById('dateTo').value   = today;
+        document.getElementById('dateFrom').value = from;
+    }
+
+    function switchTab(btn) {
+        document.querySelectorAll('.type-tab').forEach(b => b.classList.remove('active-buy', 'active-sell'));
+        _investor  = btn.dataset.inv;
+        _direction = btn.dataset.dir;
+        btn.classList.add(_direction === 'buy' ? 'active-buy' : 'active-sell');
+        loadTable();
+    }
+
+    function fmtNum(v) {
+        const n = parseInt(v);
+        return isNaN(n) ? '—' : Math.abs(n).toLocaleString();
+    }
+
+
+    async function load() {
+        const dateFrom = document.getElementById('dateFrom').value;
+        const dateTo   = document.getElementById('dateTo').value;
+        if (!dateFrom || !dateTo) return;
+        await Promise.all([loadChart(dateFrom, dateTo), loadTable(dateFrom, dateTo)]);
+    }
+
+    async function loadChart(dateFrom, dateTo) {
+        dateFrom = dateFrom || document.getElementById('dateFrom').value;
+        dateTo   = dateTo   || document.getElementById('dateTo').value;
+        const topN = parseInt(document.getElementById('topNSelect').value) || 60;
+        try {
+            const res  = await fetch(`api/investor-cross?date_from=${dateFrom}&date_to=${dateTo}&top_n=${topN}`);
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+            renderChart(json.data);
+        } catch(e) {
+            document.getElementById('chartTitle').textContent = `차트 오류: ${e.message}`;
+        }
+    }
+
+    async function loadTable(dateFrom, dateTo) {
+        dateFrom = dateFrom || document.getElementById('dateFrom').value;
+        dateTo   = dateTo   || document.getElementById('dateTo').value;
+        document.getElementById('rankBody').innerHTML =
+            '<tr class="loading-row"><td colspan="99">로딩 중...</td></tr>';
+        try {
+            const url = `api/investor-ranking?date_from=${dateFrom}&date_to=${dateTo}&investor=${_investor}&direction=${_direction}&top_n=${TOP_N}`;
+            const res  = await fetch(url);
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+            _allDates = json.dates;
+            _allData  = json.data;
+            renderTable(_allDates, _allData);
+        } catch(e) {
+            document.getElementById('rankBody').innerHTML =
+                `<tr class="loading-row"><td colspan="99" class="text-danger">오류: ${e.message}</td></tr>`;
+        }
+    }
+
+    function fmtAmt(v) {
+        const abs = Math.abs(v);
+        if (abs >= 1000000) return (v/1000000).toFixed(1) + '조';
+        if (abs >= 10000)   return (v/10000).toFixed(0)   + '억';
+        return v.toLocaleString();
+    }
+
+    // 대칭 로그 변환: sign(x) * log10(1 + |x| / C)
+    // C = 10000 (백만원 단위 → 1천억 기준)
+    const LOG_C = 10000;
+    function symlog(x)    { return Math.sign(x) * Math.log10(1 + Math.abs(x) / LOG_C); }
+    function symlogInv(v) { return Math.sign(v) * LOG_C * (Math.pow(10, Math.abs(v)) - 1); }
+
+    const TICKS_RAW = [-20e6,-10e6,-5e6,-2e6,-5e5,-1e5, 0, 1e5,5e5,2e6,5e6,10e6,20e6];
+    function tickLabel(v) {
+        const raw = symlogInv(v), abs = Math.abs(raw);
+        if (abs < 1)        return '0';
+        if (abs >= 1000000) return (raw/1000000).toFixed(0) + '조';
+        if (abs >= 10000)   return (raw/10000).toFixed(0)   + '억';
+        return '';
+    }
+
+    function renderChart(data) {
+        if (!data || !data.length) return;
+
+        // X = 외국인(signed), Y = -기관(inverted: 아래=순매수)
+        const maxAbs = Math.max(...data.flatMap(d => [Math.abs(d.frgn_total), Math.abs(d.orgn_total)]));
+
+        const points = data.map((d, i) => ({
+            x:    symlog(d.frgn_total),
+            y:    symlog(-d.orgn_total),   // 반전: 아래=기관순매수
+            r:    Math.max(5, Math.round(((Math.abs(d.frgn_total) + Math.abs(d.orgn_total)) / 2 / maxAbs) * 26)),
+            name: d.name, code: d.code,
+            frgnRaw: d.frgn_total, orgnRaw: d.orgn_total,
+            frgnDays: d.frgn_days, orgnDays: d.orgn_days,
+            color: PALETTE[i % PALETTE.length],
+        }));
+
+        document.getElementById('chartTitle').textContent =
+            '외국인 × 기관 분포도  (X: 외국인 합산금액 · Y: 기관 합산금액 · 로그스케일)';
+
+        if (_chart) _chart.destroy();
+        _chart = new Chart(document.getElementById('trendChart'), {
+            type: 'bubble',
+            data: {
+                datasets: [{
+                    label: '종목',
+                    data: points,
+                    backgroundColor: points.map(p => p.color + 'aa'),
+                    borderColor:     points.map(p => p.color),
+                    borderWidth: 1.5,
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: ctx => {
+                                const d = ctx.raw;
+                                const fDir = d.frgnRaw >= 0 ? '순매수' : '순매도';
+                                const oDir = d.orgnRaw >= 0 ? '순매수' : '순매도';
+                                return [
+                                    `${d.name} (${d.code})`,
+                                    `외국인 ${fDir}: ${fmtAmt(Math.abs(d.frgnRaw))}  (${d.frgnDays}일)`,
+                                    `기관   ${oDir}: ${fmtAmt(Math.abs(d.orgnRaw))}  (${d.orgnDays}일)`,
+                                ];
+                            }
+                        }
+                    },
+                },
+                scales: {
+                    x: {
+                        title: { display: true, text: '← 외국인 순매도  |  외국인 순매수 →  (로그)', font: { size: 11 } },
+                        ticks: { values: TICKS_RAW.map(symlog), callback: tickLabel },
+                        grid:  { color: ctx => Math.abs(ctx.tick.value) < 0.01 ? '#475569' : '#f1f5f9' },
+                    },
+                    y: {
+                        title: { display: true, text: '↑ 기관 순매도  |  기관 순매수 ↓  (로그)', font: { size: 11 } },
+                        ticks: { values: TICKS_RAW.map(v => symlog(-v)), callback: v => tickLabel(-v) },
+                        grid:  { color: ctx => Math.abs(ctx.tick.value) < 0.01 ? '#475569' : '#f1f5f9' },
+                    }
+                },
+                animation: { duration: 400 },
+            },
+            plugins: [{
+                afterDraw(chart) {
+                    const { ctx, scales: { x, y }, chartArea } = chart;
+                    ctx.save();
+
+                    // 십자 축선
+                    const x0 = x.getPixelForValue(0), y0 = y.getPixelForValue(0);
+                    ctx.strokeStyle = '#64748b'; ctx.lineWidth = 1.2;
+                    ctx.beginPath(); ctx.moveTo(x0, chartArea.top);   ctx.lineTo(x0, chartArea.bottom); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(chartArea.left, y0);  ctx.lineTo(chartArea.right, y0);  ctx.stroke();
+
+                    // 사분면 라벨
+                    ctx.font = '11px sans-serif'; ctx.fillStyle = '#94a3b8';
+                    ctx.textAlign = 'left';
+                    ctx.fillText('⭐ 동반 순매수',  x0 + 6,            y0 + 16);   // 우하
+                    ctx.fillText('⚠️ 동반 순매도', chartArea.left + 4, chartArea.top + 14); // 좌상
+                    ctx.textAlign = 'right';
+                    ctx.fillText('외국인↑기관↓', chartArea.right - 4, chartArea.top + 14);  // 우상
+                    ctx.textAlign = 'left';
+                    ctx.fillText('외국인↓기관↑', chartArea.left + 4, y0 - 6);              // 좌하
+
+                    // 종목명
+                    ctx.font = 'bold 10px Malgun Gothic, sans-serif'; ctx.textAlign = 'center';
+                    chart.getDatasetMeta(0).data.forEach((el, i) => {
+                        const d = points[i];
+                        ctx.fillStyle = d.color;
+                        ctx.fillText(d.name, el.x, el.y - el.options.radius - 3);
+                    });
+
+                    ctx.restore();
+                }
+            }]
+        });
+    }
+
+    function renderTable(dates, data) {
+        const tableDates = dates;
+        const amtCls = 'amount-buy';
+
+        const head = document.getElementById('rankHead');
+        let hRow = '<tr><th style="width:18px">#</th>';
+        tableDates.forEach(d => {
+            hRow += `<th class="date-head" colspan="2">${shortDate(d)}<span>${d}</span></th>`;
+        });
+        hRow += '</tr><tr><th></th>';
+        tableDates.forEach(() => {
+            hRow += '<th class="date-head" style="font-size:0.7rem;font-weight:400">종목</th>' +
+                    '<th class="date-head" style="font-size:0.7rem;font-weight:400">금액</th>';
+        });
+        hRow += '</tr>';
+        head.innerHTML = hRow;
+
+        const maxRows = Math.max(0, ...tableDates.map(d => (data[d] || []).length));
+        if (maxRows === 0) {
+            document.getElementById('rankBody').innerHTML =
+                '<tr class="loading-row"><td colspan="99">데이터 없음</td></tr>';
+            return;
+        }
+
+        let rows = '';
+        for (let i = 0; i < maxRows; i++) {
+            let sepCls = '';
+            if (i === 5)  sepCls = 'top5-sep';
+            if (i === 10) sepCls = 'top10-sep';
+            rows += `<tr class="${sepCls}"><td class="rank-no">${i + 1}</td>`;
+            tableDates.forEach((d, di) => {
+                const item = (data[d] || [])[i];
+                const bc = di > 0 ? ' date-col' : '';
+                if (!item) {
+                    rows += `<td class="empty-cell${bc}" colspan="2">—</td>`;
+                } else {
+                    rows += `<td class="${bc}">` +
+                                `<div class="stock-name">${item.name}</div>` +
+                                `<div class="stock-code">${item.code}</div>` +
+                            `</td>` +
+                            `<td class="${amtCls}">` +
+                                `${fmtNum(item.amount)}` +
+                                `<div class="qty-cell">${fmtNum(item.qty)}천</div>` +
+                            `</td>`;
+                }
+            });
+            rows += '</tr>';
+        }
+        document.getElementById('rankBody').innerHTML = rows;
+    }
+
+    initDates();
+    load();
+</script>
+</body>
+</html>

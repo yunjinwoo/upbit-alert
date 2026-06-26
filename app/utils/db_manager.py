@@ -749,6 +749,109 @@ def save_sector_index_daily(records: list, iscd: str, sector_name: str):
     return saved
 
 
+def get_investor_cross_distribution(date_from: str, date_to: str, top_n: int = 60) -> list:
+    """외국인+기관 합산금액을 종목별로 반환 (십자 분포도용).
+    반환: [{code, name, frgn_total(signed), orgn_total(signed), frgn_days, orgn_days}]
+    |frgn_total| + |orgn_total| 기준 상위 top_n개
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT code, name,
+               SUM(CAST(frgn_ntby_tr_pbmn AS INTEGER)) AS frgn_total,
+               SUM(CAST(orgn_ntby_tr_pbmn AS INTEGER)) AS orgn_total,
+               COUNT(CASE WHEN CAST(frgn_ntby_tr_pbmn AS INTEGER) != 0 THEN 1 END) AS frgn_days,
+               COUNT(CASE WHEN CAST(orgn_ntby_tr_pbmn AS INTEGER) != 0 THEN 1 END) AS orgn_days
+        FROM stock_investor_daily
+        WHERE date BETWEEN ? AND ?
+        GROUP BY code, name
+        HAVING frgn_days > 0 OR orgn_days > 0
+        ORDER BY (ABS(SUM(CAST(frgn_ntby_tr_pbmn AS INTEGER))) +
+                  ABS(SUM(CAST(orgn_ntby_tr_pbmn AS INTEGER)))) DESC
+        LIMIT ?
+    ''', (date_from, date_to, top_n))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_investor_distribution(date_from: str, date_to: str, investor: str, top_n: int = 40) -> list:
+    """날짜 범위 내 종목별 순매수/순매도 분리 집계 (분포도용).
+    investor: 'frgn' | 'orgn'
+    반환: [{code, name,
+            buy_amount(양수합산), buy_days,
+            sell_amount(음수합산 절대값), sell_days}, ...]
+          |buy_amount| + |sell_amount| 기준 상위 top_n개
+    """
+    col_amount = 'frgn_ntby_tr_pbmn' if investor == 'frgn' else 'orgn_ntby_tr_pbmn'
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(f'''
+        SELECT code, name,
+               COALESCE(SUM(CASE WHEN CAST({col_amount} AS INTEGER) > 0
+                            THEN CAST({col_amount} AS INTEGER) END), 0)   AS buy_amount,
+               COUNT(CASE WHEN CAST({col_amount} AS INTEGER) > 0 THEN 1 END) AS buy_days,
+               COALESCE(ABS(SUM(CASE WHEN CAST({col_amount} AS INTEGER) < 0
+                                THEN CAST({col_amount} AS INTEGER) END)), 0) AS sell_amount,
+               COUNT(CASE WHEN CAST({col_amount} AS INTEGER) < 0 THEN 1 END) AS sell_days
+        FROM stock_investor_daily
+        WHERE date BETWEEN ? AND ?
+          AND CAST({col_amount} AS INTEGER) != 0
+        GROUP BY code, name
+        HAVING buy_days > 0 OR sell_days > 0
+        ORDER BY (COALESCE(SUM(CASE WHEN CAST({col_amount} AS INTEGER) > 0
+                               THEN CAST({col_amount} AS INTEGER) END), 0) +
+                  COALESCE(ABS(SUM(CASE WHEN CAST({col_amount} AS INTEGER) < 0
+                                   THEN CAST({col_amount} AS INTEGER) END)), 0)) DESC
+        LIMIT ?
+    ''', (date_from, date_to, top_n))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_investor_ranking(date_from: str, date_to: str, investor: str, direction: str, top_n: int = 20) -> dict:
+    """날짜 범위별 투자자 순매수/순매도 랭킹.
+    investor: 'frgn' | 'orgn'
+    direction: 'buy' (순매수, 금액 > 0) | 'sell' (순매도, 금액 < 0)
+    반환: {date: [{code, name, qty, amount}, ...], dates: [...]}
+    """
+    col_qty    = 'frgn_ntby_qty'    if investor == 'frgn' else 'orgn_ntby_qty'
+    col_amount = 'frgn_ntby_tr_pbmn' if investor == 'frgn' else 'orgn_ntby_tr_pbmn'
+    sign = '>' if direction == 'buy' else '<'
+    order = 'DESC' if direction == 'buy' else 'ASC'
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    cursor.execute(f'''
+        SELECT DISTINCT date FROM stock_investor_daily
+        WHERE date BETWEEN ? AND ?
+        ORDER BY date ASC
+    ''', (date_from, date_to))
+    dates = [r['date'] for r in cursor.fetchall()]
+
+    result = {}
+    for d in dates:
+        cursor.execute(f'''
+            SELECT code, name,
+                   CAST({col_qty} AS INTEGER)    AS qty,
+                   CAST({col_amount} AS INTEGER)  AS amount
+            FROM stock_investor_daily
+            WHERE date = ? AND CAST({col_amount} AS INTEGER) {sign} 0
+            ORDER BY CAST({col_amount} AS INTEGER) {order}
+            LIMIT ?
+        ''', (d, top_n))
+        result[d] = [dict(r) for r in cursor.fetchall()]
+
+    conn.close()
+    return {'dates': dates, 'data': result}
+
+
 def get_stock_investor_raw(limit_dates: int = 30) -> list:
     """stock_investor_daily 원시 데이터 조회 (sync export용)"""
     conn = sqlite3.connect(DB_PATH)

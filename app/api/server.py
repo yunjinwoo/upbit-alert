@@ -11,7 +11,10 @@ from app.utils.db_manager import (
     sync_upsert_market_cap, sync_upsert_investor_daily,
     sync_upsert_investor_trend, sync_upsert_sector_index,
     get_sector_index_cached, get_investor_trend_cached,
-    get_stock_investor_raw
+    get_stock_investor_raw,
+    get_investor_ranking,
+    get_investor_distribution,
+    get_investor_cross_distribution
 )
 from app.core.stock_monitor import fetch_market_cap_ranking, fetch_investor_trend, fetch_sector_index_daily, fetch_stock_investor_daily
 from app.config import Config
@@ -562,6 +565,52 @@ def sync_admin_view():
 def history_view():
     """프로젝트 히스토리 페이지"""
     return render_template('history.html')
+
+@app.route('/investor-ranking')
+def investor_ranking_view():
+    return render_template('investor_ranking.html')
+
+@app.route('/api/investor-ranking')
+def investor_ranking_api():
+    try:
+        date_from  = request.args.get('date_from', '')
+        date_to    = request.args.get('date_to', '')
+        investor   = request.args.get('investor', 'orgn')   # frgn | orgn
+        direction  = request.args.get('direction', 'buy')   # buy | sell
+        top_n      = int(request.args.get('top_n', 20))
+        if not date_from or not date_to:
+            return jsonify({'status': 'error', 'message': 'date_from, date_to 필요'}), 400
+        data = get_investor_ranking(date_from, date_to, investor, direction, top_n)
+        return jsonify({'status': 'success', **data})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/investor-cross')
+def investor_cross_api():
+    try:
+        date_from = request.args.get('date_from', '')
+        date_to   = request.args.get('date_to', '')
+        top_n     = int(request.args.get('top_n', 60))
+        if not date_from or not date_to:
+            return jsonify({'status': 'error', 'message': 'date_from, date_to 필요'}), 400
+        data = get_investor_cross_distribution(date_from, date_to, top_n)
+        return jsonify({'status': 'success', 'data': data})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/investor-distribution')
+def investor_distribution_api():
+    try:
+        date_from = request.args.get('date_from', '')
+        date_to   = request.args.get('date_to', '')
+        investor  = request.args.get('investor', 'frgn')
+        top_n     = int(request.args.get('top_n', 40))
+        if not date_from or not date_to:
+            return jsonify({'status': 'error', 'message': 'date_from, date_to 필요'}), 400
+        data = get_investor_distribution(date_from, date_to, investor, top_n)
+        return jsonify({'status': 'success', 'data': data})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/api/history/git-log', methods=['GET'])
 def git_log_api():
