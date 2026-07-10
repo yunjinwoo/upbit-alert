@@ -86,6 +86,7 @@ def init_db():
             change_rate TEXT,
             market_weight TEXT,
             fid_input_iscd TEXT,
+            volume TEXT,
             timestamp TEXT
         )
     ''')
@@ -159,6 +160,7 @@ def init_db():
     migrations = [
         'ALTER TABLE stock_market_cap_daily ADD COLUMN market_weight TEXT DEFAULT "0"',
         'ALTER TABLE stock_market_cap_daily ADD COLUMN fid_input_iscd TEXT DEFAULT "0000"',
+        'ALTER TABLE stock_market_cap_daily ADD COLUMN volume TEXT DEFAULT "0"',
         'ALTER TABLE stock_raw_data ADD COLUMN api_type TEXT DEFAULT "UNKNOWN"',
         'CREATE UNIQUE INDEX IF NOT EXISTS idx_mktcap_unique ON stock_market_cap_daily(date, code, fid_input_iscd)',
         'CREATE UNIQUE INDEX IF NOT EXISTS idx_invtrend_unique ON investor_trend_daily(date, exch_div, mrkt_div, invr_cls_code)',
@@ -314,12 +316,13 @@ def save_daily_market_cap(data_list: List[MarketCapRankingItem], fid_input_iscd:
             item.prdy_ctrt,
             item.mrkt_whol_avls_rlim,
             fid_input_iscd,
+            item.acml_vol,
             timestamp
         ))
 
     cursor.executemany('''
-        INSERT INTO stock_market_cap_daily (date, code, name, market_cap_amount, rank, price, change_rate, market_weight, fid_input_iscd, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO stock_market_cap_daily (date, code, name, market_cap_amount, rank, price, change_rate, market_weight, fid_input_iscd, volume, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', insert_data)
 
     conn.commit()
@@ -554,6 +557,97 @@ def get_latest_market_cap_date(fid_input_iscd: str = "combined") -> str:
     return row[0] if row and row[0] else ""
 
 
+def get_volume_ratio(code: str, avg_days: int = 20) -> dict:
+    """종목의 최근 N일 평균 거래량 대비 당일 거래량 배수 계산.
+    반환: {code, date, today_volume, avg_volume, ratio, days_used}
+    days_used < avg_days 이면 아직 데이터가 avg_days만큼 쌓이지 않았다는 뜻(참고용으로만 사용).
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT date, MAX(CAST(volume AS INTEGER)) AS volume
+        FROM stock_market_cap_daily
+        WHERE code = ? AND volume IS NOT NULL AND volume != '' AND volume != '0'
+        GROUP BY date
+        ORDER BY date DESC
+        LIMIT ?
+    ''', (code, avg_days + 1))
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        return {'code': code, 'date': None, 'today_volume': 0, 'avg_volume': 0, 'ratio': 0.0, 'days_used': 0}
+
+    today_row = rows[0]
+    past_rows = rows[1:]
+
+    today_volume = today_row['volume']
+    days_used = len(past_rows)
+    avg_volume = (sum(r['volume'] for r in past_rows) / days_used) if days_used > 0 else 0
+    ratio = (today_volume / avg_volume) if avg_volume > 0 else 0.0
+
+    return {
+        'code': code,
+        'date': today_row['date'],
+        'today_volume': today_volume,
+        'avg_volume': round(avg_volume, 2),
+        'ratio': round(ratio, 3),
+        'days_used': days_used,
+    }
+
+
+def get_volume_ratio_batch(date: str = None, avg_days: int = 20, fid_input_iscd: str = "combined") -> list:
+    """특정 날짜(기본: 최신일) 기준, 해당 날짜에 데이터가 있는 전 종목의 거래량 배수를 일괄 계산.
+    반환: [{code, name, date, today_volume, avg_volume, ratio, days_used}, ...] ratio 내림차순 정렬
+    """
+    if not date:
+        date = get_latest_market_cap_date(fid_input_iscd)
+    if not date:
+        return []
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT DISTINCT code, name FROM stock_market_cap_daily WHERE date = ?
+    ''', (date,))
+    stocks = [(r['code'], r['name']) for r in cursor.fetchall()]
+    conn.close()
+
+    results = []
+    for code, name in stocks:
+        ratio_info = get_volume_ratio(code, avg_days=avg_days)
+        if ratio_info['date'] != date:
+            continue
+        ratio_info['name'] = name
+        results.append(ratio_info)
+
+    results.sort(key=lambda x: x['ratio'], reverse=True)
+    return results
+
+
+def get_volume_collection_status() -> dict:
+    """실제 거래량(volume != 0)이 저장된 날짜가 며칠치 쌓였는지 확인.
+    20일 평균 계산이 얼마나 신뢰할 만한지 가늠하는 용도.
+    반환: {days_collected, latest_date, dates}
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT DISTINCT date FROM stock_market_cap_daily
+        WHERE volume IS NOT NULL AND volume != '' AND volume != '0'
+        ORDER BY date DESC
+    ''')
+    dates = [r[0] for r in cursor.fetchall()]
+    conn.close()
+    return {
+        'days_collected': len(dates),
+        'latest_date': dates[0] if dates else None,
+        'dates': dates,
+    }
+
+
 # Initialize DB on load
 init_db()
 
@@ -570,15 +664,15 @@ def sync_upsert_market_cap(rows: list) -> int:
     for r in rows:
         cursor.execute('''
             INSERT INTO stock_market_cap_daily
-                (date, code, name, market_cap_amount, rank, price, change_rate, market_weight, fid_input_iscd, timestamp)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
+                (date, code, name, market_cap_amount, rank, price, change_rate, market_weight, fid_input_iscd, volume, timestamp)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(date, code, fid_input_iscd) DO UPDATE SET
                 name=excluded.name, market_cap_amount=excluded.market_cap_amount,
                 rank=excluded.rank, price=excluded.price, change_rate=excluded.change_rate,
-                market_weight=excluded.market_weight, timestamp=excluded.timestamp
+                market_weight=excluded.market_weight, volume=excluded.volume, timestamp=excluded.timestamp
         ''', (r.get('date'), r.get('code'), r.get('name'), r.get('market_cap_amount'),
               r.get('rank'), r.get('price'), r.get('change_rate'),
-              r.get('market_weight', '0'), r.get('fid_input_iscd', '0001'),
+              r.get('market_weight', '0'), r.get('fid_input_iscd', '0001'), r.get('volume', '0'),
               r.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))))
         saved += 1
     conn.commit()

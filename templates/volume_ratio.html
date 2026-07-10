@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>거래량 배수</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f4f7f6; font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; }
+        .main-navbar { background-color: #1a1a2e; }
+        .main-navbar .navbar-brand { color: #fff; font-weight: bold; }
+        .main-navbar .nav-link { color: rgba(255,255,255,0.75) !important; }
+        .main-navbar .nav-link:hover,
+        .main-navbar .nav-link.active { color: #fff !important; }
+        .main-navbar .nav-link.active { border-bottom: 2px solid #4da6ff; }
+
+        .dashboard-container { margin-top: 24px; margin-bottom: 60px; }
+        .card-panel { background: white; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); padding: 16px 18px; }
+
+        .filter-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .filter-bar select, .filter-bar input[type=date] {
+            border: 1.5px solid #e2e8f0; border-radius: 8px;
+            padding: 4px 10px; font-size: 0.83rem; color: #1e293b;
+            background: #f8fafc; outline: none;
+        }
+        .btn-search {
+            background: #1a1a2e; color: #fff; border: none; border-radius: 8px;
+            padding: 5px 16px; font-size: 0.83rem; cursor: pointer; font-weight: 600;
+        }
+        .btn-search:hover { background: #2d2d4e; }
+
+        table.rank-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+        .rank-table th {
+            background: #1a1a2e; color: #fff;
+            padding: 8px; text-align: center; white-space: nowrap; font-weight: 600;
+            position: sticky; top: 0; z-index: 1;
+        }
+        .rank-table td { padding: 6px 8px; border-bottom: 1px solid #f1f5f9; }
+        .rank-table tr:hover td { background: #f8fafc; }
+        .stock-name { font-weight: 600; color: #1e293b; }
+        .stock-code { font-size: 0.68rem; color: #94a3b8; font-family: monospace; }
+        .ratio-cell { text-align: right; font-weight: 700; font-family: monospace; }
+        .ratio-hot  { color: #b91c1c; }
+        .ratio-warm { color: #c2680d; }
+        .num-cell { text-align: right; color: #64748b; font-family: monospace; }
+        .rank-no { color: #94a3b8; text-align: center; width: 24px; }
+        .days-badge { font-size: 0.68rem; color: #94a3b8; }
+        .loading-row td { text-align: center; color: #94a3b8; padding: 30px; }
+    </style>
+</head>
+<body>
+
+<nav class="navbar main-navbar px-3">
+    <a class="navbar-brand" href="{{ url_for('index') }}">📡 알림 시스템</a>
+    <div class="d-flex gap-3 flex-wrap">
+        <a href="{{ url_for('index') }}" class="nav-link">대시보드</a>
+        <a href="{{ url_for('market_cap_view') }}" class="nav-link">시가총액 추이</a>
+        <a href="{{ url_for('stock_investor_view') }}" class="nav-link">시총×투자자</a>
+        <a href="{{ url_for('investor_trend_view') }}" class="nav-link">투자자별 매매동향</a>
+        <a href="{{ url_for('investor_ranking_view') }}" class="nav-link">순매수 랭킹</a>
+        <a href="{{ url_for('volume_ratio_view') }}" class="nav-link active">거래량 배수</a>
+        <a href="{{ url_for('sector_index_view') }}" class="nav-link">업종 일자별지수</a>
+        <a href="{{ url_for('raw_data_view') }}" class="nav-link">원본 데이터</a>
+        <a href="/grid" class="nav-link">리비전 관리</a>
+        <a href="{{ url_for('history_view') }}" class="nav-link">히스토리</a>
+        <a href="{{ url_for('sync_admin_view') }}" class="nav-link">동기화 관리</a>
+    </div>
+</nav>
+
+<div class="container-fluid dashboard-container px-4" style="max-width:1100px">
+
+    <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+        <h2 class="mb-0" style="font-size:1.2rem; font-weight:700; color:#1a1a2e">📈 종목별 거래량 배수</h2>
+        <div class="filter-bar">
+            <input type="date" id="dateInput">
+            <select id="marketSelect">
+                <option value="combined" selected>코스피+코스닥</option>
+                <option value="0001">코스피</option>
+                <option value="1001">코스닥</option>
+            </select>
+            <select id="avgDaysSelect">
+                <option value="5">5일 평균</option>
+                <option value="10">10일 평균</option>
+                <option value="20" selected>20일 평균</option>
+            </select>
+            <button class="btn-search" onclick="load()">조회</button>
+        </div>
+    </div>
+
+    <div class="mb-3" id="statusBanner" style="font-size:0.8rem; color:#64748b;">누적 현황 확인 중...</div>
+
+    <div class="card-panel">
+        <table class="rank-table">
+            <thead>
+                <tr>
+                    <th style="width:28px">#</th>
+                    <th style="text-align:left">종목</th>
+                    <th>당일 거래량</th>
+                    <th>평균 거래량</th>
+                    <th>배수</th>
+                </tr>
+            </thead>
+            <tbody id="rankBody">
+                <tr class="loading-row"><td colspan="5">로딩 중...</td></tr>
+            </tbody>
+        </table>
+        <div class="mt-2 text-muted" style="font-size:0.72rem">
+            * 배수 = 당일 거래량 ÷ 최근 N일 평균 거래량. 데이터가 N일치보다 적게 쌓인 종목은 표시된 일수만큼만 반영됨.
+            &nbsp;|&nbsp; 시총 데이터가 있는 날짜 기준으로만 계산됨.
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    function fmtNum(v) {
+        const n = Number(v);
+        return isNaN(n) ? '—' : Math.round(n).toLocaleString();
+    }
+
+    function ratioClass(ratio) {
+        if (ratio >= 3) return 'ratio-hot';
+        if (ratio >= 2) return 'ratio-warm';
+        return '';
+    }
+
+    async function load() {
+        const date     = document.getElementById('dateInput').value;
+        const market   = document.getElementById('marketSelect').value;
+        const avgDays  = document.getElementById('avgDaysSelect').value;
+        const body = document.getElementById('rankBody');
+        body.innerHTML = '<tr class="loading-row"><td colspan="5">로딩 중...</td></tr>';
+        try {
+            const params = new URLSearchParams({ market, avg_days: avgDays, top_n: 50 });
+            if (date) params.set('date', date);
+            const res  = await fetch(`api/volume-ratio?${params.toString()}`);
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+            if (json.date && !date) document.getElementById('dateInput').value = json.date;
+            renderTable(json.data);
+        } catch (e) {
+            body.innerHTML = `<tr class="loading-row"><td colspan="5" class="text-danger">오류: ${e.message}</td></tr>`;
+        }
+        loadStatus();
+    }
+
+    async function loadStatus() {
+        const banner = document.getElementById('statusBanner');
+        const avgDays = parseInt(document.getElementById('avgDaysSelect').value) || 20;
+        try {
+            const res  = await fetch('api/volume-ratio/status');
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+            const n = json.days_collected;
+            if (n === 0) {
+                banner.innerHTML = `⏳ 실거래량 데이터가 아직 쌓이지 않았습니다. 오늘 장마감 후 첫 수집부터 1일치가 쌓이기 시작합니다.`;
+            } else if (n < avgDays) {
+                banner.innerHTML = `⏳ 실거래량 데이터 <b>${n}/${avgDays}일</b> 누적됨 (최신: ${json.latest_date}). ${avgDays}일이 채워지기 전까지는 배수가 적은 일수 기준으로 계산됩니다.`;
+            } else {
+                banner.innerHTML = `✅ 실거래량 데이터 <b>${n}일</b> 누적됨 (최신: ${json.latest_date}). ${avgDays}일 평균 계산에 충분합니다.`;
+            }
+        } catch (e) {
+            banner.textContent = `누적 현황 확인 실패: ${e.message}`;
+        }
+    }
+
+    function renderTable(rows) {
+        const body = document.getElementById('rankBody');
+        if (!rows || !rows.length) {
+            body.innerHTML = '<tr class="loading-row"><td colspan="5">데이터 없음 — 아직 거래량 수집이 20일치 쌓이지 않았을 수 있습니다.</td></tr>';
+            return;
+        }
+        body.innerHTML = rows.map((r, i) => `
+            <tr>
+                <td class="rank-no">${i + 1}</td>
+                <td>
+                    <div class="stock-name">${r.name}</div>
+                    <div class="stock-code">${r.code}</div>
+                </td>
+                <td class="num-cell">${fmtNum(r.today_volume)}</td>
+                <td class="num-cell">${fmtNum(r.avg_volume)} <span class="days-badge">(${r.days_used}일)</span></td>
+                <td class="ratio-cell ${ratioClass(r.ratio)}">${r.ratio.toFixed(2)}x</td>
+            </tr>
+        `).join('');
+    }
+
+    load();
+</script>
+</body>
+</html>
