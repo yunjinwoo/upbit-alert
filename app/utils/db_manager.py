@@ -728,6 +728,92 @@ def get_momentum_score_batch(date: str = None, avg_days: int = 20, fid_input_isc
     return results
 
 
+def get_rank_stability_score(code: str, trend_days: int = 5, fid_input_iscd: str = "combined") -> dict:
+    """시가총액 랭킹 안정성 점수(0~15점) 산출.
+    - 최신 랭킹이 상위 100위 이내면 +10 (소형주 리스크 대비 신뢰도)
+    - trend_days 영업일 전 대비 랭킹이 상승(숫자가 작아짐)했으면 +5
+    반환: {code, date, rank, rank_before, rank_change, score}
+    """
+    if fid_input_iscd == "combined":
+        iscd_list = ("0001", "1001")
+    else:
+        iscd_list = (fid_input_iscd,)
+    placeholders = ",".join("?" * len(iscd_list))
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(f'''
+        SELECT date, rank FROM stock_market_cap_daily
+        WHERE code = ? AND fid_input_iscd IN ({placeholders})
+        ORDER BY date DESC
+        LIMIT ?
+    ''', (code, *iscd_list, trend_days + 1))
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        return {'code': code, 'date': None, 'rank': None, 'rank_before': None, 'rank_change': None, 'score': 0}
+
+    rank = rows[0]['rank']
+    score = 10 if rank <= 100 else 0
+
+    rank_before = None
+    rank_change = None
+    if len(rows) > 1:
+        before_row = rows[min(trend_days, len(rows) - 1)]
+        rank_before = before_row['rank']
+        rank_change = rank_before - rank  # 양수 = 랭킹 상승(숫자 감소)
+        if rank_change > 0:
+            score += 5
+
+    return {
+        'code': code,
+        'date': rows[0]['date'],
+        'rank': rank,
+        'rank_before': rank_before,
+        'rank_change': rank_change,
+        'score': score,
+    }
+
+
+def get_rank_stability_score_batch(date: str = None, trend_days: int = 5, fid_input_iscd: str = "combined") -> list:
+    """특정 날짜(기본: 최신일) 기준, 전 종목의 랭킹 안정성 점수를 일괄 계산.
+    반환: [{code, name, date, rank, rank_before, rank_change, score}, ...] 점수 내림차순, 동점이면 랭킹 오름차순
+    """
+    if not date:
+        date = get_latest_market_cap_date(fid_input_iscd)
+    if not date:
+        return []
+
+    if fid_input_iscd == "combined":
+        iscd_list = ("0001", "1001")
+    else:
+        iscd_list = (fid_input_iscd,)
+    placeholders = ",".join("?" * len(iscd_list))
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(f'''
+        SELECT DISTINCT code, name FROM stock_market_cap_daily
+        WHERE date = ? AND fid_input_iscd IN ({placeholders})
+    ''', (date, *iscd_list))
+    stocks = [(r['code'], r['name']) for r in cursor.fetchall()]
+    conn.close()
+
+    results = []
+    for code, name in stocks:
+        info = get_rank_stability_score(code, trend_days=trend_days, fid_input_iscd=fid_input_iscd)
+        if info['date'] != date:
+            continue
+        info['name'] = name
+        results.append(info)
+
+    results.sort(key=lambda x: (-x['score'], x['rank']))
+    return results
+
+
 # Initialize DB on load
 init_db()
 

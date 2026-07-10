@@ -15,7 +15,7 @@
 | 1 | 종목별 20일 평균 거래량 대비 당일 거래량 배수 계산 함수 | ✅ 완료 (2026-07-09) | `volume` 컬럼 신규 추가 필요했음. 상세: [step1-volume-ratio.md](step1-volume-ratio.md) |
 | 2 | 모멘텀 점수(거래량+등락률) 산출 함수 | ✅ 완료 (2026-07-10) | 상세: [step2-momentum-score.md](step2-momentum-score.md) |
 | 3 | 수급 점수(외국인/기관 3일 누적) 산출 함수 | 대기 | 기존 `get_investor_ranking` 등 재사용, 30점 만점 |
-| 4 | 시총/랭킹 안정성 점수 산출 함수 | 대기 | `stock_market_cap_daily` 랭킹 변화 diff 계산 추가, 15점 만점 |
+| 4 | 시총/랭킹 안정성 점수 산출 함수 | ✅ 완료 (2026-07-10, 순서 착오로 3번보다 먼저 진행함) | 상세: [step4-rank-stability-score.md](step4-rank-stability-score.md) |
 | 5 | 시장/업종 환경 점수 산출 함수 | 대기 | `sector_index_daily` 활용, 15점 만점 |
 | 6 | 리스크 패널티 함수 | 대기 | 최근 5일 급등/윗꼬리/동반매도 감점, -20점 |
 | 7 | 종합 Signal Score 통합 + A/B/C 등급 분기 | 대기 | 1~6 결과 합산, 등급 테이블 저장 |
@@ -33,3 +33,4 @@
 - 2026-07-09: 1번 작업(거래량 배수 계산 함수) 완료. 상세 내용은 [step1-volume-ratio.md](step1-volume-ratio.md) 참고.
 - 2026-07-10: `feature/signal-score` 브랜치 생성, 1번 작업 커밋(`a2d1e98`).
 - 2026-07-10: 2번 작업(모멘텀 점수 산출 함수) 완료. 상세 내용은 [step2-momentum-score.md](step2-momentum-score.md) 참고.
+- 2026-07-10: 순서 착오로 3번(수급 점수) 대신 4번(시총/랭킹 안정성 점수 산출 함수)을 먼저 완료함. 상세 내용은 [step4-rank-stability-score.md](step4-rank-stability-score.md) 참고. 실제 데이터(코스닥 30종목, 07-09 기준)로 검증 완료 — 거래량 데이터와 달리 랭킹 이력은 이미 1개월치 쌓여있어 바로 확인 가능했음.
