@@ -1461,6 +1461,18 @@ def save_sector_index_daily(records: list, iscd: str, sector_name: str):
     return saved
 
 
+def get_recent_investor_dates(limit: int = 10) -> list:
+    """stock_investor_daily에 존재하는 최근 N영업일 날짜 목록(내림차순).
+    주말/공휴일은 애초에 데이터가 없으므로 달력일이 아닌 실제 거래일 기준으로 안전하게 계산됨.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('SELECT DISTINCT date FROM stock_investor_daily ORDER BY date DESC LIMIT ?', (limit,))
+    dates = [r[0] for r in cursor.fetchall()]
+    conn.close()
+    return dates
+
+
 def get_investor_cross_distribution(date_from: str, date_to: str, top_n: int = 60) -> list:
     """외국인+기관 합산금액을 종목별로 반환 (십자 분포도용).
     반환: [{code, name, frgn_total(signed), orgn_total(signed), frgn_days, orgn_days}]

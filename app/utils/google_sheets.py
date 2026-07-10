@@ -5,7 +5,7 @@ import pyupbit
 import os
 from app.config import Config
 from app.utils.logger import get_logger
-from app.utils.db_manager import save_alert_to_db
+from app.utils.db_manager import save_alert_to_db, get_recent_investor_dates, get_investor_cross_distribution
 
 logger = get_logger()
 
@@ -207,3 +207,108 @@ def save_signal_score_to_sheet(scores: list, worksheet_title: str = "SignalScore
         logger.info(f"[Signal Score 시트] {len(scores)}건 저장 완료 (탭: {worksheet_title})")
     except Exception as e:
         logger.error(f"[Signal Score 시트] 저장 실패: {e}")
+
+
+def save_signal_score_readme(worksheet_title: str = "README"):
+    """SignalScore 탭의 컬럼 정의와 계산 방식을 설명하는 안내 탭 작성.
+    NotebookLM 같은 외부 도구가 같은 스프레드시트 안에서 데이터의 의미를 바로 참고할 수 있도록
+    같은 파일(Config.NOTEBOOK_SHEET_NAME)에 문서화해둔다. 내용이 자주 바뀌지 않으므로 앱 시작 시
+    1회만 덮어쓴다.
+    """
+    worksheet = get_or_create_worksheet(worksheet_title, spreadsheet_title=Config.NOTEBOOK_SHEET_NAME, rows=60, cols=2)
+    if not worksheet:
+        logger.warning("[Signal Score README] 워크시트를 열 수 없어 작성을 건너뜁니다.")
+        return
+
+    lines = [
+        "Signal Score 데이터 설명",
+        "",
+        "이 파일의 SignalScore 탭은 한국 주식 종목의 매일 계산되는 Signal Score 스냅샷입니다.",
+        "장 마감 후(약 15:40, 평일) 자동 갱신되며, 코스피/코스닥 전체 상장 종목이 아니라 시가총액 상위 종목이 대상입니다.",
+        "",
+        "[컬럼 설명]",
+        "날짜: 데이터 기준일 (YYYY-MM-DD)",
+        "종목코드: 클릭하면 네이버 증권 페이지로 이동",
+        "종목명: 종목명",
+        "등급: A(80점 이상) / B(65~79점) / C(50~64점) / 제외(50점 미만)",
+        "총점: 아래 5개 구성 점수의 합",
+        "모멘텀(0~30점): 최근 20영업일 평균 거래량 대비 당일 거래량 배수 + 당일 등락률 조합. 거래량이 급증하며 가격도 오를수록 고득점",
+        "수급점수(-15~30점): 외국인·기관 3영업일 누적 순매수 조합. 동반 순매수=30점, 한쪽만 순매수=15점, 동반 순매도=-15점",
+        "랭킹안정성(0~15점): 시가총액 상위 100위 이내(+10점) + 최근 5영업일간 랭킹 상승(+5점)",
+        "시장환경(0~15점): 소속 시장(코스피/코스닥) 지수의 당일 등락(+10점) + 5영업일 상승 추세(+5점)",
+        "리스크패널티(-20~0점): 최근 5일 과열(+30%이상 -15점) / 거래량급증+당일하락(-10점) / 외국인·기관 동반순매도(-15점) 합산, 하한 -20점",
+        "외국인3일순매수(백만원): 외국인 투자자의 최근 3영업일 누적 순매수 금액",
+        "기관3일순매수(백만원): 기관 투자자의 최근 3영업일 누적 순매수 금액",
+        "",
+        "[알려진 한계]",
+        "- 모멘텀 점수 계산에 필요한 20영업일치 거래량 데이터가 아직 충분히 쌓이지 않아 당분간 0점으로 나올 수 있음(데이터 누적 중)",
+        "- 외국인/기관 순매수 데이터는 시가총액 상위 종목만 수집됨(전체 상장 종목이 아님)",
+        "- SignalScore 탭은 최대 60건(코스피 30 + 코스닥 30)까지만 표시됨 — KIS 시가총액 순위 API가 1회 호출당 시장별로 최대 30종목까지만 반환하기 때문. 더 많은 종목을 보려면 API 페이지네이션 파라미터를 추가로 처리해야 함(현재 미구현)",
+        "- 이 점수는 투자 조언이 아니라 알림 우선순위를 정하기 위한 규칙 기반 참고 지표",
+        "",
+        "[InvestorRanking 탭]",
+        "SignalScore와 별도로, 최근 10영업일 기준 외국인+기관 순매수/순매도 상위 40종목을 보여주는 탭입니다.",
+        "SignalScore의 수급점수는 3영업일 누적만 보므로, 이 탭은 그보다 긴 흐름(꾸준한 매집/이탈)을 보는 용도입니다.",
+        "기간(최근 10영업일)과 상위 40종목 모두 매번 갱신 시점 기준으로 다시 계산되는 롤링 방식이라, 어제와 오늘 종목 목록이 달라질 수 있습니다.",
+        "구분 컬럼: 동반 순매수(외국인·기관 모두 순매수) / 동반 순매도(모두 순매도) / 혼조(한쪽만 순매수)",
+    ]
+    rows = [[line] for line in lines]
+
+    try:
+        worksheet.clear()
+        worksheet.update(rows)
+        logger.info(f"[Signal Score README] 안내 문서 저장 완료 (탭: {worksheet_title})")
+    except Exception as e:
+        logger.error(f"[Signal Score README] 저장 실패: {e}")
+
+
+def save_investor_ranking_to_sheet(days: int = 10, top_n: int = 40, worksheet_title: str = "InvestorRanking"):
+    """최근 N영업일 외국인+기관 순매수/순매도 상위 종목을 NotebookLM 연동 스프레드시트에 저장.
+    기존 순매수 랭킹 페이지와 동일한 get_investor_cross_distribution()을 재사용 — 날짜 범위는
+    stock_investor_daily에 실제로 존재하는 최근 영업일 기준으로 매번 새로 계산되는 롤링 윈도우.
+    """
+    dates = get_recent_investor_dates(limit=days)
+    if not dates:
+        logger.warning("[투자자순매수 시트] 투자자매매동향 데이터가 없어 저장을 건너뜁니다.")
+        return
+
+    date_to = dates[0]
+    date_from = dates[-1]
+    rows_data = get_investor_cross_distribution(date_from, date_to, top_n=top_n)
+
+    worksheet = get_or_create_worksheet(worksheet_title, spreadsheet_title=Config.NOTEBOOK_SHEET_NAME)
+    if not worksheet:
+        logger.warning("[투자자순매수 시트] 워크시트를 열 수 없어 저장을 건너뜁니다.")
+        return
+
+    period_str = f"{date_from} ~ {date_to}"
+    header = [
+        "기간", "종목코드", "종목명",
+        "외국인순매수합계(백만원)", "기관순매수합계(백만원)",
+        "구분", "외국인거래일수", "기관거래일수",
+    ]
+    rows = [header]
+    for r in rows_data:
+        frgn = r.get("frgn_total", 0)
+        orgn = r.get("orgn_total", 0)
+        if frgn > 0 and orgn > 0:
+            direction = "동반 순매수"
+        elif frgn < 0 and orgn < 0:
+            direction = "동반 순매도"
+        else:
+            direction = "혼조"
+
+        code = r.get("code", "")
+        code_link = f'=HYPERLINK("https://finance.naver.com/item/main.nhn?code={code}", "{code}")' if code else ""
+        rows.append([
+            period_str, code_link, r.get("name", ""),
+            frgn, orgn, direction,
+            r.get("frgn_days", 0), r.get("orgn_days", 0),
+        ])
+
+    try:
+        worksheet.clear()
+        worksheet.update(rows, value_input_option="USER_ENTERED")
+        logger.info(f"[투자자순매수 시트] {len(rows_data)}건 저장 완료 (탭: {worksheet_title}, 기간: {period_str})")
+    except Exception as e:
+        logger.error(f"[투자자순매수 시트] 저장 실패: {e}")

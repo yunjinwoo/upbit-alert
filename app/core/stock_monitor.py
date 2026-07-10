@@ -7,7 +7,8 @@ from app.config import Config
 from app.utils.db_manager import save_stock_alert_to_db, init_db, save_api_token, get_api_token, save_stock_raw_data, save_daily_market_cap, save_daily_investor_trend, save_stock_investor_daily, save_sector_index_daily, get_signal_score_batch
 from app.core.kis_models import RequestHeader, RequestQueryParam, MarketCapQueryParam, FluctuationRankingResponse, MarketCapRankingResponse, StockInvestorDailyItem
 from app.core.upbit_monitor import send_slack_msg
-from app.utils.google_sheets import save_signal_score_to_sheet
+from app.utils.google_sheets import save_signal_score_to_sheet, save_signal_score_readme, save_investor_ranking_to_sheet
+from app.utils.sync_client import push_all_tables_to_server
 from app.utils.logger import get_logger
 
 logger = get_logger()
@@ -365,7 +366,8 @@ def send_signal_score_alerts(scores: list):
 def run_stock_monitor():
     logger.info("🚀 한국 주식 실시간 감시 시작!")
     init_db()
-    
+    save_signal_score_readme()
+
     while get_access_token() is None:
         logger.info("⏳ 4분 후 다시 시도합니다...")
         time.sleep(244) # 61 * 4
@@ -373,6 +375,7 @@ def run_stock_monitor():
     last_notified = {}
     last_market_cap_date = None
     last_close_data_hour = None  # 18시 or 19시 수집 여부 (시간 단위로 추적)
+    last_sync_date = None  # 20시 원격 서버 동기화 여부 (하루 1회)
 
     while True:
         try:
@@ -395,6 +398,17 @@ def run_stock_monitor():
                         time.sleep(2)
                     logger.info("✅ [스케줄] 업종 일자별지수 수집 완료 (코스피/코스닥/코스피200)")
                     last_close_data_hour = run_key
+
+            # 평일 20시 — 원격 서버로 전체 데이터 자동 전송 ("동기화 관리" 페이지의 수동 전송과 동일 로직)
+            # 18/19시 투자자별 매매동향·업종지수 수집까지 끝난 뒤에 보내기 위해 20시로 분리함.
+            if now.weekday() < 5 and now.hour == 20 and last_sync_date != today_str:
+                logger.info("⏰ [스케줄] 20시 원격 서버 동기화 시작")
+                try:
+                    result = push_all_tables_to_server()
+                    logger.info(f"[동기화] 자동 전송 결과: {result}")
+                except Exception as e:
+                    logger.error(f"[동기화] 자동 전송 중 에러: {e}")
+                last_sync_date = today_str
 
             # 장 운영 시간 외 대기
             if now.hour < 8 or now.hour >= 20:
@@ -433,6 +447,7 @@ def run_stock_monitor():
                         logger.info(f"[Signal Score] {len(scores)}건 계산/저장 완료")
                         send_signal_score_alerts(scores)
                         save_signal_score_to_sheet(scores)
+                        save_investor_ranking_to_sheet(days=10, top_n=40)
                     except Exception as e:
                         logger.error(f"[Signal Score] 계산/알림 중 에러: {e}")
 
