@@ -18,7 +18,7 @@ from app.utils.db_manager import (
     get_volume_ratio_batch,
     get_volume_collection_status
 )
-from app.core.stock_monitor import fetch_market_cap_ranking, fetch_investor_trend, fetch_sector_index_daily, fetch_stock_investor_daily
+from app.core.stock_monitor import fetch_market_cap_ranking, fetch_investor_trend, fetch_sector_index_daily, fetch_stock_investor_daily, fetch_ranking_preview
 from app.config import Config
 import json
 import os
@@ -649,6 +649,96 @@ def volume_ratio_status_api():
         return jsonify({'status': 'success', **status})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+# ──────────────────────────────────────────────
+# 순위분석 신규 API 미리보기 (Signal Score 반영 전 데이터 확인용, DB 저장 없음)
+# ──────────────────────────────────────────────
+RANKING_PREVIEW_TYPES = {
+    'volume_rank': {
+        'name': '거래량순위',
+        'path': '/uapi/domestic-stock/v1/quotations/volume-rank',
+        'tr_id': 'FHPST01710000',
+        'params': {
+            'fid_cond_mrkt_div_code': 'J', 'fid_cond_scr_div_code': '20171',
+            'fid_input_iscd': '0000', 'fid_div_cls_code': '0', 'fid_blng_cls_code': '0',
+            'fid_trgt_cls_code': '111111111', 'fid_trgt_exls_cls_code': '0000000000',
+            'fid_input_price_1': '', 'fid_input_price_2': '', 'fid_vol_cnt': '', 'fid_input_date_1': '',
+        },
+    },
+    'volume_power': {
+        'name': '체결강도 상위',
+        'path': '/uapi/domestic-stock/v1/ranking/volume-power',
+        'tr_id': 'FHPST01680000',
+        'params': {
+            'fid_trgt_exls_cls_code': '0', 'fid_cond_mrkt_div_code': 'J', 'fid_cond_scr_div_code': '20168',
+            'fid_input_iscd': '0000', 'fid_div_cls_code': '0',
+            'fid_input_price_1': '', 'fid_input_price_2': '', 'fid_vol_cnt': '', 'fid_trgt_cls_code': '0',
+        },
+    },
+    'disparity': {
+        'name': '이격도 순위',
+        'path': '/uapi/domestic-stock/v1/ranking/disparity',
+        'tr_id': 'FHPST01780000',
+        'params': {
+            'fid_input_price_2': '', 'fid_cond_mrkt_div_code': 'J', 'fid_cond_scr_div_code': '20178',
+            'fid_div_cls_code': '0', 'fid_rank_sort_cls_code': '0', 'fid_hour_cls_code': '20',
+            'fid_input_iscd': '0000', 'fid_trgt_cls_code': '0', 'fid_trgt_exls_cls_code': '0',
+            'fid_input_price_1': '', 'fid_vol_cnt': '',
+        },
+    },
+    'short_sale': {
+        'name': '공매도 상위종목',
+        'path': '/uapi/domestic-stock/v1/ranking/short-sale',
+        'tr_id': 'FHPST04820000',
+        'params': {
+            'fid_aply_rang_vol': '0', 'fid_cond_mrkt_div_code': 'J', 'fid_cond_scr_div_code': '20482',
+            'fid_input_iscd': '0000', 'fid_period_div_code': 'D', 'fid_input_cnt_1': '0',
+            'fid_trgt_exls_cls_code': '', 'fid_trgt_cls_code': '',
+            'fid_aply_rang_prc_1': '', 'fid_aply_rang_prc_2': '',
+        },
+    },
+    'bulk_trans_num': {
+        'name': '대량체결건수 상위',
+        'path': '/uapi/domestic-stock/v1/ranking/bulk-trans-num',
+        'tr_id': 'FHKST190900C0',
+        'params': {
+            'fid_aply_rang_prc_2': '', 'fid_cond_mrkt_div_code': 'J', 'fid_cond_scr_div_code': '11909',
+            'fid_input_iscd': '0000', 'fid_rank_sort_cls_code': '0', 'fid_div_cls_code': '0',
+            'fid_input_price_1': '', 'fid_aply_rang_prc_1': '', 'fid_input_iscd_2': '',
+            'fid_trgt_exls_cls_code': '0', 'fid_trgt_cls_code': '0', 'fid_vol_cnt': '',
+        },
+    },
+    'exp_trans_updown': {
+        'name': '예상체결 상승/하락상위',
+        'path': '/uapi/domestic-stock/v1/ranking/exp-trans-updown',
+        'tr_id': 'FHPST01820000',
+        'params': {
+            'fid_rank_sort_cls_code': '0', 'fid_cond_mrkt_div_code': 'J', 'fid_cond_scr_div_code': '20182',
+            'fid_input_iscd': '0000', 'fid_div_cls_code': '0', 'fid_aply_rang_prc_1': '',
+            'fid_vol_cnt': '', 'fid_pbmn': '', 'fid_blng_cls_code': '0', 'fid_mkop_cls_code': '0',
+        },
+    },
+}
+
+@app.route('/ranking-preview')
+def ranking_preview_view():
+    """순위분석 신규 API 미리보기 페이지 (Signal Score 반영 전 검토용)"""
+    types = [{'key': k, 'name': v['name']} for k, v in RANKING_PREVIEW_TYPES.items()]
+    return render_template('ranking_preview.html', ranking_types=types)
+
+@app.route('/api/ranking-preview', methods=['GET'])
+def ranking_preview_api():
+    rtype = request.args.get('type', 'volume_rank')
+    cfg = RANKING_PREVIEW_TYPES.get(rtype)
+    if not cfg:
+        return jsonify({'status': 'error', 'message': f'알 수 없는 타입: {rtype}'}), 400
+    result = fetch_ranking_preview(cfg['path'], cfg['tr_id'], dict(cfg['params']))
+    if 'error' in result:
+        return jsonify({'status': 'error', 'message': result['error']}), 500
+    return jsonify({
+        'status': 'success', 'type': rtype, 'name': cfg['name'],
+        'count': len(result['output']), 'data': result['output']
+    })
 
 @app.route('/api/history/git-log', methods=['GET'])
 def git_log_api():
