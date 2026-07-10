@@ -156,6 +156,25 @@ def init_db():
         )
     ''')
 
+    # Signal Score 일별 결과 저장 테이블
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS signal_score_daily (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT,
+            code TEXT,
+            name TEXT,
+            momentum_score INTEGER,
+            supply_demand_score INTEGER,
+            rank_stability_score INTEGER,
+            market_environment_score INTEGER,
+            risk_penalty_score INTEGER,
+            total_score INTEGER,
+            grade TEXT,
+            timestamp TEXT,
+            UNIQUE(date, code)
+        )
+    ''')
+
     # 기존 테이블 컬럼 마이그레이션
     migrations = [
         'ALTER TABLE stock_market_cap_daily ADD COLUMN market_weight TEXT DEFAULT "0"',
@@ -1100,6 +1119,151 @@ def get_risk_penalty_batch(date: str = None, fid_input_iscd: str = "combined") -
 
     results.sort(key=lambda x: x['score'])
     return results
+
+
+def _grade_for_score(total: int) -> str:
+    """종합 점수 → 알림 등급(A/B/C/제외)."""
+    if total >= 80:
+        return 'A'
+    if total >= 65:
+        return 'B'
+    if total >= 50:
+        return 'C'
+    return '제외'
+
+
+def get_signal_score(code: str, fid_input_iscd: str = "combined") -> dict:
+    """1~6번 점수(모멘텀·수급·랭킹안정성·시장환경·리스크패널티)를 합산한 종합 Signal Score 산출.
+    등급: A(80점↑) / B(65~79) / C(50~64) / 제외(50 미만)
+    반환: {code, date, momentum_score, supply_demand_score, rank_stability_score,
+           market_environment_score, risk_penalty_score, total, grade, detail}
+    """
+    momentum = get_momentum_score(code)
+    supply = get_supply_demand_score(code, days=3)
+    rank = get_rank_stability_score(code, fid_input_iscd=fid_input_iscd)
+    market = get_market_environment_score(code)
+    risk = get_risk_penalty(code, fid_input_iscd=fid_input_iscd)
+
+    total = momentum['score'] + supply['score'] + rank['score'] + market['score'] + risk['score']
+    date = momentum.get('date') or rank.get('date') or market.get('date') or risk.get('date')
+
+    return {
+        'code': code,
+        'date': date,
+        'momentum_score': momentum['score'],
+        'supply_demand_score': supply['score'],
+        'rank_stability_score': rank['score'],
+        'market_environment_score': market['score'],
+        'risk_penalty_score': risk['score'],
+        'total': total,
+        'grade': _grade_for_score(total),
+        'detail': {
+            'momentum': momentum,
+            'supply_demand': supply,
+            'rank_stability': rank,
+            'market_environment': market,
+            'risk_penalty': risk,
+        },
+    }
+
+
+def get_signal_score_batch(date: str = None, fid_input_iscd: str = "combined", save: bool = False) -> list:
+    """특정 날짜(기본: 최신일) 기준, 전 종목의 종합 Signal Score를 일괄 계산.
+    save=True면 signal_score_daily 테이블에 upsert 저장.
+    반환: [{code, name, ...get_signal_score 결과(detail 제외)...}, ...] 총점 내림차순
+    """
+    if not date:
+        date = get_latest_market_cap_date(fid_input_iscd)
+    if not date:
+        return []
+
+    if fid_input_iscd == "combined":
+        iscd_list = ("0001", "1001")
+    else:
+        iscd_list = (fid_input_iscd,)
+    placeholders = ",".join("?" * len(iscd_list))
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(f'''
+        SELECT DISTINCT code, name FROM stock_market_cap_daily
+        WHERE date = ? AND fid_input_iscd IN ({placeholders})
+    ''', (date, *iscd_list))
+    stocks = [(r['code'], r['name']) for r in cursor.fetchall()]
+    conn.close()
+
+    results = []
+    for code, name in stocks:
+        info = get_signal_score(code, fid_input_iscd=fid_input_iscd)
+        if info['date'] != date:
+            continue
+        info['name'] = name
+        results.append(info)
+
+    results.sort(key=lambda x: x['total'], reverse=True)
+
+    if save:
+        save_signal_score_daily(results)
+
+    return results
+
+
+def save_signal_score_daily(rows: list) -> int:
+    """get_signal_score_batch() 결과를 signal_score_daily 테이블에 upsert 저장."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    saved = 0
+    for r in rows:
+        cursor.execute('''
+            INSERT INTO signal_score_daily
+                (date, code, name, momentum_score, supply_demand_score, rank_stability_score,
+                 market_environment_score, risk_penalty_score, total_score, grade, timestamp)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(date, code) DO UPDATE SET
+                name=excluded.name, momentum_score=excluded.momentum_score,
+                supply_demand_score=excluded.supply_demand_score,
+                rank_stability_score=excluded.rank_stability_score,
+                market_environment_score=excluded.market_environment_score,
+                risk_penalty_score=excluded.risk_penalty_score,
+                total_score=excluded.total_score, grade=excluded.grade, timestamp=excluded.timestamp
+        ''', (r['date'], r['code'], r['name'], r['momentum_score'], r['supply_demand_score'],
+              r['rank_stability_score'], r['market_environment_score'], r['risk_penalty_score'],
+              r['total'], r['grade'], timestamp))
+        saved += 1
+    conn.commit()
+    conn.close()
+    return saved
+
+
+def get_signal_score_history(date: str = None, grade: str = None, limit: int = 100) -> list:
+    """signal_score_daily 저장된 결과 조회. date 미지정 시 최신 저장 날짜 기준."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    if not date:
+        cursor.execute('SELECT MAX(date) FROM signal_score_daily')
+        row = cursor.fetchone()
+        date = row[0] if row and row[0] else None
+    if not date:
+        conn.close()
+        return []
+
+    if grade:
+        cursor.execute('''
+            SELECT * FROM signal_score_daily WHERE date = ? AND grade = ?
+            ORDER BY total_score DESC LIMIT ?
+        ''', (date, grade, limit))
+    else:
+        cursor.execute('''
+            SELECT * FROM signal_score_daily WHERE date = ?
+            ORDER BY total_score DESC LIMIT ?
+        ''', (date, limit))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 # Initialize DB on load
