@@ -992,6 +992,116 @@ def get_market_environment_score_batch(date: str = None, fid_input_iscd: str = "
     return results
 
 
+def _get_cumulative_return(code: str, days: int = 5, fid_input_iscd: str = "combined") -> dict:
+    """최근 N영업일 누적 상승률(%) 계산 (오늘 종가 vs N영업일 전 종가).
+    반환: {date, price_now, price_before, cum_return, days_used}
+    """
+    if fid_input_iscd == "combined":
+        iscd_list = ("0001", "1001")
+    else:
+        iscd_list = (fid_input_iscd,)
+    placeholders = ",".join("?" * len(iscd_list))
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(f'''
+        SELECT date, price FROM stock_market_cap_daily
+        WHERE code = ? AND fid_input_iscd IN ({placeholders})
+        ORDER BY date DESC LIMIT ?
+    ''', (code, *iscd_list, days + 1))
+    rows = cursor.fetchall()
+    conn.close()
+
+    if len(rows) < 2:
+        return {'date': rows[0]['date'] if rows else None, 'price_now': None,
+                'price_before': None, 'cum_return': 0.0, 'days_used': len(rows)}
+
+    price_now = float(rows[0]['price'])
+    price_before = float(rows[min(days, len(rows) - 1)]['price'])
+    cum_return = ((price_now - price_before) / price_before * 100) if price_before else 0.0
+
+    return {
+        'date': rows[0]['date'],
+        'price_now': price_now,
+        'price_before': price_before,
+        'cum_return': round(cum_return, 2),
+        'days_used': len(rows) - 1,
+    }
+
+
+def get_risk_penalty(code: str, fid_input_iscd: str = "combined") -> dict:
+    """과열·이탈 신호를 감지해 리스크 패널티(-20~0점) 산출.
+    반영 조건 (근거 데이터가 있는 것만 — 고가/저가/시가가 없어 윗꼬리·갭상승은 제외):
+    - 최근 5영업일 누적 상승률 30% 이상(과열 부담) → -15
+    - 당일 거래량 배수 2배 이상인데 등락률이 음수(거래량은 터졌는데 하락, 이탈 신호) → -10
+    - 외국인·기관 3일 동반 순매도 → -15
+    (합산 후 -20점 하한)
+    반환: {code, date, cum_return_5d, ratio, change_rate, supply_demand_score, penalties, score}
+    """
+    momentum = get_momentum_score(code)
+    ret_info = _get_cumulative_return(code, days=5, fid_input_iscd=fid_input_iscd)
+    supply_info = get_supply_demand_score(code, days=3)
+
+    penalties = []
+    if ret_info['cum_return'] >= 30:
+        penalties.append({'reason': '최근 5일 과열(+30% 이상)', 'value': -15})
+    if momentum['ratio'] >= 2 and momentum.get('change_rate') is not None and momentum['change_rate'] < 0:
+        penalties.append({'reason': '거래량 급증+당일 하락(이탈 신호)', 'value': -10})
+    if supply_info['score'] == -15:
+        penalties.append({'reason': '외국인·기관 동반 순매도', 'value': -15})
+
+    score = max(sum(p['value'] for p in penalties), -20)
+
+    return {
+        'code': code,
+        'date': momentum.get('date') or ret_info.get('date'),
+        'cum_return_5d': ret_info['cum_return'],
+        'ratio': momentum['ratio'],
+        'change_rate': momentum.get('change_rate'),
+        'supply_demand_score': supply_info['score'],
+        'penalties': penalties,
+        'score': score,
+    }
+
+
+def get_risk_penalty_batch(date: str = None, fid_input_iscd: str = "combined") -> list:
+    """특정 날짜(기본: 최신일) 기준, 전 종목의 리스크 패널티를 일괄 계산.
+    반환: [{code, name, ...get_risk_penalty 결과...}, ...] 점수 오름차순(가장 위험한 종목이 먼저)
+    """
+    if not date:
+        date = get_latest_market_cap_date(fid_input_iscd)
+    if not date:
+        return []
+
+    if fid_input_iscd == "combined":
+        iscd_list = ("0001", "1001")
+    else:
+        iscd_list = (fid_input_iscd,)
+    placeholders = ",".join("?" * len(iscd_list))
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(f'''
+        SELECT DISTINCT code, name FROM stock_market_cap_daily
+        WHERE date = ? AND fid_input_iscd IN ({placeholders})
+    ''', (date, *iscd_list))
+    stocks = [(r['code'], r['name']) for r in cursor.fetchall()]
+    conn.close()
+
+    results = []
+    for code, name in stocks:
+        info = get_risk_penalty(code, fid_input_iscd=fid_input_iscd)
+        if info['date'] != date:
+            continue
+        info['name'] = name
+        results.append(info)
+
+    results.sort(key=lambda x: x['score'])
+    return results
+
+
 # Initialize DB on load
 init_db()
 

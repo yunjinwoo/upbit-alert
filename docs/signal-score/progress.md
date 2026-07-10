@@ -17,7 +17,7 @@
 | 3 | 수급 점수(외국인/기관 3일 누적) 산출 함수 | ✅ 완료 (2026-07-10) | 상세: [step3-supply-demand-score.md](step3-supply-demand-score.md) |
 | 4 | 시총/랭킹 안정성 점수 산출 함수 | ✅ 완료 (2026-07-10, 순서 착오로 3번보다 먼저 진행함) | 상세: [step4-rank-stability-score.md](step4-rank-stability-score.md) |
 | 5 | 시장/업종 환경 점수 산출 함수 | ✅ 완료 (2026-07-10) | 상세: [step5-market-environment-score.md](step5-market-environment-score.md) |
-| 6 | 리스크 패널티 함수 | 대기 | 최근 5일 급등/윗꼬리/동반매도 감점, -20점 |
+| 6 | 리스크 패널티 함수 | ✅ 완료 (2026-07-10) | 상세: [step6-risk-penalty.md](step6-risk-penalty.md) |
 | 7 | 종합 Signal Score 통합 + A/B/C 등급 분기 | 대기 | 1~6 결과 합산, 등급 테이블 저장 |
 | 8 | 주식 알림 Slack 연동 배선 | 대기 | 코인용 `send_slack_msg` 재사용, 등급별 알림 조건 연결 |
 | 9 | 투자자 매매동향 수집 대상 전종목 확대 (선택) | 대기 | API 호출량/레이트리밋 고려 필요 |
@@ -37,3 +37,5 @@
 - 2026-07-10: 3번 작업(수급 점수 산출 함수) 완료. 상세 내용은 [step3-supply-demand-score.md](step3-supply-demand-score.md) 참고. 투자자매매동향 데이터도 이미 쌓여있어 실제 68개 종목으로 검증함.
 - 2026-07-10: 07-09 코스피(0001) 시총 데이터 누락 원인을 코드 레벨에서 규명(`stock_monitor.py`의 자동 수집 루프에 401/오류 시 재시도 로직 없음, [step4 문서](step4-rank-stability-score.md) 참고). 사용자 요청으로 수정은 보류하고 별도 브랜치에서 나중에 진행하기로 함.
 - 2026-07-10: 5번 작업(시장/업종 환경 점수 산출 함수) 완료. 상세 내용은 [step5-market-environment-score.md](step5-market-environment-score.md) 참고. `sector_index_daily`(코스피/코스닥 지수)는 07-09 누락 없이 정상 수집되어 있어 실제 데이터로 검증함.
+- 2026-07-10: 2·3·4·5번 작업을 단계별로 분리해서 커밋함(`a907755`, `60ce93b`, `12b5606`, `5b12041`).
+- 2026-07-10: 6번 작업(리스크 패널티 함수) 완료. 상세 내용은 [step6-risk-penalty.md](step6-risk-penalty.md) 참고.
