@@ -99,28 +99,12 @@ def run_upbit_monitor():
                         current_candle_time = df_now.index[0]
                         
                         if last_notified_time.get(ticker, {}).get("alert") != current_candle_time:
-                            surge_text = ", ".join(active_intervals)
-                            message = (
-                                f"🚨 *[{ticker}] 거래량 조건 만족 ({surge_count}/4)!* 🚨\n"
-                                f"폭발한 봉: {surge_text} \n"
-                                f" https://upbit.com/exchange?code=CRIX.UPBIT.{ticker}"
-                            )
-
                             save_to_sheet(ticker, active_intervals, surge_count, daily_str)
-                            
-                            # (NEW) 당일 2회 이상 수집된 경우에만 슬랙 전송
+
+                            # 코인 알림은 Slack 발송 없이 DB/시트 저장만 수행 (Slack은 주식 Signal Score A등급 전용)
                             today_count = get_today_alert_count(ticker)
-                            if today_count >= 2:
-                                message = (
-                                    f"🚨 *[{ticker}] 거래량 조건 만족 ({surge_count}/4) - 당일 {today_count}회째* 🚨\n"
-                                    f"폭발한 봉: {surge_text} \n"
-                                    f" https://upbit.com/exchange?code=CRIX.UPBIT.{ticker}"
-                                )
-                                send_slack_msg(message)
-                                logger.info(f"[{time.strftime('%H:%M:%S')}] {ticker} {today_count}회째 수집 - 슬랙 알림 발송!")
-                            else:
-                                logger.info(f"[{time.strftime('%H:%M:%S')}] {ticker} 첫 수집 - 슬랙 건너뜀 (DB/시트 저장완료)")
-                                
+                            logger.info(f"[{time.strftime('%H:%M:%S')}] {ticker} {today_count}회째 수집 - DB/시트 저장 완료 (Slack 알림 없음)")
+
                             skip_cache[ticker] = datetime.now() + skip_duration_alert
                             
                             if ticker not in last_notified_time:
