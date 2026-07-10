@@ -237,6 +237,51 @@ def get_stock_ranking():
         logger.error(f"🔥 에러: {e}")
         return []
 
+def fetch_ranking_preview(api_path: str, tr_id: str, params: dict, max_retries=2):
+    """순위분석 신규 API 미리보기 조회 (DB 저장 없음 — 실제 반영 전 데이터 확인용).
+    api_path: KIS_URL_BASE 이후 경로 (예: /uapi/domestic-stock/v1/ranking/volume-power)
+    """
+    global ACCESS_TOKEN
+    if ACCESS_TOKEN is None:
+        get_access_token()
+    if ACCESS_TOKEN is None:
+        return {"error": "KIS API 토큰이 없습니다."}
+
+    url = f"{Config.KIS_URL_BASE}{api_path}"
+
+    for attempt in range(1, max_retries + 1):
+        header_obj = RequestHeader(
+            authorization=f"Bearer {ACCESS_TOKEN}",
+            appkey=Config.KIS_APP_KEY,
+            appsecret=Config.KIS_APP_SECRET,
+            tr_id=tr_id,
+            custtype="P"
+        )
+        try:
+            res = requests.get(url, headers=header_obj.to_dict(), params=params, timeout=10)
+            raw_json = res.json()
+
+            if res.status_code == 200:
+                if raw_json.get("rt_cd") != "0":
+                    logger.error(f"❌ 순위분석 미리보기 API 에러 ({tr_id}): {raw_json.get('msg1')}")
+                    return {"error": raw_json.get("msg1", "알 수 없는 오류")}
+                return {"output": raw_json.get("output", [])}
+            elif res.status_code == 401:
+                logger.info("🔑 토큰 만료! 재발급을 시도합니다.")
+                get_access_token()
+            else:
+                logger.error(f"❌ 순위분석 미리보기 실패 ({tr_id})! {res.status_code} - {res.text}")
+                return {"error": f"{res.status_code} - {res.text[:200]}"}
+        except Exception as e:
+            logger.error(f"🔥 순위분석 미리보기 에러 ({tr_id}): {e}")
+            return {"error": str(e)}
+
+        if attempt < max_retries:
+            time.sleep(1)
+
+    return {"error": "최종 실패 (재시도 초과)"}
+
+
 def fetch_investor_trend(exch_div="J", mrkt_div="1"):
     """투자자별 프로그램 매매동향 조회"""
     if ACCESS_TOKEN is None:

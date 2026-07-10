@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "kis-code-assistant-mcp": {
+      "command": "npx",
+      "args": ["-y", "@koreainvestment/kis-code-assistant-mcp"],
+      "env": {
+        "UV_PYTHON_INSTALL_DIR": "C:\\Users\\BIZWIZSYSTEM\\.local\\share\\uv\\python"
+      }
+    }
+  }
+}
