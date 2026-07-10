@@ -86,6 +86,7 @@ def init_db():
             change_rate TEXT,
             market_weight TEXT,
             fid_input_iscd TEXT,
+            volume TEXT,
             timestamp TEXT
         )
     ''')
@@ -155,10 +156,30 @@ def init_db():
         )
     ''')
 
+    # Signal Score 일별 결과 저장 테이블
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS signal_score_daily (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT,
+            code TEXT,
+            name TEXT,
+            momentum_score INTEGER,
+            supply_demand_score INTEGER,
+            rank_stability_score INTEGER,
+            market_environment_score INTEGER,
+            risk_penalty_score INTEGER,
+            total_score INTEGER,
+            grade TEXT,
+            timestamp TEXT,
+            UNIQUE(date, code)
+        )
+    ''')
+
     # 기존 테이블 컬럼 마이그레이션
     migrations = [
         'ALTER TABLE stock_market_cap_daily ADD COLUMN market_weight TEXT DEFAULT "0"',
         'ALTER TABLE stock_market_cap_daily ADD COLUMN fid_input_iscd TEXT DEFAULT "0000"',
+        'ALTER TABLE stock_market_cap_daily ADD COLUMN volume TEXT DEFAULT "0"',
         'ALTER TABLE stock_raw_data ADD COLUMN api_type TEXT DEFAULT "UNKNOWN"',
         'CREATE UNIQUE INDEX IF NOT EXISTS idx_mktcap_unique ON stock_market_cap_daily(date, code, fid_input_iscd)',
         'CREATE UNIQUE INDEX IF NOT EXISTS idx_invtrend_unique ON investor_trend_daily(date, exch_div, mrkt_div, invr_cls_code)',
@@ -314,12 +335,13 @@ def save_daily_market_cap(data_list: List[MarketCapRankingItem], fid_input_iscd:
             item.prdy_ctrt,
             item.mrkt_whol_avls_rlim,
             fid_input_iscd,
+            item.acml_vol,
             timestamp
         ))
 
     cursor.executemany('''
-        INSERT INTO stock_market_cap_daily (date, code, name, market_cap_amount, rank, price, change_rate, market_weight, fid_input_iscd, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO stock_market_cap_daily (date, code, name, market_cap_amount, rank, price, change_rate, market_weight, fid_input_iscd, volume, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', insert_data)
 
     conn.commit()
@@ -554,6 +576,696 @@ def get_latest_market_cap_date(fid_input_iscd: str = "combined") -> str:
     return row[0] if row and row[0] else ""
 
 
+def get_volume_ratio(code: str, avg_days: int = 20) -> dict:
+    """종목의 최근 N일 평균 거래량 대비 당일 거래량 배수 계산.
+    반환: {code, date, today_volume, avg_volume, ratio, days_used}
+    days_used < avg_days 이면 아직 데이터가 avg_days만큼 쌓이지 않았다는 뜻(참고용으로만 사용).
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT date, MAX(CAST(volume AS INTEGER)) AS volume
+        FROM stock_market_cap_daily
+        WHERE code = ? AND volume IS NOT NULL AND volume != '' AND volume != '0'
+        GROUP BY date
+        ORDER BY date DESC
+        LIMIT ?
+    ''', (code, avg_days + 1))
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        return {'code': code, 'date': None, 'today_volume': 0, 'avg_volume': 0, 'ratio': 0.0, 'days_used': 0}
+
+    today_row = rows[0]
+    past_rows = rows[1:]
+
+    today_volume = today_row['volume']
+    days_used = len(past_rows)
+    avg_volume = (sum(r['volume'] for r in past_rows) / days_used) if days_used > 0 else 0
+    ratio = (today_volume / avg_volume) if avg_volume > 0 else 0.0
+
+    return {
+        'code': code,
+        'date': today_row['date'],
+        'today_volume': today_volume,
+        'avg_volume': round(avg_volume, 2),
+        'ratio': round(ratio, 3),
+        'days_used': days_used,
+    }
+
+
+def get_volume_ratio_batch(date: str = None, avg_days: int = 20, fid_input_iscd: str = "combined") -> list:
+    """특정 날짜(기본: 최신일) 기준, 해당 날짜에 데이터가 있는 전 종목의 거래량 배수를 일괄 계산.
+    반환: [{code, name, date, today_volume, avg_volume, ratio, days_used}, ...] ratio 내림차순 정렬
+    """
+    if not date:
+        date = get_latest_market_cap_date(fid_input_iscd)
+    if not date:
+        return []
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT DISTINCT code, name FROM stock_market_cap_daily WHERE date = ?
+    ''', (date,))
+    stocks = [(r['code'], r['name']) for r in cursor.fetchall()]
+    conn.close()
+
+    results = []
+    for code, name in stocks:
+        ratio_info = get_volume_ratio(code, avg_days=avg_days)
+        if ratio_info['date'] != date:
+            continue
+        ratio_info['name'] = name
+        results.append(ratio_info)
+
+    results.sort(key=lambda x: x['ratio'], reverse=True)
+    return results
+
+
+def get_volume_collection_status() -> dict:
+    """실제 거래량(volume != 0)이 저장된 날짜가 며칠치 쌓였는지 확인.
+    20일 평균 계산이 얼마나 신뢰할 만한지 가늠하는 용도.
+    반환: {days_collected, latest_date, dates}
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT DISTINCT date FROM stock_market_cap_daily
+        WHERE volume IS NOT NULL AND volume != '' AND volume != '0'
+        ORDER BY date DESC
+    ''')
+    dates = [r[0] for r in cursor.fetchall()]
+    conn.close()
+    return {
+        'days_collected': len(dates),
+        'latest_date': dates[0] if dates else None,
+        'dates': dates,
+    }
+
+
+def _score_momentum(ratio: float, change_rate: float) -> int:
+    """거래량 배수 + 등락률 조합 → 모멘텀 점수(0~30점).
+    거래량 급증(배수↑) + 가격 상승(등락률↑)이 동시에 나타날수록 고득점.
+    거래량은 늘었는데 가격이 빠지면(분산/이탈 신호) 낮은 점수로 처리.
+    """
+    if ratio >= 3 and change_rate > 3:
+        return 30
+    if ratio >= 3 and change_rate > 0:
+        return 25
+    if ratio >= 2 and change_rate > 1:
+        return 20
+    if ratio >= 2 and change_rate > 0:
+        return 15
+    if ratio >= 1.5 and change_rate > 0:
+        return 10
+    if ratio >= 2 and change_rate < 0:
+        return 5
+    return 0
+
+
+def get_momentum_score(code: str, avg_days: int = 20) -> dict:
+    """종목 하나의 모멘텀 점수(거래량 배수 + 당일 등락률 조합, 0~30점) 산출.
+    반환: {code, date, ratio, change_rate, score, days_used}
+    """
+    ratio_info = get_volume_ratio(code, avg_days=avg_days)
+    if not ratio_info['date']:
+        return {**ratio_info, 'change_rate': None, 'score': 0}
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT change_rate FROM stock_market_cap_daily
+        WHERE code = ? AND date = ? LIMIT 1
+    ''', (code, ratio_info['date']))
+    row = cursor.fetchone()
+    conn.close()
+
+    change_rate = float(row['change_rate']) if row and row['change_rate'] not in (None, '') else 0.0
+    score = _score_momentum(ratio_info['ratio'], change_rate)
+
+    return {
+        'code': code,
+        'date': ratio_info['date'],
+        'ratio': ratio_info['ratio'],
+        'change_rate': change_rate,
+        'score': score,
+        'days_used': ratio_info['days_used'],
+    }
+
+
+def get_momentum_score_batch(date: str = None, avg_days: int = 20, fid_input_iscd: str = "combined") -> list:
+    """특정 날짜(기본: 최신일) 기준, 전 종목의 모멘텀 점수를 일괄 계산.
+    반환: [{code, name, date, ratio, change_rate, score, days_used}, ...] 점수 내림차순 정렬
+    """
+    if not date:
+        date = get_latest_market_cap_date(fid_input_iscd)
+    if not date:
+        return []
+
+    ratio_rows = get_volume_ratio_batch(date=date, avg_days=avg_days, fid_input_iscd=fid_input_iscd)
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT code, change_rate FROM stock_market_cap_daily WHERE date = ?', (date,))
+    change_map = {r['code']: r['change_rate'] for r in cursor.fetchall()}
+    conn.close()
+
+    results = []
+    for r in ratio_rows:
+        cr = change_map.get(r['code'])
+        change_rate = float(cr) if cr not in (None, '') else 0.0
+        score = _score_momentum(r['ratio'], change_rate)
+        results.append({**r, 'change_rate': change_rate, 'score': score})
+
+    results.sort(key=lambda x: x['score'], reverse=True)
+    return results
+
+
+def get_rank_stability_score(code: str, trend_days: int = 5, fid_input_iscd: str = "combined") -> dict:
+    """시가총액 랭킹 안정성 점수(0~15점) 산출.
+    - 최신 랭킹이 상위 100위 이내면 +10 (소형주 리스크 대비 신뢰도)
+    - trend_days 영업일 전 대비 랭킹이 상승(숫자가 작아짐)했으면 +5
+    반환: {code, date, rank, rank_before, rank_change, score}
+    """
+    if fid_input_iscd == "combined":
+        iscd_list = ("0001", "1001")
+    else:
+        iscd_list = (fid_input_iscd,)
+    placeholders = ",".join("?" * len(iscd_list))
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(f'''
+        SELECT date, rank FROM stock_market_cap_daily
+        WHERE code = ? AND fid_input_iscd IN ({placeholders})
+        ORDER BY date DESC
+        LIMIT ?
+    ''', (code, *iscd_list, trend_days + 1))
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        return {'code': code, 'date': None, 'rank': None, 'rank_before': None, 'rank_change': None, 'score': 0}
+
+    rank = rows[0]['rank']
+    score = 10 if rank <= 100 else 0
+
+    rank_before = None
+    rank_change = None
+    if len(rows) > 1:
+        before_row = rows[min(trend_days, len(rows) - 1)]
+        rank_before = before_row['rank']
+        rank_change = rank_before - rank  # 양수 = 랭킹 상승(숫자 감소)
+        if rank_change > 0:
+            score += 5
+
+    return {
+        'code': code,
+        'date': rows[0]['date'],
+        'rank': rank,
+        'rank_before': rank_before,
+        'rank_change': rank_change,
+        'score': score,
+    }
+
+
+def get_rank_stability_score_batch(date: str = None, trend_days: int = 5, fid_input_iscd: str = "combined") -> list:
+    """특정 날짜(기본: 최신일) 기준, 전 종목의 랭킹 안정성 점수를 일괄 계산.
+    반환: [{code, name, date, rank, rank_before, rank_change, score}, ...] 점수 내림차순, 동점이면 랭킹 오름차순
+    """
+    if not date:
+        date = get_latest_market_cap_date(fid_input_iscd)
+    if not date:
+        return []
+
+    if fid_input_iscd == "combined":
+        iscd_list = ("0001", "1001")
+    else:
+        iscd_list = (fid_input_iscd,)
+    placeholders = ",".join("?" * len(iscd_list))
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(f'''
+        SELECT DISTINCT code, name FROM stock_market_cap_daily
+        WHERE date = ? AND fid_input_iscd IN ({placeholders})
+    ''', (date, *iscd_list))
+    stocks = [(r['code'], r['name']) for r in cursor.fetchall()]
+    conn.close()
+
+    results = []
+    for code, name in stocks:
+        info = get_rank_stability_score(code, trend_days=trend_days, fid_input_iscd=fid_input_iscd)
+        if info['date'] != date:
+            continue
+        info['name'] = name
+        results.append(info)
+
+    results.sort(key=lambda x: (-x['score'], x['rank']))
+    return results
+
+
+def _score_supply_demand(frgn_total: int, orgn_total: int) -> int:
+    """외국인/기관 N일 누적 순매수 조합 → 수급 점수(-15~30점).
+    둘 다 순매수면 고득점, 하나만 순매수면 중간 점수, 둘 다 순매도(동반 이탈)면 감점.
+    """
+    if frgn_total > 0 and orgn_total > 0:
+        return 30
+    if frgn_total > 0 or orgn_total > 0:
+        return 15
+    if frgn_total < 0 and orgn_total < 0:
+        return -15
+    return 0
+
+
+def get_supply_demand_score(code: str, days: int = 3) -> dict:
+    """종목 하나의 외국인/기관 N일(기본 3일) 누적 순매수 기반 수급 점수(-15~30점) 산출.
+    반환: {code, date_from, date_to, frgn_total, orgn_total, days_used, score}
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT date,
+               CAST(frgn_ntby_tr_pbmn AS INTEGER) AS frgn,
+               CAST(orgn_ntby_tr_pbmn AS INTEGER) AS orgn
+        FROM stock_investor_daily
+        WHERE code = ?
+        ORDER BY date DESC
+        LIMIT ?
+    ''', (code, days))
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        return {'code': code, 'date_from': None, 'date_to': None,
+                'frgn_total': 0, 'orgn_total': 0, 'days_used': 0, 'score': 0}
+
+    frgn_total = sum(r['frgn'] for r in rows)
+    orgn_total = sum(r['orgn'] for r in rows)
+
+    return {
+        'code': code,
+        'date_from': rows[-1]['date'],
+        'date_to': rows[0]['date'],
+        'frgn_total': frgn_total,
+        'orgn_total': orgn_total,
+        'days_used': len(rows),
+        'score': _score_supply_demand(frgn_total, orgn_total),
+    }
+
+
+def get_supply_demand_score_batch(days: int = 3) -> list:
+    """stock_investor_daily에 데이터가 있는 전 종목의 수급 점수를 일괄 계산.
+    반환: [{code, name, date_from, date_to, frgn_total, orgn_total, days_used, score}, ...] 점수 내림차순
+    (참고: 투자자매매동향은 시총 상위 종목만 수집되므로 전체 상장 종목이 아님)
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT DISTINCT code, name FROM stock_investor_daily')
+    stocks = [(r['code'], r['name']) for r in cursor.fetchall()]
+    conn.close()
+
+    results = []
+    for code, name in stocks:
+        info = get_supply_demand_score(code, days=days)
+        if info['days_used'] == 0:
+            continue
+        info['name'] = name
+        results.append(info)
+
+    results.sort(key=lambda x: x['score'], reverse=True)
+    return results
+
+
+def _get_index_score(sector_code: str, date: str) -> dict:
+    """시장 지수(코스피=0001/코스닥=1001) 당일 등락률 + 5영업일 추세로 점수(0~15점) 산출.
+    - 당일 등락률 양수 → +10
+    - 5영업일 전 종가 대비 오늘 종가가 높으면(상승 추세) → +5
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT date, close, change_rate FROM sector_index_daily
+        WHERE sector_code = ? AND date <= ?
+        ORDER BY date DESC LIMIT 6
+    ''', (sector_code, date))
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        return {'index_change_rate': None, 'index_trend_up': None, 'score': 0}
+
+    today = rows[0]
+    change_rate = float(today['change_rate']) if today['change_rate'] not in (None, '') else 0.0
+    score = 10 if change_rate > 0 else 0
+
+    trend_up = None
+    if len(rows) > 1:
+        oldest = rows[-1]
+        try:
+            trend_up = float(today['close']) > float(oldest['close'])
+        except (TypeError, ValueError):
+            trend_up = None
+        if trend_up:
+            score += 5
+
+    return {'index_change_rate': change_rate, 'index_trend_up': trend_up, 'score': score}
+
+
+def get_market_environment_score(code: str, date: str = None) -> dict:
+    """종목이 속한 시장(코스피/코스닥) 지수의 환경 점수(0~15점) 산출.
+    반환: {code, market, date, index_change_rate, index_trend_up, score}
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    if date:
+        cursor.execute('''
+            SELECT date, fid_input_iscd FROM stock_market_cap_daily
+            WHERE code = ? AND date = ? AND fid_input_iscd IN ('0001', '1001')
+            LIMIT 1
+        ''', (code, date))
+    else:
+        cursor.execute('''
+            SELECT date, fid_input_iscd FROM stock_market_cap_daily
+            WHERE code = ? AND fid_input_iscd IN ('0001', '1001')
+            ORDER BY date DESC LIMIT 1
+        ''', (code,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return {'code': code, 'market': None, 'date': None,
+                'index_change_rate': None, 'index_trend_up': None, 'score': 0}
+
+    idx = _get_index_score(row['fid_input_iscd'], row['date'])
+    return {'code': code, 'market': row['fid_input_iscd'], 'date': row['date'], **idx}
+
+
+def get_market_environment_score_batch(date: str = None, fid_input_iscd: str = "combined") -> list:
+    """특정 날짜(기본: 최신일) 기준, 전 종목의 시장 환경 점수를 일괄 계산.
+    같은 시장(코스피/코스닥) 종목은 지수 점수를 공유하므로 시장별로 한 번만 계산 후 매핑.
+    반환: [{code, name, market, date, index_change_rate, index_trend_up, score}, ...]
+    """
+    if not date:
+        date = get_latest_market_cap_date(fid_input_iscd)
+    if not date:
+        return []
+
+    if fid_input_iscd == "combined":
+        iscd_list = ("0001", "1001")
+    else:
+        iscd_list = (fid_input_iscd,)
+
+    market_scores = {iscd: _get_index_score(iscd, date) for iscd in iscd_list}
+
+    placeholders = ",".join("?" * len(iscd_list))
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(f'''
+        SELECT DISTINCT code, name, fid_input_iscd FROM stock_market_cap_daily
+        WHERE date = ? AND fid_input_iscd IN ({placeholders})
+    ''', (date, *iscd_list))
+    rows = cursor.fetchall()
+    conn.close()
+
+    results = []
+    for r in rows:
+        idx = market_scores.get(r['fid_input_iscd'], {'index_change_rate': None, 'index_trend_up': None, 'score': 0})
+        results.append({
+            'code': r['code'], 'name': r['name'], 'market': r['fid_input_iscd'], 'date': date,
+            **idx,
+        })
+    return results
+
+
+def _get_cumulative_return(code: str, days: int = 5, fid_input_iscd: str = "combined") -> dict:
+    """최근 N영업일 누적 상승률(%) 계산 (오늘 종가 vs N영업일 전 종가).
+    반환: {date, price_now, price_before, cum_return, days_used}
+    """
+    if fid_input_iscd == "combined":
+        iscd_list = ("0001", "1001")
+    else:
+        iscd_list = (fid_input_iscd,)
+    placeholders = ",".join("?" * len(iscd_list))
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(f'''
+        SELECT date, price FROM stock_market_cap_daily
+        WHERE code = ? AND fid_input_iscd IN ({placeholders})
+        ORDER BY date DESC LIMIT ?
+    ''', (code, *iscd_list, days + 1))
+    rows = cursor.fetchall()
+    conn.close()
+
+    if len(rows) < 2:
+        return {'date': rows[0]['date'] if rows else None, 'price_now': None,
+                'price_before': None, 'cum_return': 0.0, 'days_used': len(rows)}
+
+    price_now = float(rows[0]['price'])
+    price_before = float(rows[min(days, len(rows) - 1)]['price'])
+    cum_return = ((price_now - price_before) / price_before * 100) if price_before else 0.0
+
+    return {
+        'date': rows[0]['date'],
+        'price_now': price_now,
+        'price_before': price_before,
+        'cum_return': round(cum_return, 2),
+        'days_used': len(rows) - 1,
+    }
+
+
+def get_risk_penalty(code: str, fid_input_iscd: str = "combined") -> dict:
+    """과열·이탈 신호를 감지해 리스크 패널티(-20~0점) 산출.
+    반영 조건 (근거 데이터가 있는 것만 — 고가/저가/시가가 없어 윗꼬리·갭상승은 제외):
+    - 최근 5영업일 누적 상승률 30% 이상(과열 부담) → -15
+    - 당일 거래량 배수 2배 이상인데 등락률이 음수(거래량은 터졌는데 하락, 이탈 신호) → -10
+    - 외국인·기관 3일 동반 순매도 → -15
+    (합산 후 -20점 하한)
+    반환: {code, date, cum_return_5d, ratio, change_rate, supply_demand_score, penalties, score}
+    """
+    momentum = get_momentum_score(code)
+    ret_info = _get_cumulative_return(code, days=5, fid_input_iscd=fid_input_iscd)
+    supply_info = get_supply_demand_score(code, days=3)
+
+    penalties = []
+    if ret_info['cum_return'] >= 30:
+        penalties.append({'reason': '최근 5일 과열(+30% 이상)', 'value': -15})
+    if momentum['ratio'] >= 2 and momentum.get('change_rate') is not None and momentum['change_rate'] < 0:
+        penalties.append({'reason': '거래량 급증+당일 하락(이탈 신호)', 'value': -10})
+    if supply_info['score'] == -15:
+        penalties.append({'reason': '외국인·기관 동반 순매도', 'value': -15})
+
+    score = max(sum(p['value'] for p in penalties), -20)
+
+    return {
+        'code': code,
+        'date': momentum.get('date') or ret_info.get('date'),
+        'cum_return_5d': ret_info['cum_return'],
+        'ratio': momentum['ratio'],
+        'change_rate': momentum.get('change_rate'),
+        'supply_demand_score': supply_info['score'],
+        'penalties': penalties,
+        'score': score,
+    }
+
+
+def get_risk_penalty_batch(date: str = None, fid_input_iscd: str = "combined") -> list:
+    """특정 날짜(기본: 최신일) 기준, 전 종목의 리스크 패널티를 일괄 계산.
+    반환: [{code, name, ...get_risk_penalty 결과...}, ...] 점수 오름차순(가장 위험한 종목이 먼저)
+    """
+    if not date:
+        date = get_latest_market_cap_date(fid_input_iscd)
+    if not date:
+        return []
+
+    if fid_input_iscd == "combined":
+        iscd_list = ("0001", "1001")
+    else:
+        iscd_list = (fid_input_iscd,)
+    placeholders = ",".join("?" * len(iscd_list))
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(f'''
+        SELECT DISTINCT code, name FROM stock_market_cap_daily
+        WHERE date = ? AND fid_input_iscd IN ({placeholders})
+    ''', (date, *iscd_list))
+    stocks = [(r['code'], r['name']) for r in cursor.fetchall()]
+    conn.close()
+
+    results = []
+    for code, name in stocks:
+        info = get_risk_penalty(code, fid_input_iscd=fid_input_iscd)
+        if info['date'] != date:
+            continue
+        info['name'] = name
+        results.append(info)
+
+    results.sort(key=lambda x: x['score'])
+    return results
+
+
+def _grade_for_score(total: int) -> str:
+    """종합 점수 → 알림 등급(A/B/C/제외)."""
+    if total >= 80:
+        return 'A'
+    if total >= 65:
+        return 'B'
+    if total >= 50:
+        return 'C'
+    return '제외'
+
+
+def get_signal_score(code: str, fid_input_iscd: str = "combined") -> dict:
+    """1~6번 점수(모멘텀·수급·랭킹안정성·시장환경·리스크패널티)를 합산한 종합 Signal Score 산출.
+    등급: A(80점↑) / B(65~79) / C(50~64) / 제외(50 미만)
+    반환: {code, date, momentum_score, supply_demand_score, rank_stability_score,
+           market_environment_score, risk_penalty_score, total, grade, detail}
+    """
+    momentum = get_momentum_score(code)
+    supply = get_supply_demand_score(code, days=3)
+    rank = get_rank_stability_score(code, fid_input_iscd=fid_input_iscd)
+    market = get_market_environment_score(code)
+    risk = get_risk_penalty(code, fid_input_iscd=fid_input_iscd)
+
+    total = momentum['score'] + supply['score'] + rank['score'] + market['score'] + risk['score']
+    date = momentum.get('date') or rank.get('date') or market.get('date') or risk.get('date')
+
+    return {
+        'code': code,
+        'date': date,
+        'momentum_score': momentum['score'],
+        'supply_demand_score': supply['score'],
+        'rank_stability_score': rank['score'],
+        'market_environment_score': market['score'],
+        'risk_penalty_score': risk['score'],
+        'total': total,
+        'grade': _grade_for_score(total),
+        'detail': {
+            'momentum': momentum,
+            'supply_demand': supply,
+            'rank_stability': rank,
+            'market_environment': market,
+            'risk_penalty': risk,
+        },
+    }
+
+
+def get_signal_score_batch(date: str = None, fid_input_iscd: str = "combined", save: bool = False) -> list:
+    """특정 날짜(기본: 최신일) 기준, 전 종목의 종합 Signal Score를 일괄 계산.
+    save=True면 signal_score_daily 테이블에 upsert 저장.
+    반환: [{code, name, ...get_signal_score 결과(detail 제외)...}, ...] 총점 내림차순
+    """
+    if not date:
+        date = get_latest_market_cap_date(fid_input_iscd)
+    if not date:
+        return []
+
+    if fid_input_iscd == "combined":
+        iscd_list = ("0001", "1001")
+    else:
+        iscd_list = (fid_input_iscd,)
+    placeholders = ",".join("?" * len(iscd_list))
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(f'''
+        SELECT DISTINCT code, name FROM stock_market_cap_daily
+        WHERE date = ? AND fid_input_iscd IN ({placeholders})
+    ''', (date, *iscd_list))
+    stocks = [(r['code'], r['name']) for r in cursor.fetchall()]
+    conn.close()
+
+    results = []
+    for code, name in stocks:
+        info = get_signal_score(code, fid_input_iscd=fid_input_iscd)
+        if info['date'] != date:
+            continue
+        info['name'] = name
+        results.append(info)
+
+    results.sort(key=lambda x: x['total'], reverse=True)
+
+    if save:
+        save_signal_score_daily(results)
+
+    return results
+
+
+def save_signal_score_daily(rows: list) -> int:
+    """get_signal_score_batch() 결과를 signal_score_daily 테이블에 upsert 저장."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    saved = 0
+    for r in rows:
+        cursor.execute('''
+            INSERT INTO signal_score_daily
+                (date, code, name, momentum_score, supply_demand_score, rank_stability_score,
+                 market_environment_score, risk_penalty_score, total_score, grade, timestamp)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(date, code) DO UPDATE SET
+                name=excluded.name, momentum_score=excluded.momentum_score,
+                supply_demand_score=excluded.supply_demand_score,
+                rank_stability_score=excluded.rank_stability_score,
+                market_environment_score=excluded.market_environment_score,
+                risk_penalty_score=excluded.risk_penalty_score,
+                total_score=excluded.total_score, grade=excluded.grade, timestamp=excluded.timestamp
+        ''', (r['date'], r['code'], r['name'], r['momentum_score'], r['supply_demand_score'],
+              r['rank_stability_score'], r['market_environment_score'], r['risk_penalty_score'],
+              r['total'], r['grade'], timestamp))
+        saved += 1
+    conn.commit()
+    conn.close()
+    return saved
+
+
+def get_signal_score_history(date: str = None, grade: str = None, limit: int = 100) -> list:
+    """signal_score_daily 저장된 결과 조회. date 미지정 시 최신 저장 날짜 기준."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    if not date:
+        cursor.execute('SELECT MAX(date) FROM signal_score_daily')
+        row = cursor.fetchone()
+        date = row[0] if row and row[0] else None
+    if not date:
+        conn.close()
+        return []
+
+    if grade:
+        cursor.execute('''
+            SELECT * FROM signal_score_daily WHERE date = ? AND grade = ?
+            ORDER BY total_score DESC LIMIT ?
+        ''', (date, grade, limit))
+    else:
+        cursor.execute('''
+            SELECT * FROM signal_score_daily WHERE date = ?
+            ORDER BY total_score DESC LIMIT ?
+        ''', (date, limit))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 # Initialize DB on load
 init_db()
 
@@ -570,15 +1282,15 @@ def sync_upsert_market_cap(rows: list) -> int:
     for r in rows:
         cursor.execute('''
             INSERT INTO stock_market_cap_daily
-                (date, code, name, market_cap_amount, rank, price, change_rate, market_weight, fid_input_iscd, timestamp)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
+                (date, code, name, market_cap_amount, rank, price, change_rate, market_weight, fid_input_iscd, volume, timestamp)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(date, code, fid_input_iscd) DO UPDATE SET
                 name=excluded.name, market_cap_amount=excluded.market_cap_amount,
                 rank=excluded.rank, price=excluded.price, change_rate=excluded.change_rate,
-                market_weight=excluded.market_weight, timestamp=excluded.timestamp
+                market_weight=excluded.market_weight, volume=excluded.volume, timestamp=excluded.timestamp
         ''', (r.get('date'), r.get('code'), r.get('name'), r.get('market_cap_amount'),
               r.get('rank'), r.get('price'), r.get('change_rate'),
-              r.get('market_weight', '0'), r.get('fid_input_iscd', '0001'),
+              r.get('market_weight', '0'), r.get('fid_input_iscd', '0001'), r.get('volume', '0'),
               r.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))))
         saved += 1
     conn.commit()

@@ -4,8 +4,9 @@ import time
 from datetime import datetime
 from dataclasses import asdict
 from app.config import Config
-from app.utils.db_manager import save_stock_alert_to_db, init_db, save_api_token, get_api_token, save_stock_raw_data, save_daily_market_cap, save_daily_investor_trend, save_stock_investor_daily, save_sector_index_daily
+from app.utils.db_manager import save_stock_alert_to_db, init_db, save_api_token, get_api_token, save_stock_raw_data, save_daily_market_cap, save_daily_investor_trend, save_stock_investor_daily, save_sector_index_daily, get_signal_score_batch
 from app.core.kis_models import RequestHeader, RequestQueryParam, MarketCapQueryParam, FluctuationRankingResponse, MarketCapRankingResponse, StockInvestorDailyItem
+from app.core.upbit_monitor import send_slack_msg
 from app.utils.logger import get_logger
 
 logger = get_logger()
@@ -326,6 +327,28 @@ def fetch_stock_investor_daily(codes: list, date_str: str = None):
     return saved, first_error
 
 
+def send_signal_score_alerts(scores: list):
+    """Signal Score 계산 결과 중 A등급 종목만 Slack으로 즉시 알림 발송.
+    B등급(대시보드 노출)/C등급(저장만)은 여기서 알림을 보내지 않고
+    signal_score_daily 테이블 저장만으로 처리(대시보드에서 등급 필터로 조회).
+    """
+    a_grade = [s for s in scores if s.get('grade') == 'A']
+    if not a_grade:
+        logger.info("[Signal Score] A등급 종목 없음 — Slack 알림 생략")
+        return
+
+    for s in a_grade:
+        text = (
+            f"🅰️ [Signal Score A등급] {s['name']}({s['code']}) 총점 {s['total']}점\n"
+            f"모멘텀 {s['momentum_score']} | 수급 {s['supply_demand_score']} | "
+            f"랭킹안정성 {s['rank_stability_score']} | 시장환경 {s['market_environment_score']} | "
+            f"리스크 {s['risk_penalty_score']}\n"
+            f"https://finance.naver.com/item/main.nhn?code={s['code']}"
+        )
+        send_slack_msg(text)
+        logger.info(f"[Signal Score] A등급 알림 발송: {s['name']}({s['code']}) {s['total']}점")
+
+
 def run_stock_monitor():
     logger.info("🚀 한국 주식 실시간 감시 시작!")
     init_db()
@@ -381,6 +404,14 @@ def run_stock_monitor():
                     fetch_stock_investor_daily(codes, date_str=now.strftime('%Y%m%d'))
                 last_market_cap_date = today_str
                 time.sleep(3)
+
+                # Signal Score 계산 + 저장 + A등급 Slack 알림
+                try:
+                    scores = get_signal_score_batch(fid_input_iscd='combined', save=True)
+                    logger.info(f"[Signal Score] {len(scores)}건 계산/저장 완료")
+                    send_signal_score_alerts(scores)
+                except Exception as e:
+                    logger.error(f"[Signal Score] 계산/알림 중 에러: {e}")
 
             stocks = get_stock_ranking()
             for stock in stocks:

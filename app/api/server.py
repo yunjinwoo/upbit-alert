@@ -14,7 +14,9 @@ from app.utils.db_manager import (
     get_stock_investor_raw,
     get_investor_ranking,
     get_investor_distribution,
-    get_investor_cross_distribution
+    get_investor_cross_distribution,
+    get_volume_ratio_batch,
+    get_volume_collection_status
 )
 from app.core.stock_monitor import fetch_market_cap_ranking, fetch_investor_trend, fetch_sector_index_daily, fetch_stock_investor_daily
 from app.config import Config
@@ -609,6 +611,31 @@ def investor_distribution_api():
             return jsonify({'status': 'error', 'message': 'date_from, date_to 필요'}), 400
         data = get_investor_distribution(date_from, date_to, investor, top_n)
         return jsonify({'status': 'success', 'data': data})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/volume-ratio')
+def volume_ratio_view():
+    """종목별 거래량 배수(당일 vs 평균) 페이지"""
+    return render_template('volume_ratio.html')
+
+@app.route('/api/volume-ratio')
+def volume_ratio_api():
+    try:
+        date         = request.args.get('date')
+        avg_days     = int(request.args.get('avg_days', 20))
+        top_n        = int(request.args.get('top_n', 50))
+        fid_input_iscd = request.args.get('market', 'combined')
+        data = get_volume_ratio_batch(date=date, avg_days=avg_days, fid_input_iscd=fid_input_iscd)
+        return jsonify({'status': 'success', 'date': (data[0]['date'] if data else date), 'data': data[:top_n]})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/volume-ratio/status')
+def volume_ratio_status_api():
+    try:
+        status = get_volume_collection_status()
+        return jsonify({'status': 'success', **status})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
