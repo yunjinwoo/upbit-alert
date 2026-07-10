@@ -35,6 +35,10 @@ class Config:
     SHEET_NAME = "py-upbit-alram"
     CREDENTIALS_FILE = "credentials.json"
 
+    # NotebookLM 연동용 별도 스프레드시트 (Signal Score 스냅샷 전용)
+    # 사용자 구글 계정에서 이 이름으로 미리 만들어 서비스 계정에 편집자로 공유해둬야 함
+    NOTEBOOK_SHEET_NAME = "Signal Score - NotebookLM"
+
     # API Server
     API_HOST = '0.0.0.0'
     API_PORT = 5000
