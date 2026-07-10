@@ -888,6 +888,110 @@ def get_supply_demand_score_batch(days: int = 3) -> list:
     return results
 
 
+def _get_index_score(sector_code: str, date: str) -> dict:
+    """시장 지수(코스피=0001/코스닥=1001) 당일 등락률 + 5영업일 추세로 점수(0~15점) 산출.
+    - 당일 등락률 양수 → +10
+    - 5영업일 전 종가 대비 오늘 종가가 높으면(상승 추세) → +5
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT date, close, change_rate FROM sector_index_daily
+        WHERE sector_code = ? AND date <= ?
+        ORDER BY date DESC LIMIT 6
+    ''', (sector_code, date))
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        return {'index_change_rate': None, 'index_trend_up': None, 'score': 0}
+
+    today = rows[0]
+    change_rate = float(today['change_rate']) if today['change_rate'] not in (None, '') else 0.0
+    score = 10 if change_rate > 0 else 0
+
+    trend_up = None
+    if len(rows) > 1:
+        oldest = rows[-1]
+        try:
+            trend_up = float(today['close']) > float(oldest['close'])
+        except (TypeError, ValueError):
+            trend_up = None
+        if trend_up:
+            score += 5
+
+    return {'index_change_rate': change_rate, 'index_trend_up': trend_up, 'score': score}
+
+
+def get_market_environment_score(code: str, date: str = None) -> dict:
+    """종목이 속한 시장(코스피/코스닥) 지수의 환경 점수(0~15점) 산출.
+    반환: {code, market, date, index_change_rate, index_trend_up, score}
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    if date:
+        cursor.execute('''
+            SELECT date, fid_input_iscd FROM stock_market_cap_daily
+            WHERE code = ? AND date = ? AND fid_input_iscd IN ('0001', '1001')
+            LIMIT 1
+        ''', (code, date))
+    else:
+        cursor.execute('''
+            SELECT date, fid_input_iscd FROM stock_market_cap_daily
+            WHERE code = ? AND fid_input_iscd IN ('0001', '1001')
+            ORDER BY date DESC LIMIT 1
+        ''', (code,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return {'code': code, 'market': None, 'date': None,
+                'index_change_rate': None, 'index_trend_up': None, 'score': 0}
+
+    idx = _get_index_score(row['fid_input_iscd'], row['date'])
+    return {'code': code, 'market': row['fid_input_iscd'], 'date': row['date'], **idx}
+
+
+def get_market_environment_score_batch(date: str = None, fid_input_iscd: str = "combined") -> list:
+    """특정 날짜(기본: 최신일) 기준, 전 종목의 시장 환경 점수를 일괄 계산.
+    같은 시장(코스피/코스닥) 종목은 지수 점수를 공유하므로 시장별로 한 번만 계산 후 매핑.
+    반환: [{code, name, market, date, index_change_rate, index_trend_up, score}, ...]
+    """
+    if not date:
+        date = get_latest_market_cap_date(fid_input_iscd)
+    if not date:
+        return []
+
+    if fid_input_iscd == "combined":
+        iscd_list = ("0001", "1001")
+    else:
+        iscd_list = (fid_input_iscd,)
+
+    market_scores = {iscd: _get_index_score(iscd, date) for iscd in iscd_list}
+
+    placeholders = ",".join("?" * len(iscd_list))
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(f'''
+        SELECT DISTINCT code, name, fid_input_iscd FROM stock_market_cap_daily
+        WHERE date = ? AND fid_input_iscd IN ({placeholders})
+    ''', (date, *iscd_list))
+    rows = cursor.fetchall()
+    conn.close()
+
+    results = []
+    for r in rows:
+        idx = market_scores.get(r['fid_input_iscd'], {'index_change_rate': None, 'index_trend_up': None, 'score': 0})
+        results.append({
+            'code': r['code'], 'name': r['name'], 'market': r['fid_input_iscd'], 'date': date,
+            **idx,
+        })
+    return results
+
+
 # Initialize DB on load
 init_db()
 
