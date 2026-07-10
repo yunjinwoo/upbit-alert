@@ -648,6 +648,86 @@ def get_volume_collection_status() -> dict:
     }
 
 
+def _score_momentum(ratio: float, change_rate: float) -> int:
+    """거래량 배수 + 등락률 조합 → 모멘텀 점수(0~30점).
+    거래량 급증(배수↑) + 가격 상승(등락률↑)이 동시에 나타날수록 고득점.
+    거래량은 늘었는데 가격이 빠지면(분산/이탈 신호) 낮은 점수로 처리.
+    """
+    if ratio >= 3 and change_rate > 3:
+        return 30
+    if ratio >= 3 and change_rate > 0:
+        return 25
+    if ratio >= 2 and change_rate > 1:
+        return 20
+    if ratio >= 2 and change_rate > 0:
+        return 15
+    if ratio >= 1.5 and change_rate > 0:
+        return 10
+    if ratio >= 2 and change_rate < 0:
+        return 5
+    return 0
+
+
+def get_momentum_score(code: str, avg_days: int = 20) -> dict:
+    """종목 하나의 모멘텀 점수(거래량 배수 + 당일 등락률 조합, 0~30점) 산출.
+    반환: {code, date, ratio, change_rate, score, days_used}
+    """
+    ratio_info = get_volume_ratio(code, avg_days=avg_days)
+    if not ratio_info['date']:
+        return {**ratio_info, 'change_rate': None, 'score': 0}
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT change_rate FROM stock_market_cap_daily
+        WHERE code = ? AND date = ? LIMIT 1
+    ''', (code, ratio_info['date']))
+    row = cursor.fetchone()
+    conn.close()
+
+    change_rate = float(row['change_rate']) if row and row['change_rate'] not in (None, '') else 0.0
+    score = _score_momentum(ratio_info['ratio'], change_rate)
+
+    return {
+        'code': code,
+        'date': ratio_info['date'],
+        'ratio': ratio_info['ratio'],
+        'change_rate': change_rate,
+        'score': score,
+        'days_used': ratio_info['days_used'],
+    }
+
+
+def get_momentum_score_batch(date: str = None, avg_days: int = 20, fid_input_iscd: str = "combined") -> list:
+    """특정 날짜(기본: 최신일) 기준, 전 종목의 모멘텀 점수를 일괄 계산.
+    반환: [{code, name, date, ratio, change_rate, score, days_used}, ...] 점수 내림차순 정렬
+    """
+    if not date:
+        date = get_latest_market_cap_date(fid_input_iscd)
+    if not date:
+        return []
+
+    ratio_rows = get_volume_ratio_batch(date=date, avg_days=avg_days, fid_input_iscd=fid_input_iscd)
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT code, change_rate FROM stock_market_cap_daily WHERE date = ?', (date,))
+    change_map = {r['code']: r['change_rate'] for r in cursor.fetchall()}
+    conn.close()
+
+    results = []
+    for r in ratio_rows:
+        cr = change_map.get(r['code'])
+        change_rate = float(cr) if cr not in (None, '') else 0.0
+        score = _score_momentum(r['ratio'], change_rate)
+        results.append({**r, 'change_rate': change_rate, 'score': score})
+
+    results.sort(key=lambda x: x['score'], reverse=True)
+    return results
+
+
 # Initialize DB on load
 init_db()
 

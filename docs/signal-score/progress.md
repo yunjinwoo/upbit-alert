@@ -13,7 +13,7 @@
 | 순서 | 작업 | 상태 | 비고 |
 |---|---|---|---|
 | 1 | 종목별 20일 평균 거래량 대비 당일 거래량 배수 계산 함수 | ✅ 완료 (2026-07-09) | `volume` 컬럼 신규 추가 필요했음. 상세: [step1-volume-ratio.md](step1-volume-ratio.md) |
-| 2 | 모멘텀 점수(거래량+등락률) 산출 함수 | 대기 | 1번 결과 + 등락률 조합, 30점 만점 |
+| 2 | 모멘텀 점수(거래량+등락률) 산출 함수 | ✅ 완료 (2026-07-10) | 상세: [step2-momentum-score.md](step2-momentum-score.md) |
 | 3 | 수급 점수(외국인/기관 3일 누적) 산출 함수 | 대기 | 기존 `get_investor_ranking` 등 재사용, 30점 만점 |
 | 4 | 시총/랭킹 안정성 점수 산출 함수 | 대기 | `stock_market_cap_daily` 랭킹 변화 diff 계산 추가, 15점 만점 |
 | 5 | 시장/업종 환경 점수 산출 함수 | 대기 | `sector_index_daily` 활용, 15점 만점 |
@@ -31,3 +31,5 @@
 ## 로그
 - 2026-07-09: 문서 생성, 작업 순서 정리.
 - 2026-07-09: 1번 작업(거래량 배수 계산 함수) 완료. 상세 내용은 [step1-volume-ratio.md](step1-volume-ratio.md) 참고.
+- 2026-07-10: `feature/signal-score` 브랜치 생성, 1번 작업 커밋(`a2d1e98`).
+- 2026-07-10: 2번 작업(모멘텀 점수 산출 함수) 완료. 상세 내용은 [step2-momentum-score.md](step2-momentum-score.md) 참고.
