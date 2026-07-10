@@ -93,65 +93,77 @@ def fetch_sector_index_daily(iscd="0001", base_date=None):
         return []
 
 
-def fetch_market_cap_ranking(mrkt_div_code="J", input_iscd="0000", div_cls_code="0"):
-    """시가총액 순위 종목 조회 (일별 1회 수집)"""
+def fetch_market_cap_ranking(mrkt_div_code="J", input_iscd="0000", div_cls_code="0", max_retries=2):
+    """시가총액 순위 종목 조회 (일별 1회 수집).
+    401(토큰 만료)/일시적 오류 시 토큰을 재발급하고 최대 max_retries회까지 재시도한다.
+    (2026-07-09 코스피만 수집 누락된 사고 — 재시도 없이 그냥 넘어가던 게 원인)
+    반환: 저장 성공 여부(bool)
+    """
+    global ACCESS_TOKEN
     if ACCESS_TOKEN is None:
         get_access_token()
     if ACCESS_TOKEN is None:
         logger.error("❌ KIS API 토큰이 없어 시가총액 데이터를 가져올 수 없습니다.")
-        return
+        return False
 
     url = f"{Config.KIS_URL_BASE}/uapi/domestic-stock/v1/ranking/market-cap"
 
-    header_obj = RequestHeader(
-        authorization=f"Bearer {ACCESS_TOKEN}",
-        appkey=Config.KIS_APP_KEY,
-        appsecret=Config.KIS_APP_SECRET,
-        tr_id="FHPST01740000",
-        custtype="P"
-    )
+    for attempt in range(1, max_retries + 1):
+        header_obj = RequestHeader(
+            authorization=f"Bearer {ACCESS_TOKEN}",
+            appkey=Config.KIS_APP_KEY,
+            appsecret=Config.KIS_APP_SECRET,
+            tr_id="FHPST01740000",
+            custtype="P"
+        )
 
-    param_obj = MarketCapQueryParam(
-        fid_cond_mrkt_div_code=mrkt_div_code,
-        fid_input_iscd=input_iscd,
-        fid_div_cls_code=div_cls_code,
-    )
-    
-    logger.info("📡 [일별] 시가총액 순위 데이터 호출 중...")
+        param_obj = MarketCapQueryParam(
+            fid_cond_mrkt_div_code=mrkt_div_code,
+            fid_input_iscd=input_iscd,
+            fid_div_cls_code=div_cls_code,
+        )
 
-    try:
-        full_headers = header_obj.to_dict()
-        full_params = asdict(param_obj)
+        logger.info(f"📡 [일별] 시가총액 순위 데이터 호출 중... (iscd={input_iscd}, 시도 {attempt}/{max_retries})")
 
-        res = requests.get(url, headers=full_headers, params=full_params)
-        raw_json = res.json() # 응답을 먼저 JSON으로 파싱
+        try:
+            full_headers = header_obj.to_dict()
+            full_params = asdict(param_obj)
 
-        # KIS 시가총액 API의 원본 응답을 상세히 로깅
-        logger.info(f"--- [DEBUG] KIS 시가총액 API 원본 응답 (Status: {res.status_code}) ---")
-        logger.info(json.dumps(raw_json, ensure_ascii=False, indent=4))
-        logger.info("-------------------------------------------------------")
+            res = requests.get(url, headers=full_headers, params=full_params, timeout=10)
+            raw_json = res.json() # 응답을 먼저 JSON으로 파싱
 
-        if res.status_code == 200:
-            response_obj = MarketCapRankingResponse.from_json(raw_json) # 새로 정의한 모델 사용
-            
-            # API 타입과 함께 원본 데이터 DB에 저장
-            output_data = raw_json.get("output", [])
-            save_stock_raw_data(output_data, api_type="Market Cap Ranking")
+            # KIS 시가총액 API의 원본 응답을 상세히 로깅
+            logger.info(f"--- [DEBUG] KIS 시가총액 API 원본 응답 (Status: {res.status_code}) ---")
+            logger.info(json.dumps(raw_json, ensure_ascii=False, indent=4))
+            logger.info("-------------------------------------------------------")
 
-            if response_obj.rt_cd != "0":
-                logger.error(f"❌ KIS API 에러 (시가총액): {response_obj.msg1} ({response_obj.msg_cd})")
-                return
-            
-            parsed_output_data = response_obj.output
-            save_daily_market_cap(parsed_output_data, fid_input_iscd=input_iscd)
-            logger.info(f"✅ 일별 시가총액 순위 데이터 저장 성공 ({len(parsed_output_data)}건)")
-        elif res.status_code == 401:
-            logger.info("🔑 토큰 만료! 재발급을 시도합니다.")
-            get_access_token()
-        else:
-            logger.error(f"❌ 실패 (시가총액)! {res.status_code} - {res.text}")
-    except Exception as e:
-        logger.error(f"🔥 에러 (시가총액): {e}")
+            if res.status_code == 200:
+                response_obj = MarketCapRankingResponse.from_json(raw_json) # 새로 정의한 모델 사용
+
+                # API 타입과 함께 원본 데이터 DB에 저장
+                output_data = raw_json.get("output", [])
+                save_stock_raw_data(output_data, api_type="Market Cap Ranking")
+
+                if response_obj.rt_cd != "0":
+                    logger.error(f"❌ KIS API 에러 (시가총액): {response_obj.msg1} ({response_obj.msg_cd})")
+                else:
+                    parsed_output_data = response_obj.output
+                    save_daily_market_cap(parsed_output_data, fid_input_iscd=input_iscd)
+                    logger.info(f"✅ 일별 시가총액 순위 데이터 저장 성공 ({len(parsed_output_data)}건)")
+                    return True
+            elif res.status_code == 401:
+                logger.info("🔑 토큰 만료! 재발급을 시도합니다.")
+                get_access_token()
+            else:
+                logger.error(f"❌ 실패 (시가총액)! {res.status_code} - {res.text}")
+        except Exception as e:
+            logger.error(f"🔥 에러 (시가총액): {e}")
+
+        if attempt < max_retries:
+            time.sleep(2)
+
+    logger.error(f"❌ 시가총액 수집 최종 실패 (iscd={input_iscd}, {max_retries}회 시도 모두 실패)")
+    return False
 
 def get_stock_ranking():
     """상승률 순위 종목 조회 (국내주식 등락률 순위)"""
@@ -392,26 +404,35 @@ def run_stock_monitor():
                 continue
 
             # 일 1회 시가총액 데이터 수집 + 종목별 투자자 수집 (오후 3시 40분쯤, 장 마감 후)
+            # 코스피/코스닥 중 하나라도 수집 실패하면 last_market_cap_date를 갱신하지 않아
+            # 다음 루프(약 2분 후)에 전체를 재시도한다 (2026-07-09 코스피 누락 사고 재발 방지).
             if now.hour == 15 and now.minute >= 40 and last_market_cap_date != today_str:
                 from app.utils.db_manager import get_market_cap_history
+                all_ok = True
                 for iscd in ('0001', '1001'):
-                    fetch_market_cap_ranking(mrkt_div_code='J', input_iscd=iscd)
+                    ok = fetch_market_cap_ranking(mrkt_div_code='J', input_iscd=iscd)
+                    if not ok:
+                        all_ok = False
                     time.sleep(2)
-                # 시총 상위 종목 코드 추출 → 투자자 데이터 수집
-                cap_rows = get_market_cap_history(limit_dates=1, fid_input_iscd='combined')
-                codes = [(r['code'], r['name']) for r in cap_rows]
-                if codes:
-                    fetch_stock_investor_daily(codes, date_str=now.strftime('%Y%m%d'))
-                last_market_cap_date = today_str
-                time.sleep(3)
 
-                # Signal Score 계산 + 저장 + A등급 Slack 알림
-                try:
-                    scores = get_signal_score_batch(fid_input_iscd='combined', save=True)
-                    logger.info(f"[Signal Score] {len(scores)}건 계산/저장 완료")
-                    send_signal_score_alerts(scores)
-                except Exception as e:
-                    logger.error(f"[Signal Score] 계산/알림 중 에러: {e}")
+                if not all_ok:
+                    logger.warning("⚠️ 시가총액 수집 일부 실패 — last_market_cap_date 갱신 보류, 다음 루프에서 재시도합니다.")
+                else:
+                    # 시총 상위 종목 코드 추출 → 투자자 데이터 수집
+                    cap_rows = get_market_cap_history(limit_dates=1, fid_input_iscd='combined')
+                    codes = [(r['code'], r['name']) for r in cap_rows]
+                    if codes:
+                        fetch_stock_investor_daily(codes, date_str=now.strftime('%Y%m%d'))
+                    last_market_cap_date = today_str
+                    time.sleep(3)
+
+                    # Signal Score 계산 + 저장 + A등급 Slack 알림
+                    try:
+                        scores = get_signal_score_batch(fid_input_iscd='combined', save=True)
+                        logger.info(f"[Signal Score] {len(scores)}건 계산/저장 완료")
+                        send_signal_score_alerts(scores)
+                    except Exception as e:
+                        logger.error(f"[Signal Score] 계산/알림 중 에러: {e}")
 
             stocks = get_stock_ranking()
             for stock in stocks:

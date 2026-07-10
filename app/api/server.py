@@ -175,13 +175,24 @@ def fetch_market_cap_api():
     try:
         data = request.get_json(silent=True) or {}
         div_cls_code = data.get('div_cls_code', '0')
-        # 거래소(0001) + 코스닥(1001) 순차 수집
+        # 거래소(0001) + 코스닥(1001) 순차 수집 (각각 내부적으로 재시도됨)
+        results = {}
         for iscd in ('0001', '1001'):
-            fetch_market_cap_ranking(mrkt_div_code='J', input_iscd=iscd, div_cls_code=div_cls_code)
+            results[iscd] = fetch_market_cap_ranking(mrkt_div_code='J', input_iscd=iscd, div_cls_code=div_cls_code)
         import time; time.sleep(1)
+
+        failed = [iscd for iscd, ok in results.items() if not ok]
+        if failed:
+            return jsonify({
+                "status": "error",
+                "message": f"시가총액 데이터 수집 일부 실패 (실패: {', '.join(failed)})",
+                "results": results
+            }), 500
+
         return jsonify({
             "status": "success",
-            "message": "시가총액 데이터 수집이 성공적으로 완료되었습니다."
+            "message": "시가총액 데이터 수집이 성공적으로 완료되었습니다.",
+            "results": results
         })
     except Exception as e:
         return jsonify({
