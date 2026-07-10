@@ -814,6 +814,80 @@ def get_rank_stability_score_batch(date: str = None, trend_days: int = 5, fid_in
     return results
 
 
+def _score_supply_demand(frgn_total: int, orgn_total: int) -> int:
+    """외국인/기관 N일 누적 순매수 조합 → 수급 점수(-15~30점).
+    둘 다 순매수면 고득점, 하나만 순매수면 중간 점수, 둘 다 순매도(동반 이탈)면 감점.
+    """
+    if frgn_total > 0 and orgn_total > 0:
+        return 30
+    if frgn_total > 0 or orgn_total > 0:
+        return 15
+    if frgn_total < 0 and orgn_total < 0:
+        return -15
+    return 0
+
+
+def get_supply_demand_score(code: str, days: int = 3) -> dict:
+    """종목 하나의 외국인/기관 N일(기본 3일) 누적 순매수 기반 수급 점수(-15~30점) 산출.
+    반환: {code, date_from, date_to, frgn_total, orgn_total, days_used, score}
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT date,
+               CAST(frgn_ntby_tr_pbmn AS INTEGER) AS frgn,
+               CAST(orgn_ntby_tr_pbmn AS INTEGER) AS orgn
+        FROM stock_investor_daily
+        WHERE code = ?
+        ORDER BY date DESC
+        LIMIT ?
+    ''', (code, days))
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        return {'code': code, 'date_from': None, 'date_to': None,
+                'frgn_total': 0, 'orgn_total': 0, 'days_used': 0, 'score': 0}
+
+    frgn_total = sum(r['frgn'] for r in rows)
+    orgn_total = sum(r['orgn'] for r in rows)
+
+    return {
+        'code': code,
+        'date_from': rows[-1]['date'],
+        'date_to': rows[0]['date'],
+        'frgn_total': frgn_total,
+        'orgn_total': orgn_total,
+        'days_used': len(rows),
+        'score': _score_supply_demand(frgn_total, orgn_total),
+    }
+
+
+def get_supply_demand_score_batch(days: int = 3) -> list:
+    """stock_investor_daily에 데이터가 있는 전 종목의 수급 점수를 일괄 계산.
+    반환: [{code, name, date_from, date_to, frgn_total, orgn_total, days_used, score}, ...] 점수 내림차순
+    (참고: 투자자매매동향은 시총 상위 종목만 수집되므로 전체 상장 종목이 아님)
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT DISTINCT code, name FROM stock_investor_daily')
+    stocks = [(r['code'], r['name']) for r in cursor.fetchall()]
+    conn.close()
+
+    results = []
+    for code, name in stocks:
+        info = get_supply_demand_score(code, days=days)
+        if info['days_used'] == 0:
+            continue
+        info['name'] = name
+        results.append(info)
+
+    results.sort(key=lambda x: x['score'], reverse=True)
+    return results
+
+
 # Initialize DB on load
 init_db()
 
