@@ -48,3 +48,5 @@ class Config:
     # 데이터 동기화 설정
     SYNC_ALLOWED_IPS = [ip.strip() for ip in os.getenv("SYNC_ALLOWED_IPS", "127.0.0.1").split(",") if ip.strip()]
     SYNC_TOKEN_TTL = 600  # 세션 유효시간(초) — 10분
+    SYNC_SERVER_URL = os.getenv("SYNC_SERVER_URL", "http://49.247.202.50/upbit")  # 동기화 관리 페이지 기본값과 동일
+    SYNC_AUTO_LIMIT = 7  # 자동 동기화 시 전송할 최근 날짜 수
