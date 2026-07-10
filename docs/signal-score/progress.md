@@ -19,7 +19,7 @@
 | 5 | 시장/업종 환경 점수 산출 함수 | ✅ 완료 (2026-07-10) | 상세: [step5-market-environment-score.md](step5-market-environment-score.md) |
 | 6 | 리스크 패널티 함수 | ✅ 완료 (2026-07-10) | 상세: [step6-risk-penalty.md](step6-risk-penalty.md) |
 | 7 | 종합 Signal Score 통합 + A/B/C 등급 분기 | ✅ 완료 (2026-07-10) | 상세: [step7-signal-score-integration.md](step7-signal-score-integration.md) |
-| 8 | 주식 알림 Slack 연동 배선 | 대기 | 코인용 `send_slack_msg` 재사용, 등급별 알림 조건 연결 |
+| 8 | 주식 알림 Slack 연동 배선 | ✅ 완료 (2026-07-10) | 상세: [step8-slack-integration.md](step8-slack-integration.md) |
 | 9 | 투자자 매매동향 수집 대상 전종목 확대 (선택) | 대기 | API 호출량/레이트리밋 고려 필요 |
 
 ## 상태 값 정의
@@ -39,4 +39,5 @@
 - 2026-07-10: 5번 작업(시장/업종 환경 점수 산출 함수) 완료. 상세 내용은 [step5-market-environment-score.md](step5-market-environment-score.md) 참고. `sector_index_daily`(코스피/코스닥 지수)는 07-09 누락 없이 정상 수집되어 있어 실제 데이터로 검증함.
 - 2026-07-10: 2·3·4·5번 작업을 단계별로 분리해서 커밋함(`a907755`, `60ce93b`, `12b5606`, `5b12041`).
 - 2026-07-10: 6번 작업(리스크 패널티 함수) 완료. 상세 내용은 [step6-risk-penalty.md](step6-risk-penalty.md) 참고. 커밋(`2386b08`).
-- 2026-07-10: 7번 작업(종합 Signal Score 통합 + 등급 분기) 완료. 상세 내용은 [step7-signal-score-integration.md](step7-signal-score-integration.md) 참고. 코스닥 30종목 실제 데이터로 검증 — 거래량 데이터 미누적으로 현재는 최대 C등급까지만 나옴(예상된 결과).
+- 2026-07-10: 7번 작업(종합 Signal Score 통합 + 등급 분기) 완료. 상세 내용은 [step7-signal-score-integration.md](step7-signal-score-integration.md) 참고. 코스닥 30종목 실제 데이터로 검증 — 거래량 데이터 미누적으로 현재는 최대 C등급까지만 나옴(예상된 결과). 커밋(`d4d171c`).
+- 2026-07-10: 8번 작업(주식 알림 Slack 연동 배선) 완료. 상세 내용은 [step8-slack-integration.md](step8-slack-integration.md) 참고. 실제 Slack 웹훅이 설정되어 있어 A등급 없는 상태로 안전하게 실행 검증만 하고, 실제 발송은 트리거하지 않음.
