@@ -7,6 +7,7 @@ from app.config import Config
 from app.utils.db_manager import save_stock_alert_to_db, init_db, save_api_token, get_api_token, save_stock_raw_data, save_daily_market_cap, save_daily_investor_trend, save_stock_investor_daily, save_sector_index_daily, get_signal_score_batch
 from app.core.kis_models import RequestHeader, RequestQueryParam, MarketCapQueryParam, FluctuationRankingResponse, MarketCapRankingResponse, StockInvestorDailyItem
 from app.core.upbit_monitor import send_slack_msg
+from app.utils.google_sheets import save_signal_score_to_sheet
 from app.utils.logger import get_logger
 
 logger = get_logger()
@@ -426,11 +427,12 @@ def run_stock_monitor():
                     last_market_cap_date = today_str
                     time.sleep(3)
 
-                    # Signal Score 계산 + 저장 + A등급 Slack 알림
+                    # Signal Score 계산 + 저장 + A등급 Slack 알림 + 구글시트 스냅샷(NotebookLM 연동용)
                     try:
                         scores = get_signal_score_batch(fid_input_iscd='combined', save=True)
                         logger.info(f"[Signal Score] {len(scores)}건 계산/저장 완료")
                         send_signal_score_alerts(scores)
+                        save_signal_score_to_sheet(scores)
                     except Exception as e:
                         logger.error(f"[Signal Score] 계산/알림 중 에러: {e}")
 
