@@ -9,7 +9,7 @@
         body { background-color: #f4f7f6; font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; }
         .main-navbar { background-color: #1a1a2e; }
         .main-navbar .navbar-brand { color: #fff; font-weight: bold; }
-        .main-navbar .nav-link { color: rgba(255,255,255,0.75) !important; }
+        .main-navbar .nav-link { color: rgba(255,255,255,0.75) !important; font-size: 0.82rem; }
         .main-navbar .nav-link:hover,
         .main-navbar .nav-link.active { color: #fff !important; }
         .main-navbar .nav-link.active { border-bottom: 2px solid #4da6ff; }
@@ -46,6 +46,8 @@
         <a href="{{ url_for('volume_ratio_view') }}" class="nav-link">거래량 배수</a>
         <a href="{{ url_for('sector_index_view') }}" class="nav-link">업종 일자별지수</a>
         <a href="{{ url_for('ranking_preview_view') }}" class="nav-link">순위분석 미리보기</a>
+        <a href="{{ url_for('hts_top_view_view') }}" class="nav-link">HTS조회상위</a>
+        <a href="{{ url_for('signal_score_preview_view') }}" class="nav-link">Signal Score 발송 미리보기</a>
         <a href="{{ url_for('raw_data_view') }}" class="nav-link">원본 데이터</a>
         <a href="/grid" class="nav-link">리비전 관리</a>
         <a href="{{ url_for("history_view") }}" class="nav-link">히스토리</a>
@@ -110,6 +112,53 @@
                 <button id="blockBtn" onclick="setBlock(true)" class="btn btn-danger btn-sm">차단</button>
                 <button id="unblockBtn" onclick="setBlock(false)" class="btn btn-success btn-sm">허용</button>
             </div>
+        </div>
+    </div>
+
+    <!-- 스케줄링 처리 로그 -->
+    <div class="card-panel">
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+            <h5 class="mb-0">🗓 스케줄링 처리 로그</h5>
+            <div class="d-flex align-items-center gap-2">
+                <label class="form-label small mb-0">최근</label>
+                <select id="jobLogDays" class="form-select form-select-sm" style="width:80px" onchange="loadJobLog()">
+                    <option value="1">1일</option>
+                    <option value="3">3일</option>
+                    <option value="7" selected>7일</option>
+                    <option value="30">30일</option>
+                </select>
+                <button onclick="loadJobLog()" class="btn btn-outline-primary btn-sm">새로고침</button>
+            </div>
+        </div>
+
+        <!-- 수동실행 -->
+        <div class="d-flex flex-wrap gap-2 mb-3">
+            <button class="btn btn-warning btn-sm text-dark" data-job="hts_top_view" onclick="runJobManual(this)">▶ HTS조회상위 실행</button>
+            <button class="btn btn-warning btn-sm text-dark" data-job="investor_trend" onclick="runJobManual(this)">▶ 투자자매매동향 실행</button>
+            <button class="btn btn-warning btn-sm text-dark" data-job="sector_index" onclick="runJobManual(this)">▶ 업종지수 실행</button>
+            <button class="btn btn-warning btn-sm text-dark" data-job="market_cap_signal_score" onclick="runJobManual(this)">▶ 시가총액+Signal Score 실행</button>
+            <button class="btn btn-warning btn-sm text-dark" data-job="remote_sync" onclick="runJobManual(this)">▶ 원격동기화 실행</button>
+        </div>
+        <div class="text-muted small mb-2">⚠️ 수동실행은 미리보기가 아니라 즉시 실행입니다 — 실제로 KIS API를 호출하고 DB에 저장됩니다(Signal Score는 A등급 시 Slack도 발송됩니다).</div>
+
+        <div class="table-responsive">
+            <table class="table table-sm table-hover align-middle mb-0">
+                <thead class="table-dark">
+                    <tr>
+                        <th>내용</th>
+                        <th>한국투자 API</th>
+                        <th>시작 시각</th>
+                        <th>종료 시각</th>
+                        <th>소요시간</th>
+                        <th class="text-end">처리건수</th>
+                        <th>트리거</th>
+                        <th>성공여부</th>
+                    </tr>
+                </thead>
+                <tbody id="jobLogBody">
+                    <tr><td colspan="8" class="text-center text-muted py-3">조회 중...</td></tr>
+                </tbody>
+            </table>
         </div>
     </div>
 
@@ -262,7 +311,67 @@
     }
 
     async function refresh() {
-        await Promise.all([loadStatus(), loadSessions(), loadDbStats()]);
+        await Promise.all([loadStatus(), loadSessions(), loadDbStats(), loadJobLog()]);
+    }
+
+    // ── 스케줄링 처리 로그 ──────────────────────────────
+    async function loadJobLog() {
+        const days = document.getElementById('jobLogDays').value;
+        const tbody = document.getElementById('jobLogBody');
+        try {
+            const res = await fetch(`api/job-log?days=${days}`);
+            const result = await res.json();
+            if (result.status !== 'success') throw new Error(result.message);
+
+            const rows = result.data || [];
+            if (!rows.length) {
+                tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-3">최근 ' + days + '일간 실행 이력이 없습니다.</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = rows.map(r => {
+                const successBadge = r.success
+                    ? '<span class="badge bg-success">성공</span>'
+                    : `<span class="badge bg-danger" title="${(r.error_message || '').replace(/"/g, '&quot;')}">실패</span>`;
+                const triggerBadge = r.trigger_type === 'manual'
+                    ? '<span class="badge bg-info text-dark">수동</span>'
+                    : '<span class="badge bg-secondary">자동</span>';
+                const duration = r.duration_sec != null ? `${Number(r.duration_sec).toFixed(1)}초` : '-';
+                const count = r.count != null ? Number(r.count).toLocaleString() : '-';
+                return `<tr>
+                    <td>${r.description || r.job_name}</td>
+                    <td class="text-muted font-monospace" style="font-size:0.75rem">${r.api_used || '-'}</td>
+                    <td>${r.start_time || '-'}</td>
+                    <td>${r.end_time || '-'}</td>
+                    <td>${duration}</td>
+                    <td class="text-end">${count}</td>
+                    <td>${triggerBadge}</td>
+                    <td>${successBadge}</td>
+                </tr>`;
+            }).join('');
+        } catch (e) {
+            tbody.innerHTML = `<tr><td colspan="8" class="text-center text-danger py-3">조회 실패: ${e.message}</td></tr>`;
+        }
+    }
+
+    async function runJobManual(btn) {
+        const jobName = btn.dataset.job;
+        const originalText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = '실행 중...';
+        try {
+            const res = await fetch(`api/job-log/run/${jobName}`, { method: 'POST' });
+            const result = await res.json();
+            if (result.status !== 'success') {
+                alert(`실행 실패: ${result.message || '알 수 없는 오류'}`);
+            }
+            await loadJobLog();
+        } catch (e) {
+            alert(`실행 중 오류: ${e.message}`);
+        } finally {
+            btn.disabled = false;
+            btn.textContent = originalText;
+        }
     }
 
     refresh();

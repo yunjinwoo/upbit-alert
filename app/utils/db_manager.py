@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import json
 from typing import List
@@ -175,6 +175,41 @@ def init_db():
         )
     ''')
 
+    # HTS조회상위20종목 시간별 저장 테이블
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS stock_hts_top_view_hourly (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT,
+            hour INTEGER,
+            rank INTEGER,
+            code TEXT,
+            market_div TEXT,
+            name TEXT,
+            price TEXT,
+            change_rate TEXT,
+            prdy_vrss TEXT,
+            timestamp TEXT,
+            UNIQUE(date, hour, code)
+        )
+    ''')
+
+    # 스케줄링 작업 실행 이력 (동기화 관리 페이지 "처리 로그"용)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS job_run_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_name TEXT,
+            description TEXT,
+            api_used TEXT,
+            start_time TEXT,
+            end_time TEXT,
+            duration_sec REAL,
+            success INTEGER,
+            count INTEGER,
+            error_message TEXT,
+            trigger_type TEXT
+        )
+    ''')
+
     # 기존 테이블 컬럼 마이그레이션
     migrations = [
         'ALTER TABLE stock_market_cap_daily ADD COLUMN market_weight TEXT DEFAULT "0"',
@@ -183,6 +218,7 @@ def init_db():
         'ALTER TABLE stock_raw_data ADD COLUMN api_type TEXT DEFAULT "UNKNOWN"',
         'CREATE UNIQUE INDEX IF NOT EXISTS idx_mktcap_unique ON stock_market_cap_daily(date, code, fid_input_iscd)',
         'CREATE UNIQUE INDEX IF NOT EXISTS idx_invtrend_unique ON investor_trend_daily(date, exch_div, mrkt_div, invr_cls_code)',
+        'ALTER TABLE stock_hts_top_view_hourly ADD COLUMN prdy_vrss TEXT',
     ]
     for sql in migrations:
         try:
@@ -574,6 +610,161 @@ def get_latest_market_cap_date(fid_input_iscd: str = "combined") -> str:
     row = cursor.fetchone()
     conn.close()
     return row[0] if row and row[0] else ""
+
+
+def save_hts_top_view(items: list, date: str, hour: int):
+    """HTS조회상위20종목 시간별 스냅샷 저장 (같은 date+hour 데이터는 덮어쓰기).
+    items: [{rank, code, market_div, name, price, change_rate, prdy_vrss}, ...]
+    prdy_vrss(전일대비, 부호 포함)는 전일종가 = price - prdy_vrss 로 프론트에서 역산해 참고용으로 보여주는 데 쓰인다.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    cursor.execute('DELETE FROM stock_hts_top_view_hourly WHERE date = ? AND hour = ?', (date, hour))
+
+    insert_data = [
+        (date, hour, it['rank'], it['code'], it['market_div'], it.get('name'), it.get('price'), it.get('change_rate'),
+         it.get('prdy_vrss'), timestamp)
+        for it in items
+    ]
+    cursor.executemany('''
+        INSERT INTO stock_hts_top_view_hourly (date, hour, rank, code, market_div, name, price, change_rate, prdy_vrss, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', insert_data)
+
+    conn.commit()
+    conn.close()
+
+
+def get_hts_top_view_history(date: str = None, limit_snapshots: int = 24):
+    """HTS조회상위20종목 이력 조회. date 지정 시 해당 날짜 전체, 미지정 시 최근 limit_snapshots개 (date,hour) 스냅샷."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    if date:
+        cursor.execute('''
+            SELECT * FROM stock_hts_top_view_hourly
+            WHERE date = ?
+            ORDER BY hour DESC, rank ASC
+        ''', (date,))
+    else:
+        cursor.execute('''
+            SELECT * FROM stock_hts_top_view_hourly
+            WHERE (date, hour) IN (
+                SELECT DISTINCT date, hour FROM stock_hts_top_view_hourly
+                ORDER BY date DESC, hour DESC LIMIT ?
+            )
+            ORDER BY date DESC, hour DESC, rank ASC
+        ''', (limit_snapshots,))
+
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_hts_top_view_cumulative(date_from: str, date_to: str):
+    """HTS조회상위20종목 구간 누적 점수 조회 (date_from~date_to 포함).
+    스냅샷마다 순위 기준 (20 - rank)점을 부여해 종목별로 합산 — 여러 시간대에 걸쳐
+    꾸준히 상위권에 머문 종목일수록 높은 점수. 점수 내림차순 정렬.
+    반환: [{code, market_div, name, score, appearances, best_rank}, ...]
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT code,
+               MAX(market_div) AS market_div,
+               MAX(name) AS name,
+               SUM(20 - rank) AS score,
+               COUNT(*) AS appearances,
+               MIN(rank) AS best_rank
+        FROM stock_hts_top_view_hourly
+        WHERE date BETWEEN ? AND ?
+        GROUP BY code
+        ORDER BY score DESC
+    ''', (date_from, date_to))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_hts_top_view_daily_scores(date_from: str, date_to: str):
+    """HTS조회상위20종목 구간 내 날짜별 합산 점수 조회 (date_from~date_to 포함).
+    get_hts_top_view_cumulative와 같은 (20-rank) 점수 방식이지만, 구간 전체를 하나로 합치지 않고
+    날짜 단위로 따로 집계한다 — 날짜별 순위 매트릭스를 만들 때 사용.
+    반환: [{code, market_div, name, date, score, appearances}, ...] (날짜 오름차순, 날짜 내 점수 내림차순)
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT code,
+               date,
+               MAX(market_div) AS market_div,
+               MAX(name) AS name,
+               SUM(20 - rank) AS score,
+               COUNT(*) AS appearances
+        FROM stock_hts_top_view_hourly
+        WHERE date BETWEEN ? AND ?
+        GROUP BY code, date
+        ORDER BY date ASC, score DESC
+    ''', (date_from, date_to))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def save_job_run_log(job_name: str, description: str, api_used: str, start_time: str, end_time: str,
+                      success: bool, count: int = None, error_message: str = None, trigger_type: str = 'auto'):
+    """스케줄링 작업(자동/수동) 실행 결과 1건 기록.
+    start_time/end_time: '%Y-%m-%d %H:%M:%S' 형식 문자열.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    duration_sec = None
+    try:
+        fmt = '%Y-%m-%d %H:%M:%S'
+        duration_sec = (datetime.strptime(end_time, fmt) - datetime.strptime(start_time, fmt)).total_seconds()
+    except (ValueError, TypeError):
+        pass
+
+    cursor.execute('''
+        INSERT INTO job_run_log
+            (job_name, description, api_used, start_time, end_time, duration_sec, success, count, error_message, trigger_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (job_name, description, api_used, start_time, end_time, duration_sec,
+          1 if success else 0, count, error_message, trigger_type))
+
+    conn.commit()
+    conn.close()
+
+
+def get_job_run_log(days: int = 7, job_name: str = None, limit: int = 500) -> list:
+    """최근 N일치 작업 실행 이력 조회 (최신순)."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    since = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
+    if job_name:
+        cursor.execute('''
+            SELECT * FROM job_run_log
+            WHERE start_time >= ? AND job_name = ?
+            ORDER BY start_time DESC LIMIT ?
+        ''', (since, job_name, limit))
+    else:
+        cursor.execute('''
+            SELECT * FROM job_run_log
+            WHERE start_time >= ?
+            ORDER BY start_time DESC LIMIT ?
+        ''', (since, limit))
+
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
 
 
 def get_volume_ratio(code: str, avg_days: int = 20) -> dict:
