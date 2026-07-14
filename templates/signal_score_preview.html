@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Signal Score 발송 미리보기</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f4f7f6; font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; }
+        .main-navbar { background-color: #1a1a2e; }
+        .main-navbar .navbar-brand { color: #fff; font-weight: bold; }
+        .main-navbar .nav-link { color: rgba(255,255,255,0.75) !important; font-size: 0.82rem; }
+        .main-navbar .nav-link:hover,
+        .main-navbar .nav-link.active { color: #fff !important; }
+        .main-navbar .nav-link.active { border-bottom: 2px solid #4da6ff; }
+
+        .dashboard-container { margin-top: 30px; margin-bottom: 50px; }
+        .card-panel { background: white; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); padding: 20px 24px; }
+        #scoreTable td, #scoreTable th { white-space: nowrap; font-size: 0.85rem; }
+
+        .grade-card { border-radius: 12px; padding: 16px 20px; color: #fff; text-align: center; }
+        .grade-card .grade-count { font-size: 2rem; font-weight: bold; line-height: 1; }
+        .grade-card .grade-label { font-size: 0.85rem; opacity: 0.9; margin-top: 4px; }
+        .grade-A { background: linear-gradient(135deg, #ff6b6b, #ee5253); }
+        .grade-B { background: linear-gradient(135deg, #54a0ff, #2e86de); }
+        .grade-C { background: linear-gradient(135deg, #a4b0be, #747d8c); }
+        .grade-none { background: linear-gradient(135deg, #dfe4ea, #ced6e0); color: #57606f; }
+
+        .badge-grade-A { background: #ee5253; }
+        .badge-grade-B { background: #2e86de; }
+        .badge-grade-C { background: #747d8c; }
+        .badge-grade-none { background: #ced6e0; color: #57606f; }
+
+        .info-btn { position: fixed; right: 0; top: 50%; transform: translateY(-50%); z-index: 1050; background: #1a1a2e; color: #fff; border: none; border-radius: 8px 0 0 8px; padding: 16px 14px 24px 14px; min-width: 36px; writing-mode: vertical-rl; overflow: visible; font-size: 0.8rem; cursor: pointer; letter-spacing: 2px; }
+        .info-btn:hover { background: #4da6ff; }
+        .offcanvas-info .offcanvas-header { background: #2a2a4a; color: #fff; padding: 0 1rem; height: 56px; min-height: 56px; display: flex; align-items: center; }
+        .offcanvas-info .offcanvas-header .btn-close { filter: invert(1); }
+        .info-section { margin-bottom: 1.2rem; }
+        .info-section h6 { font-weight: bold; color: #1a1a2e; border-bottom: 2px solid #4da6ff; padding-bottom: 4px; margin-bottom: 8px; }
+        .info-tip { background: #fff8e1; border-left: 3px solid #ffc107; padding: 6px 10px; border-radius: 0 4px 4px 0; font-size: 0.85rem; margin-bottom: 4px; }
+        .info-warn { background: #fce4ec; border-left: 3px solid #e91e63; padding: 6px 10px; border-radius: 0 4px 4px 0; font-size: 0.85rem; margin-bottom: 4px; }
+    </style>
+</head>
+<body>
+
+<!-- 페이지 안내 슬라이드 패널 -->
+<button class="info-btn" data-bs-toggle="offcanvas" data-bs-target="#infoPanel" title="페이지 안내">ℹ 안내</button>
+<div class="offcanvas offcanvas-end offcanvas-info" tabindex="-1" id="infoPanel" style="width:35vw">
+    <div class="offcanvas-header">
+        <h5 class="offcanvas-title">🅰️ Signal Score 발송 미리보기 안내</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body">
+        <div class="info-section">
+            <h6>📌 목적</h6>
+            <p class="small">실제로 15:40 정규 스케줄이 돌기 전에, 지금 조건(등급 기준)대로면 Slack이 몇 건이나 발송될지 미리 계산해서 보여줍니다.</p>
+        </div>
+        <div class="info-section">
+            <h6>⏱ 동작 방식</h6>
+            <p class="small">Signal Score를 그 자리에서 계산만 합니다. <b>DB 저장도, Slack 발송도 하지 않는</b> 순수 조회(dry-run)입니다.</p>
+        </div>
+        <div class="info-section">
+            <h6>🅰️ 등급 기준</h6>
+            <div class="info-tag">A: 80점↑ (Slack 발송)</div>
+            <div class="info-tag">B: 65~79점</div>
+            <div class="info-tag">C: 50~64점</div>
+            <div class="info-tag">제외: 50점 미만</div>
+        </div>
+        <div class="info-section">
+            <h6>📊 점수 산출 조건</h6>
+            <p class="small mb-2">총점 = 모멘텀 + 수급 + 랭킹안정성 + 시장환경 + 리스크패널티 (5개 합산)</p>
+
+            <p class="small mb-1"><b>모멘텀 (0~30점)</b> — 20영업일 평균 대비 거래량 배수 × 당일 등락률</p>
+            <div class="info-tip">배수 3배↑ &amp; 등락률 3%↑초과 → 30</div>
+            <div class="info-tip">배수 3배↑ &amp; 등락률 0%↑초과 → 25</div>
+            <div class="info-tip">배수 2배↑ &amp; 등락률 1%↑초과 → 20</div>
+            <div class="info-tip">배수 2배↑ &amp; 등락률 0%↑초과 → 15</div>
+            <div class="info-tip">배수 1.5배↑ &amp; 등락률 0%↑초과 → 10</div>
+            <div class="info-tip">배수 2배↑인데 등락률 음수(거래량은 늘고 가격은 하락) → 5</div>
+            <div class="info-tip">그 외 → 0</div>
+
+            <p class="small mb-1 mt-2"><b>수급 (-15~30점)</b> — 외국인·기관 최근 3일 누적 순매수</p>
+            <div class="info-tip">외국인·기관 둘 다 순매수 → 30</div>
+            <div class="info-tip">둘 중 하나만 순매수 → 15</div>
+            <div class="info-tip">둘 다 순매도(동반 이탈) → -15</div>
+            <div class="info-tip">그 외 → 0</div>
+
+            <p class="small mb-1 mt-2"><b>랭킹안정성 (0~15점)</b> — 시가총액 순위</p>
+            <div class="info-tip">최신 순위 100위 이내 → +10</div>
+            <div class="info-tip">5영업일 전 대비 순위 상승(숫자가 작아짐) → +5</div>
+
+            <p class="small mb-1 mt-2"><b>시장환경 (0~15점)</b> — 소속 시장(코스피/코스닥) 지수</p>
+            <div class="info-tip">당일 지수 등락률 양수 → +10</div>
+            <div class="info-tip">5영업일 전 대비 지수 상승 추세 → +5</div>
+
+            <p class="small mb-1 mt-2"><b>리스크패널티 (-20~0점)</b> — 과열·이탈 신호 감점 (합산 후 -20점 하한)</p>
+            <div class="info-warn">최근 5영업일 누적 상승률 30%↑(과열) → -15</div>
+            <div class="info-warn">거래량 배수 2배↑인데 당일 하락(이탈 신호) → -10</div>
+            <div class="info-warn">외국인·기관 3일 동반 순매도 → -15</div>
+        </div>
+        <div class="info-section">
+            <h6>⚠️ 한계</h6>
+            <div class="info-warn">기준일은 가장 최근에 수집된 시가총액 날짜입니다. 오늘 15:40 수집이 아직 안 됐다면 어제(또는 그 이전) 데이터로 계산됩니다.</div>
+            <div class="info-warn">모멘텀 등 일부 점수는 계산 시점의 누적 데이터에 따라 같은 날짜라도 다시 계산하면 값이 달라질 수 있습니다.</div>
+        </div>
+    </div>
+</div>
+
+<nav class="navbar main-navbar px-3">
+    <a class="navbar-brand" href="{{ url_for('index') }}">📡 알림 시스템</a>
+    <div class="d-flex gap-3">
+        <a href="{{ url_for('index') }}" class="nav-link">대시보드</a>
+        <a href="{{ url_for('market_cap_view') }}" class="nav-link">시가총액 추이</a>
+        <a href="{{ url_for('stock_investor_view') }}" class="nav-link">시총×투자자</a>
+        <a href="{{ url_for('investor_trend_view') }}" class="nav-link">투자자별 매매동향</a>
+        <a href="{{ url_for('investor_ranking_view') }}" class="nav-link">순매수 랭킹</a>
+        <a href="{{ url_for('volume_ratio_view') }}" class="nav-link">거래량 배수</a>
+        <a href="{{ url_for('sector_index_view') }}" class="nav-link">업종 일자별지수</a>
+        <a href="{{ url_for('ranking_preview_view') }}" class="nav-link">순위분석 미리보기</a>
+        <a href="{{ url_for('hts_top_view_view') }}" class="nav-link">HTS조회상위</a>
+        <a href="{{ url_for('signal_score_preview_view') }}" class="nav-link active">Signal Score 발송 미리보기</a>
+        <a href="{{ url_for('raw_data_view') }}" class="nav-link">원본 데이터</a>
+        <a href="/grid" class="nav-link">리비전 관리</a>
+        <a href="{{ url_for("history_view") }}" class="nav-link">히스토리</a>
+        <a href="{{ url_for("sync_admin_view") }}" class="nav-link">동기화 관리</a>
+    </div>
+</nav>
+
+<div class="container dashboard-container">
+
+    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+        <h2>🅰️ Signal Score 발송 미리보기</h2>
+        <div class="d-flex align-items-center gap-2">
+            <span id="update-timer" class="badge bg-secondary">조회 중...</span>
+            <button class="btn btn-warning btn-sm text-dark" onclick="loadData()">↻ 새로고침</button>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-3">
+        <div class="col-6 col-md-3">
+            <div class="grade-card grade-A">
+                <div class="grade-count" id="countA">-</div>
+                <div class="grade-label">🅰️ A등급 · Slack 발송</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="grade-card grade-B">
+                <div class="grade-count" id="countB">-</div>
+                <div class="grade-label">B등급 · 대시보드만</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="grade-card grade-C">
+                <div class="grade-count" id="countC">-</div>
+                <div class="grade-label">C등급 · 저장만</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="grade-card grade-none">
+                <div class="grade-count" id="countNone">-</div>
+                <div class="grade-label">제외 (50점 미만)</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card-panel">
+        <div id="emptyMsg" class="text-muted small" style="display:none">기준일 데이터가 없습니다. (시가총액이 아직 한 번도 수집되지 않았을 수 있습니다)</div>
+        <div style="overflow-x:auto">
+            <table id="scoreTable" class="table table-hover table-sm" style="width:100%">
+                <thead class="table-light">
+                    <tr>
+                        <th>순위</th><th>코드</th><th>종목명</th><th>총점</th><th>등급</th>
+                        <th>모멘텀</th><th>수급</th><th>랭킹안정성</th><th>시장환경</th><th>리스크</th>
+                    </tr>
+                </thead>
+                <tbody id="tableBody"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
+
+<script>
+    let dataTable = null;
+    const GRADE_BADGE = { 'A': 'badge-grade-A', 'B': 'badge-grade-B', 'C': 'badge-grade-C', '제외': 'badge-grade-none' };
+
+    async function loadData() {
+        document.getElementById('update-timer').textContent = '조회 중...';
+
+        try {
+            const res = await fetch('api/signal-score/preview');
+            const result = await res.json();
+            if (result.status !== 'success') {
+                document.getElementById('update-timer').textContent = '조회 실패: ' + result.message;
+                return;
+            }
+
+            const counts = result.grade_counts || {};
+            document.getElementById('countA').textContent = counts['A'] ?? 0;
+            document.getElementById('countB').textContent = counts['B'] ?? 0;
+            document.getElementById('countC').textContent = counts['C'] ?? 0;
+            document.getElementById('countNone').textContent = counts['제외'] ?? 0;
+
+            const data = result.data || [];
+            if (dataTable) { dataTable.destroy(); dataTable = null; }
+
+            const emptyMsg = document.getElementById('emptyMsg');
+            const dateLabel = result.date ? `기준일 ${result.date}` : '기준일 없음';
+            if (!data.length) {
+                emptyMsg.style.display = '';
+                document.getElementById('tableBody').innerHTML = '';
+                document.getElementById('update-timer').textContent = `${dateLabel} · 0건 · ${new Date().toLocaleTimeString()}`;
+                return;
+            }
+            emptyMsg.style.display = 'none';
+
+            document.getElementById('tableBody').innerHTML = data.map((row, i) => `
+                <tr${row.grade === 'A' ? ' class="table-danger"' : ''}>
+                    <td data-order="${i + 1}">${i + 1}</td>
+                    <td>${row.code}</td>
+                    <td>${row.name ?? ''}</td>
+                    <td data-order="${row.total}"><b>${row.total}</b></td>
+                    <td><span class="badge ${GRADE_BADGE[row.grade] || 'bg-secondary'}">${row.grade}</span></td>
+                    <td>${row.momentum_score}</td>
+                    <td>${row.supply_demand_score}</td>
+                    <td>${row.rank_stability_score}</td>
+                    <td>${row.market_environment_score}</td>
+                    <td>${row.risk_penalty_score}</td>
+                </tr>
+            `).join('');
+
+            dataTable = $('#scoreTable').DataTable({
+                pageLength: 30, scrollX: true, order: [],
+                language: { search: "결과 내 검색:", lengthMenu: "_MENU_ 개씩 보기", info: "총 _TOTAL_ 건 중 _START_~_END_ 표시" }
+            });
+
+            document.getElementById('update-timer').textContent = `${dateLabel} · 총 ${result.total}건 (A ${counts['A'] ?? 0}건 발송 예정) · ${new Date().toLocaleTimeString()}`;
+        } catch (e) {
+            console.error(e);
+            document.getElementById('update-timer').textContent = '조회 중 오류 발생';
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', loadData);
+</script>
+<script>
+    document.getElementById('infoPanel').addEventListener('show.bs.offcanvas', () => document.querySelector('.info-btn').style.display = 'none');
+    document.getElementById('infoPanel').addEventListener('hidden.bs.offcanvas', () => document.querySelector('.info-btn').style.display = '');
+</script>
+</body>
+</html>

@@ -16,9 +16,19 @@ from app.utils.db_manager import (
     get_investor_distribution,
     get_investor_cross_distribution,
     get_volume_ratio_batch,
-    get_volume_collection_status
+    get_volume_collection_status,
+    get_hts_top_view_history,
+    get_hts_top_view_cumulative,
+    get_hts_top_view_daily_scores,
+    get_signal_score_batch,
+    get_job_run_log
 )
-from app.core.stock_monitor import fetch_market_cap_ranking, fetch_investor_trend, fetch_sector_index_daily, fetch_stock_investor_daily, fetch_ranking_preview
+from app.core.stock_monitor import (
+    fetch_market_cap_ranking, fetch_investor_trend, fetch_sector_index_daily, fetch_stock_investor_daily,
+    fetch_ranking_preview,
+    run_job_hts_top_view, run_job_investor_trend, run_job_sector_index,
+    run_job_market_cap_and_signal_score, run_job_remote_sync,
+)
 from app.config import Config
 import json
 import os
@@ -47,6 +57,11 @@ def raw_data_view():
 def market_cap_view():
     """일별 시가총액 추이 페이지를 보여줍니다."""
     return render_template('market_cap.html')
+
+@app.route('/hts-top-view')
+def hts_top_view_view():
+    """HTS조회상위20종목 시간별 추이 페이지를 보여줍니다."""
+    return render_template('hts_top_view.html')
 
 @app.route('/sector-index')
 def sector_index_view():
@@ -199,6 +214,79 @@ def fetch_market_cap_api():
             "status": "error",
             "message": f"시가총액 데이터 수집 중 오류 발생: {str(e)}"
         }), 500
+
+@app.route('/api/hts-top-view', methods=['GET'])
+def get_hts_top_view_api():
+    """HTS조회상위20종목 시간별 데이터를 JSON 형식으로 반환합니다."""
+    try:
+        date            = request.args.get('date')
+        limit_snapshots = int(request.args.get('limit', 24))
+        data = get_hts_top_view_history(date=date, limit_snapshots=limit_snapshots)
+
+        return jsonify({
+            "status": "success",
+            "count": len(data),
+            "data": data
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/hts-top-view/fetch', methods=['POST'])
+def fetch_hts_top_view_api():
+    """HTS조회상위20종목 데이터를 즉시 수집하도록 요청합니다. (동기화 관리 페이지의 job_run_log에도 기록됨)"""
+    try:
+        ok = run_job_hts_top_view(trigger_type='manual')
+        if not ok:
+            return jsonify({
+                "status": "error",
+                "message": "HTS조회상위20종목 데이터 수집 실패"
+            }), 500
+
+        return jsonify({
+            "status": "success",
+            "message": "HTS조회상위20종목 데이터 수집이 성공적으로 완료되었습니다."
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"HTS조회상위20종목 데이터 수집 중 오류 발생: {str(e)}"
+        }), 500
+
+@app.route('/api/hts-top-view/cumulative', methods=['GET'])
+def get_hts_top_view_cumulative_api():
+    """HTS조회상위20종목 구간 누적 점수(스냅샷마다 20-순위점 합산)를 반환합니다."""
+    try:
+        date_from = request.args.get('date_from')
+        date_to   = request.args.get('date_to')
+        if not date_from or not date_to:
+            return jsonify({"status": "error", "message": "date_from, date_to 파라미터가 필요합니다."}), 400
+        data = get_hts_top_view_cumulative(date_from=date_from, date_to=date_to)
+
+        return jsonify({
+            "status": "success",
+            "count": len(data),
+            "data": data
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/hts-top-view/daily-scores', methods=['GET'])
+def get_hts_top_view_daily_scores_api():
+    """HTS조회상위20종목 구간 내 날짜별 합산 점수(스냅샷마다 20-순위점, 날짜 단위 집계)를 반환합니다."""
+    try:
+        date_from = request.args.get('date_from')
+        date_to   = request.args.get('date_to')
+        if not date_from or not date_to:
+            return jsonify({"status": "error", "message": "date_from, date_to 파라미터가 필요합니다."}), 400
+        data = get_hts_top_view_daily_scores(date_from=date_from, date_to=date_to)
+
+        return jsonify({
+            "status": "success",
+            "count": len(data),
+            "data": data
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/stock-investor')
 def stock_investor_view():
@@ -531,6 +619,40 @@ def sync_status():
     })
 
 # ──────────────────────────────────────────────
+# 스케줄링 작업 처리 로그 + 수동실행 ("동기화 관리" 페이지)
+# ──────────────────────────────────────────────
+
+JOB_RUNNERS = {
+    'hts_top_view': lambda: run_job_hts_top_view(trigger_type='manual'),
+    'investor_trend': lambda: run_job_investor_trend(trigger_type='manual'),
+    'sector_index': lambda: run_job_sector_index(trigger_type='manual'),
+    'market_cap_signal_score': lambda: run_job_market_cap_and_signal_score(trigger_type='manual'),
+    'remote_sync': lambda: run_job_remote_sync(trigger_type='manual'),
+}
+
+@app.route('/api/job-log', methods=['GET'])
+def get_job_log_api():
+    """스케줄링 작업 실행 이력을 반환합니다 (기본 최근 7일)."""
+    try:
+        days = int(request.args.get('days', 7))
+        data = get_job_run_log(days=days)
+        return jsonify({"status": "success", "count": len(data), "data": data})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/job-log/run/<job_name>', methods=['POST'])
+def run_job_manual_api(job_name):
+    """지정한 작업을 즉시 실행합니다 (동기화 관리 페이지의 수동실행 버튼용). 실제 API 호출/DB 저장이 일어납니다."""
+    runner = JOB_RUNNERS.get(job_name)
+    if not runner:
+        return jsonify({"status": "error", "message": f"알 수 없는 작업: {job_name}"}), 400
+    try:
+        ok = runner()
+        return jsonify({"status": "success" if ok else "error", "job_name": job_name, "success": ok})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# ──────────────────────────────────────────────
 # Sync export — 로컬 DB 데이터를 서버로 전송하기 위한 원시 데이터 조회
 # ──────────────────────────────────────────────
 
@@ -718,7 +840,45 @@ RANKING_PREVIEW_TYPES = {
             'fid_vol_cnt': '', 'fid_pbmn': '', 'fid_blng_cls_code': '0', 'fid_mkop_cls_code': '0',
         },
     },
+    'hts_top_view': {
+        'name': 'HTS조회상위20종목',
+        'path': '/uapi/domestic-stock/v1/ranking/hts-top-view',
+        'tr_id': 'HHMCM000100C0',
+        'params': {},
+    },
 }
+
+@app.route('/signal-score-preview')
+def signal_score_preview_view():
+    """Signal Score 등급/Slack 발송 예정 건수를 미리 확인하는 페이지 (저장·발송 없이 계산만)"""
+    return render_template('signal_score_preview.html')
+
+@app.route('/api/signal-score/preview', methods=['GET'])
+def signal_score_preview_api():
+    """Signal Score를 DB 저장·Slack 발송 없이 계산만 해서 등급별 건수/명단을 미리 보여줍니다."""
+    try:
+        scores = get_signal_score_batch(save=False)
+        grade_counts = {'A': 0, 'B': 0, 'C': 0, '제외': 0}
+        rows = []
+        for s in scores:
+            grade_counts[s['grade']] = grade_counts.get(s['grade'], 0) + 1
+            rows.append({
+                'code': s['code'], 'name': s['name'], 'total': s['total'], 'grade': s['grade'],
+                'momentum_score': s['momentum_score'], 'supply_demand_score': s['supply_demand_score'],
+                'rank_stability_score': s['rank_stability_score'],
+                'market_environment_score': s['market_environment_score'],
+                'risk_penalty_score': s['risk_penalty_score'],
+            })
+
+        return jsonify({
+            "status": "success",
+            "date": scores[0]['date'] if scores else None,
+            "total": len(rows),
+            "grade_counts": grade_counts,
+            "data": rows
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/ranking-preview')
 def ranking_preview_view():
@@ -763,7 +923,8 @@ def git_log_api():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 def run_server(use_reloader=False):
-    app.run(host=Config.API_HOST, port=Config.API_PORT, debug=Config.DEBUG, use_reloader=use_reloader)
+    # threaded=True: 수동실행(job-log/run) 등 오래 걸리는 요청이 다른 페이지 응답을 막지 않도록.
+    app.run(host=Config.API_HOST, port=Config.API_PORT, debug=Config.DEBUG, use_reloader=use_reloader, threaded=True)
 
 if __name__ == '__main__':
     run_server(use_reloader=True)

@@ -42,7 +42,7 @@ PAGES = {
         </div>
         <div class="info-section">
             <h6>⚠️ 한계</h6>
-            <div class="info-warn">KIS API 1회 최대 30종목 반환 (거래소·코스닥 각각)</div>
+            <div class="info-warn">KIS API 1회 최대 30종목 반환 (거래소·코스닥 각각) — 연속조회(tr_cont) 미지원 확인됨</div>
             <div class="info-warn">당일 장중 데이터는 잠정치, 장마감 후 확정</div>
         </div>
         <div class="info-section">
