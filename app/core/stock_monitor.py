@@ -532,8 +532,11 @@ def send_signal_score_alerts(scores: list):
         return
 
     for s in a_grade:
+        hts_bonus = s.get('hts_top_view_bonus_score', 0)
+        base_score = s['total'] - hts_bonus
         text = (
-            f"🅰️ [Signal Score A등급] {s['name']}({s['code']}) 총점 {s['total']}점\n"
+            f"🅰️ [Signal Score A등급] {s['name']}({s['code']}) 기본점수 {base_score}점"
+            f"{f' + HTS조회상위 {hts_bonus}점' if hts_bonus else ''} = 총점 {s['total']}점\n"
             f"모멘텀 {s['momentum_score']} | 수급 {s['supply_demand_score']} | "
             f"랭킹안정성 {s['rank_stability_score']} | 시장환경 {s['market_environment_score']} | "
             f"리스크 {s['risk_penalty_score']}\n"
