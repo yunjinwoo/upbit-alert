@@ -88,6 +88,7 @@
             <div class="step-row"><span class="step-icon" id="si-sec0001">⏳</span><span class="step-label">업종 일자별지수 — 코스피 (0001)</span><span class="step-count" id="sc-sec0001">-</span></div>
             <div class="step-row"><span class="step-icon" id="si-sec1001">⏳</span><span class="step-label">업종 일자별지수 — 코스닥 (1001)</span><span class="step-count" id="sc-sec1001">-</span></div>
             <div class="step-row"><span class="step-icon" id="si-sec2001">⏳</span><span class="step-label">업종 일자별지수 — 코스피200 (2001)</span><span class="step-count" id="sc-sec2001">-</span></div>
+            <div class="step-row"><span class="step-icon" id="si-hts">⏳</span><span class="step-label">HTS조회상위20종목 (stock_hts_top_view_hourly)</span><span class="step-count" id="sc-hts">-</span></div>
         </div>
         <div id="bulkLog" class="sync-log" style="display:none"></div>
     </div>
@@ -219,6 +220,11 @@
                     <td><a href="api/sector-index?iscd=0001" target="_blank">/api/sector-index</a></td>
                     <td>업종 일자별지수 (실시간)</td>
                     <td>iscd, date</td>
+                </tr>
+                <tr>
+                    <td><a href="api/sync/export/hts-top-view?limit=7" target="_blank">/api/sync/export/hts-top-view</a></td>
+                    <td>HTS조회상위20종목 시간별 원시 데이터</td>
+                    <td>limit (기본 7일)</td>
                 </tr>
             </tbody>
         </table>
@@ -398,7 +404,7 @@
         document.getElementById('sc-' + id).textContent = n == null ? '-' : `${Number(n).toLocaleString()}건`;
     }
     function resetSteps() {
-        ['mkt','inv','trJ1','trJ4','sec0001','sec1001','sec2001'].forEach(id => {
+        ['mkt','inv','trJ1','trJ4','sec0001','sec1001','sec2001','hts'].forEach(id => {
             stepIcon(id, 'wait'); stepCount(id, null);
         });
     }
@@ -436,6 +442,7 @@
             { id: 'sec0001',fetch: () => fetch(`api/sector-index/cached?iscd=0001`).then(r=>r.json()),             table: 'sector_index_daily' },
             { id: 'sec1001',fetch: () => fetch(`api/sector-index/cached?iscd=1001`).then(r=>r.json()),             table: 'sector_index_daily' },
             { id: 'sec2001',fetch: () => fetch(`api/sector-index/cached?iscd=2001`).then(r=>r.json()),             table: 'sector_index_daily' },
+            { id: 'hts',    fetch: () => fetch(`api/sync/export/hts-top-view?limit=${limit}`).then(r=>r.json()),   table: 'stock_hts_top_view_hourly' },
         ];
 
         try {

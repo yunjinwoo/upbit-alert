@@ -10,6 +10,7 @@ from app.utils.db_manager import (
     get_stock_investor_trend,
     sync_upsert_market_cap, sync_upsert_investor_daily,
     sync_upsert_investor_trend, sync_upsert_sector_index,
+    sync_upsert_hts_top_view,
     get_sector_index_cached, get_investor_trend_cached,
     get_stock_investor_raw,
     get_investor_ranking,
@@ -20,6 +21,7 @@ from app.utils.db_manager import (
     get_hts_top_view_history,
     get_hts_top_view_cumulative,
     get_hts_top_view_daily_scores,
+    get_hts_top_view_export,
     get_signal_score_batch,
     get_job_run_log
 )
@@ -508,10 +510,11 @@ _sync_sessions = {}   # token → session info
 _sync_blocked  = False
 
 SYNC_TABLE_MAP = {
-    'stock_market_cap_daily':  sync_upsert_market_cap,
-    'stock_investor_daily':    sync_upsert_investor_daily,
-    'investor_trend_daily':    sync_upsert_investor_trend,
-    'sector_index_daily':      sync_upsert_sector_index,
+    'stock_market_cap_daily':      sync_upsert_market_cap,
+    'stock_investor_daily':        sync_upsert_investor_daily,
+    'investor_trend_daily':        sync_upsert_investor_trend,
+    'sector_index_daily':          sync_upsert_sector_index,
+    'stock_hts_top_view_hourly':   sync_upsert_hts_top_view,
 }
 
 def _get_client_ip():
@@ -674,6 +677,12 @@ def sync_export_investor_trend():
     mrkt = request.args.get('mrkt', '1')
     days = int(request.args.get('days', 30))
     data = get_investor_trend_history(exch_div=exch, mrkt_div=mrkt, limit_days=days)
+    return jsonify({"status": "success", "count": len(data), "data": data})
+
+@app.route('/api/sync/export/hts-top-view', methods=['GET'])
+def sync_export_hts_top_view():
+    limit = int(request.args.get('limit', 7))
+    data = get_hts_top_view_export(limit_days=limit)
     return jsonify({"status": "success", "count": len(data), "data": data})
 
 # sector_index 캐시 폴백

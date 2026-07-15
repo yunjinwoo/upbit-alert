@@ -6,19 +6,21 @@ from app.utils.db_manager import (
     get_stock_investor_raw,
     get_investor_trend_history,
     get_sector_index_cached,
+    get_hts_top_view_export,
 )
 
 logger = get_logger()
 
 # 동기화 관리 페이지의 "전체 전송" 버튼과 동일한 순서/조합 (templates/sync_admin.html 참고)
 SYNC_STEPS = [
-    ('stock_market_cap_daily', lambda limit: get_market_cap_history(limit_dates=limit, fid_input_iscd='combined')),
-    ('stock_investor_daily',   lambda limit: get_stock_investor_raw(limit_dates=limit)),
-    ('investor_trend_daily',   lambda limit: get_investor_trend_history(exch_div='J', mrkt_div='1', limit_days=limit)),
-    ('investor_trend_daily',   lambda limit: get_investor_trend_history(exch_div='J', mrkt_div='4', limit_days=limit)),
-    ('sector_index_daily',     lambda limit: get_sector_index_cached('0001', limit=limit)),
-    ('sector_index_daily',     lambda limit: get_sector_index_cached('1001', limit=limit)),
-    ('sector_index_daily',     lambda limit: get_sector_index_cached('2001', limit=limit)),
+    ('stock_market_cap_daily',    lambda limit: get_market_cap_history(limit_dates=limit, fid_input_iscd='combined')),
+    ('stock_investor_daily',      lambda limit: get_stock_investor_raw(limit_dates=limit)),
+    ('investor_trend_daily',      lambda limit: get_investor_trend_history(exch_div='J', mrkt_div='1', limit_days=limit)),
+    ('investor_trend_daily',      lambda limit: get_investor_trend_history(exch_div='J', mrkt_div='4', limit_days=limit)),
+    ('sector_index_daily',        lambda limit: get_sector_index_cached('0001', limit=limit)),
+    ('sector_index_daily',        lambda limit: get_sector_index_cached('1001', limit=limit)),
+    ('sector_index_daily',        lambda limit: get_sector_index_cached('2001', limit=limit)),
+    ('stock_hts_top_view_hourly', lambda limit: get_hts_top_view_export(limit_days=limit)),
 ]
 
 
