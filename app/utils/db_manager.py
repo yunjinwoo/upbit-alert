@@ -150,7 +150,7 @@ def init_db():
             close TEXT, open TEXT, high TEXT, low TEXT,
             change TEXT, change_sign TEXT, change_rate TEXT,
             volume TEXT, trade_amount TEXT, vol_ratio TEXT,
-            net_buy TEXT, d20_dsrt TEXT,
+            psychology_index TEXT, d20_dsrt TEXT,
             timestamp TEXT,
             UNIQUE(date, sector_code)
         )
@@ -168,6 +168,7 @@ def init_db():
             rank_stability_score INTEGER,
             market_environment_score INTEGER,
             risk_penalty_score INTEGER,
+            hts_top_view_bonus_score INTEGER,
             total_score INTEGER,
             grade TEXT,
             timestamp TEXT,
@@ -219,6 +220,9 @@ def init_db():
         'CREATE UNIQUE INDEX IF NOT EXISTS idx_mktcap_unique ON stock_market_cap_daily(date, code, fid_input_iscd)',
         'CREATE UNIQUE INDEX IF NOT EXISTS idx_invtrend_unique ON investor_trend_daily(date, exch_div, mrkt_div, invr_cls_code)',
         'ALTER TABLE stock_hts_top_view_hourly ADD COLUMN prdy_vrss TEXT',
+        'ALTER TABLE signal_score_daily ADD COLUMN hts_top_view_bonus_score INTEGER DEFAULT 0',
+        # net_buy는 이름과 달리 실제로는 KIS API의 invt_new_psdg(투자 신 심리도) 필드였음 — 이름 정정
+        'ALTER TABLE sector_index_daily RENAME COLUMN net_buy TO psychology_index',
     ]
     for sql in migrations:
         try:
@@ -901,7 +905,8 @@ def get_volume_collection_status() -> dict:
 def _score_momentum(ratio: float, change_rate: float) -> int:
     """거래량 배수 + 등락률 조합 → 모멘텀 점수(0~30점).
     거래량 급증(배수↑) + 가격 상승(등락률↑)이 동시에 나타날수록 고득점.
-    거래량은 늘었는데 가격이 빠지면(분산/이탈 신호) 낮은 점수로 처리.
+    거래량은 늘었는데 가격이 빠지는 경우(분산/이탈 신호)는 모멘텀이 아니라 리스크패널티에서
+    감점으로 전담 처리한다(get_risk_penalty의 "거래량 급증+당일 하락" 항목) — 중복 반영 방지.
     """
     if ratio >= 3 and change_rate > 3:
         return 30
@@ -913,8 +918,6 @@ def _score_momentum(ratio: float, change_rate: float) -> int:
         return 15
     if ratio >= 1.5 and change_rate > 0:
         return 10
-    if ratio >= 2 and change_rate < 0:
-        return 5
     return 0
 
 
@@ -1281,21 +1284,21 @@ def _get_cumulative_return(code: str, days: int = 5, fid_input_iscd: str = "comb
 
 
 def get_risk_penalty(code: str, fid_input_iscd: str = "combined") -> dict:
-    """과열·이탈 신호를 감지해 리스크 패널티(-20~0점) 산출.
+    """과열·이탈·수급 신호를 감지해 리스크 조정 점수(-25~15점) 산출.
     반영 조건 (근거 데이터가 있는 것만 — 고가/저가/시가가 없어 윗꼬리·갭상승은 제외):
-    - 최근 5영업일 누적 상승률 30% 이상(과열 부담) → -15
+    - 최근 7영업일 누적 상승률 30% 이상(추세 지속 강세로 판단) → +15
     - 당일 거래량 배수 2배 이상인데 등락률이 음수(거래량은 터졌는데 하락, 이탈 신호) → -10
     - 외국인·기관 3일 동반 순매도 → -15
-    (합산 후 -20점 하한)
-    반환: {code, date, cum_return_5d, ratio, change_rate, supply_demand_score, penalties, score}
+    (합산 후 -20점 하한, 상한은 두지 않음)
+    반환: {code, date, cum_return_7d, ratio, change_rate, supply_demand_score, penalties, score}
     """
     momentum = get_momentum_score(code)
-    ret_info = _get_cumulative_return(code, days=5, fid_input_iscd=fid_input_iscd)
+    ret_info = _get_cumulative_return(code, days=7, fid_input_iscd=fid_input_iscd)
     supply_info = get_supply_demand_score(code, days=3)
 
     penalties = []
     if ret_info['cum_return'] >= 30:
-        penalties.append({'reason': '최근 5일 과열(+30% 이상)', 'value': -15})
+        penalties.append({'reason': '최근 7일 강한 상승 추세(+30% 이상)', 'value': 15})
     if momentum['ratio'] >= 2 and momentum.get('change_rate') is not None and momentum['change_rate'] < 0:
         penalties.append({'reason': '거래량 급증+당일 하락(이탈 신호)', 'value': -10})
     if supply_info['score'] == -15:
@@ -1306,7 +1309,7 @@ def get_risk_penalty(code: str, fid_input_iscd: str = "combined") -> dict:
     return {
         'code': code,
         'date': momentum.get('date') or ret_info.get('date'),
-        'cum_return_5d': ret_info['cum_return'],
+        'cum_return_7d': ret_info['cum_return'],
         'ratio': momentum['ratio'],
         'change_rate': momentum.get('change_rate'),
         'supply_demand_score': supply_info['score'],
@@ -1352,6 +1355,47 @@ def get_risk_penalty_batch(date: str = None, fid_input_iscd: str = "combined") -
     return results
 
 
+def get_hts_top_view_bonus(code: str, date: str = None) -> dict:
+    """HTS조회상위20종목 당일 등장 여부에 따른 가점(0~20점) 산출.
+    date 기준(미지정 시 최신 시가총액 날짜)으로 그날 HTS조회상위에 등장했다면 최고 순위 구간별 가점.
+    - 1~3위 등장 → +20
+    - 4~10위 등장 → +12
+    - 11위 이하 등장 → +6
+    - 그날 미등장 → 0
+    같은 날 여러 시간대에 걸쳐 등장했으면 그중 최고 순위(가장 작은 rank) 기준.
+    반환: {code, date, best_rank, appearances, score}
+    """
+    if not date:
+        date = get_latest_market_cap_date()
+    if not date:
+        return {'code': code, 'date': None, 'best_rank': None, 'appearances': 0, 'score': 0}
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT MIN(rank) AS best_rank, COUNT(*) AS appearances
+        FROM stock_hts_top_view_hourly
+        WHERE code = ? AND date = ?
+    ''', (code, date))
+    row = cursor.fetchone()
+    conn.close()
+
+    best_rank = row['best_rank'] if row and row['best_rank'] is not None else None
+    appearances = row['appearances'] if row else 0
+
+    if best_rank is None:
+        score = 0
+    elif best_rank <= 3:
+        score = 20
+    elif best_rank <= 10:
+        score = 12
+    else:
+        score = 6
+
+    return {'code': code, 'date': date, 'best_rank': best_rank, 'appearances': appearances, 'score': score}
+
+
 def _grade_for_score(total: int) -> str:
     """종합 점수 → 알림 등급(A/B/C/제외)."""
     if total >= 80:
@@ -1364,19 +1408,20 @@ def _grade_for_score(total: int) -> str:
 
 
 def get_signal_score(code: str, fid_input_iscd: str = "combined") -> dict:
-    """1~6번 점수(모멘텀·수급·랭킹안정성·시장환경·리스크패널티)를 합산한 종합 Signal Score 산출.
+    """1~6번 점수(모멘텀·수급·랭킹안정성·시장환경·리스크패널티·HTS조회상위가점)를 합산한 종합 Signal Score 산출.
     등급: A(80점↑) / B(65~79) / C(50~64) / 제외(50 미만)
     반환: {code, date, momentum_score, supply_demand_score, rank_stability_score,
-           market_environment_score, risk_penalty_score, total, grade, detail}
+           market_environment_score, risk_penalty_score, hts_top_view_bonus_score, total, grade, detail}
     """
     momentum = get_momentum_score(code)
     supply = get_supply_demand_score(code, days=3)
     rank = get_rank_stability_score(code, fid_input_iscd=fid_input_iscd)
     market = get_market_environment_score(code)
     risk = get_risk_penalty(code, fid_input_iscd=fid_input_iscd)
-
-    total = momentum['score'] + supply['score'] + rank['score'] + market['score'] + risk['score']
     date = momentum.get('date') or rank.get('date') or market.get('date') or risk.get('date')
+    hts_bonus = get_hts_top_view_bonus(code, date=date)
+
+    total = momentum['score'] + supply['score'] + rank['score'] + market['score'] + risk['score'] + hts_bonus['score']
 
     return {
         'code': code,
@@ -1386,6 +1431,7 @@ def get_signal_score(code: str, fid_input_iscd: str = "combined") -> dict:
         'rank_stability_score': rank['score'],
         'market_environment_score': market['score'],
         'risk_penalty_score': risk['score'],
+        'hts_top_view_bonus_score': hts_bonus['score'],
         'total': total,
         'grade': _grade_for_score(total),
         'detail': {
@@ -1394,6 +1440,7 @@ def get_signal_score(code: str, fid_input_iscd: str = "combined") -> dict:
             'rank_stability': rank,
             'market_environment': market,
             'risk_penalty': risk,
+            'hts_top_view_bonus': hts_bonus,
         },
     }
 
@@ -1450,17 +1497,19 @@ def save_signal_score_daily(rows: list) -> int:
         cursor.execute('''
             INSERT INTO signal_score_daily
                 (date, code, name, momentum_score, supply_demand_score, rank_stability_score,
-                 market_environment_score, risk_penalty_score, total_score, grade, timestamp)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                 market_environment_score, risk_penalty_score, hts_top_view_bonus_score, total_score, grade, timestamp)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(date, code) DO UPDATE SET
                 name=excluded.name, momentum_score=excluded.momentum_score,
                 supply_demand_score=excluded.supply_demand_score,
                 rank_stability_score=excluded.rank_stability_score,
                 market_environment_score=excluded.market_environment_score,
                 risk_penalty_score=excluded.risk_penalty_score,
+                hts_top_view_bonus_score=excluded.hts_top_view_bonus_score,
                 total_score=excluded.total_score, grade=excluded.grade, timestamp=excluded.timestamp
         ''', (r['date'], r['code'], r['name'], r['momentum_score'], r['supply_demand_score'],
               r['rank_stability_score'], r['market_environment_score'], r['risk_penalty_score'],
+              r.get('hts_top_view_bonus_score', 0),
               r['total'], r['grade'], timestamp))
         saved += 1
     conn.commit()
@@ -1599,20 +1648,20 @@ def sync_upsert_sector_index(rows: list) -> int:
         cursor.execute('''
             INSERT INTO sector_index_daily
                 (date, sector_code, sector_name, close, open, high, low,
-                 change, change_sign, change_rate, volume, trade_amount, vol_ratio, net_buy, d20_dsrt, timestamp)
+                 change, change_sign, change_rate, volume, trade_amount, vol_ratio, psychology_index, d20_dsrt, timestamp)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(date, sector_code) DO UPDATE SET
                 sector_name=excluded.sector_name, close=excluded.close, open=excluded.open,
                 high=excluded.high, low=excluded.low, change=excluded.change,
                 change_sign=excluded.change_sign, change_rate=excluded.change_rate,
                 volume=excluded.volume, trade_amount=excluded.trade_amount,
-                vol_ratio=excluded.vol_ratio, net_buy=excluded.net_buy,
+                vol_ratio=excluded.vol_ratio, psychology_index=excluded.psychology_index,
                 d20_dsrt=excluded.d20_dsrt, timestamp=excluded.timestamp
         ''', (r.get('date'), r.get('sector_code'), r.get('sector_name'),
               r.get('close','0'), r.get('open','0'), r.get('high','0'), r.get('low','0'),
               r.get('change','0'), r.get('change_sign','3'), r.get('change_rate','0'),
               r.get('volume','0'), r.get('trade_amount','0'), r.get('vol_ratio','0'),
-              r.get('net_buy','0'), r.get('d20_dsrt','0'),
+              r.get('psychology_index', r.get('net_buy', '0')), r.get('d20_dsrt','0'),
               r.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))))
         saved += 1
     conn.commit()
@@ -1666,14 +1715,14 @@ def save_sector_index_daily(records: list, iscd: str, sector_name: str):
         cursor.execute('''
             INSERT INTO sector_index_daily
                 (date, sector_code, sector_name, close, open, high, low,
-                 change, change_sign, change_rate, volume, trade_amount, vol_ratio, net_buy, d20_dsrt, timestamp)
+                 change, change_sign, change_rate, volume, trade_amount, vol_ratio, psychology_index, d20_dsrt, timestamp)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(date, sector_code) DO UPDATE SET
                 sector_name=excluded.sector_name, close=excluded.close, open=excluded.open,
                 high=excluded.high, low=excluded.low, change=excluded.change,
                 change_sign=excluded.change_sign, change_rate=excluded.change_rate,
                 volume=excluded.volume, trade_amount=excluded.trade_amount,
-                vol_ratio=excluded.vol_ratio, net_buy=excluded.net_buy,
+                vol_ratio=excluded.vol_ratio, psychology_index=excluded.psychology_index,
                 d20_dsrt=excluded.d20_dsrt, timestamp=excluded.timestamp
         ''', (
             date, iscd, sector_name,

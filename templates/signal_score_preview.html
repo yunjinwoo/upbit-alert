@@ -18,6 +18,8 @@
         .dashboard-container { margin-top: 30px; margin-bottom: 50px; }
         .card-panel { background: white; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); padding: 20px 24px; }
         #scoreTable td, #scoreTable th { white-space: nowrap; font-size: 0.85rem; }
+        .ticker-link { text-decoration: none; color: #0049af; font-weight: bold; cursor: pointer; }
+        .ticker-link:hover { text-decoration: underline; }
 
         .grade-card { border-radius: 12px; padding: 16px 20px; color: #fff; text-align: center; }
         .grade-card .grade-count { font-size: 2rem; font-weight: bold; line-height: 1; }
@@ -69,7 +71,7 @@
         </div>
         <div class="info-section">
             <h6>📊 점수 산출 조건</h6>
-            <p class="small mb-2">총점 = 모멘텀 + 수급 + 랭킹안정성 + 시장환경 + 리스크패널티 (5개 합산)</p>
+            <p class="small mb-2">총점 = 기본점수(모멘텀+수급+랭킹안정성+시장환경+리스크패널티, 최대 105점) + HTS조회상위 보너스(0~20점)</p>
 
             <p class="small mb-1"><b>모멘텀 (0~30점)</b> — 20영업일 평균 대비 거래량 배수 × 당일 등락률</p>
             <div class="info-tip">배수 3배↑ &amp; 등락률 3%↑초과 → 30</div>
@@ -77,8 +79,7 @@
             <div class="info-tip">배수 2배↑ &amp; 등락률 1%↑초과 → 20</div>
             <div class="info-tip">배수 2배↑ &amp; 등락률 0%↑초과 → 15</div>
             <div class="info-tip">배수 1.5배↑ &amp; 등락률 0%↑초과 → 10</div>
-            <div class="info-tip">배수 2배↑인데 등락률 음수(거래량은 늘고 가격은 하락) → 5</div>
-            <div class="info-tip">그 외 → 0</div>
+            <div class="info-tip">그 외(거래량 급증+가격 하락 포함) → 0 — 이 경우는 리스크패널티에서 별도 감점</div>
 
             <p class="small mb-1 mt-2"><b>수급 (-15~30점)</b> — 외국인·기관 최근 3일 누적 순매수</p>
             <div class="info-tip">외국인·기관 둘 다 순매수 → 30</div>
@@ -94,10 +95,16 @@
             <div class="info-tip">당일 지수 등락률 양수 → +10</div>
             <div class="info-tip">5영업일 전 대비 지수 상승 추세 → +5</div>
 
-            <p class="small mb-1 mt-2"><b>리스크패널티 (-20~0점)</b> — 과열·이탈 신호 감점 (합산 후 -20점 하한)</p>
-            <div class="info-warn">최근 5영업일 누적 상승률 30%↑(과열) → -15</div>
+            <p class="small mb-1 mt-2"><b>리스크패널티 (-20~15점)</b> — 과열·이탈·수급 신호 반영 (합산 후 -20점 하한, 상한 없음)</p>
+            <div class="info-tip">최근 7영업일 누적 상승률 30%↑(강한 상승 추세) → +15</div>
             <div class="info-warn">거래량 배수 2배↑인데 당일 하락(이탈 신호) → -10</div>
             <div class="info-warn">외국인·기관 3일 동반 순매도 → -15</div>
+
+            <p class="small mb-1 mt-2"><b>HTS조회상위가점 (0~20점)</b> — 당일 HTS조회상위20종목(실시간 관심도 랭킹) 등장 여부</p>
+            <div class="info-tip">최고 순위 1~3위 등장 → 20</div>
+            <div class="info-tip">최고 순위 4~10위 등장 → 12</div>
+            <div class="info-tip">최고 순위 11위 이하 등장 → 6</div>
+            <div class="info-tip">그날 미등장 → 0</div>
         </div>
         <div class="info-section">
             <h6>⚠️ 한계</h6>
@@ -119,7 +126,7 @@
         <a href="{{ url_for('sector_index_view') }}" class="nav-link">업종 일자별지수</a>
         <a href="{{ url_for('ranking_preview_view') }}" class="nav-link">순위분석 미리보기</a>
         <a href="{{ url_for('hts_top_view_view') }}" class="nav-link">HTS조회상위</a>
-        <a href="{{ url_for('signal_score_preview_view') }}" class="nav-link active">Signal Score 발송 미리보기</a>
+        <a href="{{ url_for('signal_score_preview_view') }}" class="nav-link active">Signal Score 종목</a>
         <a href="{{ url_for('raw_data_view') }}" class="nav-link">원본 데이터</a>
         <a href="/grid" class="nav-link">리비전 관리</a>
         <a href="{{ url_for("history_view") }}" class="nav-link">히스토리</a>
@@ -170,12 +177,27 @@
             <table id="scoreTable" class="table table-hover table-sm" style="width:100%">
                 <thead class="table-light">
                     <tr>
-                        <th>순위</th><th>코드</th><th>종목명</th><th>총점</th><th>등급</th>
+                        <th>순위</th><th>코드</th><th>종목명</th>
+                        <th>기본점수</th><th>HTS조회상위</th><th>총점</th><th>등급</th>
                         <th>모멘텀</th><th>수급</th><th>랭킹안정성</th><th>시장환경</th><th>리스크</th>
+                        <th>상세</th>
                     </tr>
                 </thead>
                 <tbody id="tableBody"></tbody>
             </table>
+        </div>
+    </div>
+</div>
+
+<!-- 점수 상세 모달 -->
+<div class="modal fade" id="detailModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="detailModalTitle">종목 상세</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="detailModalBody"></div>
         </div>
     </div>
 </div>
@@ -187,6 +209,8 @@
 
 <script>
     let dataTable = null;
+    let currentData = [];
+    let detailModal = null;
     const GRADE_BADGE = { 'A': 'badge-grade-A', 'B': 'badge-grade-B', 'C': 'badge-grade-C', '제외': 'badge-grade-none' };
 
     async function loadData() {
@@ -219,11 +243,16 @@
             }
             emptyMsg.style.display = 'none';
 
-            document.getElementById('tableBody').innerHTML = data.map((row, i) => `
+            document.getElementById('tableBody').innerHTML = data.map((row, i) => {
+                const htsBonus = row.hts_top_view_bonus_score ?? 0;
+                const baseScore = row.total - htsBonus;
+                return `
                 <tr${row.grade === 'A' ? ' class="table-danger"' : ''}>
                     <td data-order="${i + 1}">${i + 1}</td>
-                    <td>${row.code}</td>
+                    <td><a href="https://finance.naver.com/item/main.nhn?code=${row.code}" target="_blank" class="ticker-link">${row.code}</a></td>
                     <td>${row.name ?? ''}</td>
+                    <td data-order="${baseScore}">${baseScore}</td>
+                    <td data-order="${htsBonus}">${htsBonus > 0 ? `+${htsBonus}` : htsBonus}</td>
                     <td data-order="${row.total}"><b>${row.total}</b></td>
                     <td><span class="badge ${GRADE_BADGE[row.grade] || 'bg-secondary'}">${row.grade}</span></td>
                     <td>${row.momentum_score}</td>
@@ -231,11 +260,15 @@
                     <td>${row.rank_stability_score}</td>
                     <td>${row.market_environment_score}</td>
                     <td>${row.risk_penalty_score}</td>
-                </tr>
-            `).join('');
+                    <td><button class="btn btn-sm btn-outline-secondary" onclick="showDetail(${i})">🔍 상세</button></td>
+                </tr>`;
+            }).join('');
+
+            currentData = data;
 
             dataTable = $('#scoreTable').DataTable({
-                pageLength: 30, scrollX: true, order: [],
+                pageLength: 100, scrollX: true, order: [],
+                columnDefs: [{ targets: -1, orderable: false }],
                 language: { search: "결과 내 검색:", lengthMenu: "_MENU_ 개씩 보기", info: "총 _TOTAL_ 건 중 _START_~_END_ 표시" }
             });
 
@@ -244,6 +277,85 @@
             console.error(e);
             document.getElementById('update-timer').textContent = '조회 중 오류 발생';
         }
+    }
+
+    function fmtNum(v, suffix) {
+        if (v === null || v === undefined) return '-';
+        const n = Number(v);
+        return `${n.toLocaleString()}${suffix || ''}`;
+    }
+
+    function detailSection(title, scoreLabel, rows) {
+        return `
+            <div class="mb-3 pb-2" style="border-bottom:1px solid #eee">
+                <div class="d-flex justify-content-between align-items-center mb-1">
+                    <b>${title}</b>
+                    <span class="badge bg-dark">${scoreLabel}</span>
+                </div>
+                <table class="table table-sm mb-0">
+                    <tbody>
+                        ${rows.map(([label, value]) => `<tr><td class="text-muted" style="width:45%">${label}</td><td>${value}</td></tr>`).join('')}
+                    </tbody>
+                </table>
+            </div>`;
+    }
+
+    function showDetail(i) {
+        const row = currentData[i];
+        if (!row) return;
+        const d = row.detail || {};
+        const mom = d.momentum || {};
+        const supply = d.supply_demand || {};
+        const rank = d.rank_stability || {};
+        const market = d.market_environment || {};
+        const risk = d.risk_penalty || {};
+        const hts = d.hts_top_view_bonus || {};
+
+        document.getElementById('detailModalTitle').textContent = `${row.name ?? ''} (${row.code}) 점수 상세`;
+
+        const penaltyRows = (risk.penalties || []).length
+            ? risk.penalties.map(p => `<div class="info-${p.value >= 0 ? 'tip' : 'warn'}">${p.reason} → ${p.value >= 0 ? '+' : ''}${p.value}</div>`).join('')
+            : '<span class="text-muted small">해당 사유 없음</span>';
+
+        document.getElementById('detailModalBody').innerHTML = `
+            <div class="mb-3 p-2" style="background:#f8f9fa; border-radius:8px;">
+                <div class="d-flex justify-content-between">
+                    <span>기본점수 ${row.total - (row.hts_top_view_bonus_score ?? 0)} + HTS조회상위 ${row.hts_top_view_bonus_score ?? 0}</span>
+                    <b>= 총점 ${row.total}점 (${row.grade}등급)</b>
+                </div>
+            </div>
+            ${detailSection('모멘텀', `${row.momentum_score}점`, [
+                ['거래량 배수', fmtNum(mom.ratio, '배')],
+                ['당일 등락률', fmtNum(mom.change_rate, '%')],
+                ['평균 거래량 산출 일수', fmtNum(mom.days_used, '일')],
+            ])}
+            ${detailSection('수급', `${row.supply_demand_score}점`, [
+                ['외국인 누적 순매수', fmtNum(supply.frgn_total, '백만원')],
+                ['기관 누적 순매수', fmtNum(supply.orgn_total, '백만원')],
+                ['집계 구간', `${supply.date_from ?? '-'} ~ ${supply.date_to ?? '-'} (${fmtNum(supply.days_used, '일')})`],
+            ])}
+            ${detailSection('랭킹안정성', `${row.rank_stability_score}점`, [
+                ['현재 순위', fmtNum(rank.rank, '위')],
+                ['N일 전 순위', fmtNum(rank.rank_before, '위')],
+                ['순위 변동', rank.rank_change != null ? (rank.rank_change > 0 ? `${rank.rank_change} 상승` : rank.rank_change < 0 ? `${-rank.rank_change} 하락` : '변동 없음') : '-'],
+            ])}
+            ${detailSection('시장환경', `${row.market_environment_score}점`, [
+                ['소속 시장', market.market === '1001' ? '코스닥' : (market.market === '0001' ? '코스피' : (market.market ?? '-'))],
+                ['당일 지수 등락률', fmtNum(market.index_change_rate, '%')],
+                ['5일 상승 추세', market.index_trend_up === true ? '예' : (market.index_trend_up === false ? '아니오' : '-')],
+            ])}
+            ${detailSection('리스크패널티', `${row.risk_penalty_score}점`, [
+                ['최근 7일 누적 상승률', fmtNum(risk.cum_return_7d, '%')],
+                ['적용된 사유', penaltyRows],
+            ])}
+            ${detailSection('HTS조회상위', `${row.hts_top_view_bonus_score ?? 0}점`, [
+                ['최고 순위', hts.best_rank != null ? fmtNum(hts.best_rank, '위') : '당일 미등장'],
+                ['당일 등장 횟수', fmtNum(hts.appearances, '회')],
+            ])}
+        `;
+
+        if (!detailModal) detailModal = new bootstrap.Modal(document.getElementById('detailModal'));
+        detailModal.show();
     }
 
     document.addEventListener('DOMContentLoaded', loadData);

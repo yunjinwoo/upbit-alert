@@ -100,7 +100,7 @@ def get_sector_index_api():
                 'volume':      r.get('acml_vol', ''),
                 'trade_amount':r.get('acml_tr_pbmn', ''),
                 'vol_ratio':   r.get('acml_vol_rlim', ''),
-                'net_buy':     r.get('invt_new_psdg', ''),
+                'psychology_index': r.get('invt_new_psdg', ''),
                 'd20_dsrt':    r.get('d20_dsrt', ''),
             })
 
@@ -877,6 +877,8 @@ def signal_score_preview_api():
                 'rank_stability_score': s['rank_stability_score'],
                 'market_environment_score': s['market_environment_score'],
                 'risk_penalty_score': s['risk_penalty_score'],
+                'hts_top_view_bonus_score': s.get('hts_top_view_bonus_score', 0),
+                'detail': s.get('detail', {}),
             })
 
         return jsonify({
