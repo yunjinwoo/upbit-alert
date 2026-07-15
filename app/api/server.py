@@ -10,7 +10,7 @@ from app.utils.db_manager import (
     get_stock_investor_trend,
     sync_upsert_market_cap, sync_upsert_investor_daily,
     sync_upsert_investor_trend, sync_upsert_sector_index,
-    sync_upsert_hts_top_view,
+    sync_upsert_hts_top_view, sync_upsert_top_interest,
     get_sector_index_cached, get_investor_trend_cached,
     get_stock_investor_raw,
     get_investor_ranking,
@@ -22,6 +22,8 @@ from app.utils.db_manager import (
     get_hts_top_view_cumulative,
     get_hts_top_view_daily_scores,
     get_hts_top_view_export,
+    get_top_interest_range,
+    get_top_interest_export,
     get_signal_score_batch,
     get_job_run_log
 )
@@ -29,7 +31,7 @@ from app.core.stock_monitor import (
     fetch_market_cap_ranking, fetch_investor_trend, fetch_sector_index_daily, fetch_stock_investor_daily,
     fetch_ranking_preview,
     run_job_hts_top_view, run_job_investor_trend, run_job_sector_index,
-    run_job_market_cap_and_signal_score, run_job_remote_sync,
+    run_job_market_cap_and_signal_score, run_job_remote_sync, run_job_top_interest,
 )
 from app.config import Config
 import json
@@ -290,6 +292,50 @@ def get_hts_top_view_daily_scores_api():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+@app.route('/top-interest')
+def top_interest_view():
+    """관심종목등록 상위 페이지를 보여줍니다. (네이버 인기검색종목 대체 — robots.txt 크롤링 제한으로 KIS API 사용)"""
+    return render_template('top_interest.html')
+
+@app.route('/api/top-interest', methods=['GET'])
+def get_top_interest_api():
+    """관심종목등록 상위 구간 데이터를 JSON 형식으로 반환합니다."""
+    try:
+        date_from = request.args.get('date_from')
+        date_to   = request.args.get('date_to')
+        if not date_from or not date_to:
+            return jsonify({"status": "error", "message": "date_from, date_to 파라미터가 필요합니다."}), 400
+        data = get_top_interest_range(date_from=date_from, date_to=date_to)
+
+        return jsonify({
+            "status": "success",
+            "count": len(data),
+            "data": data
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/top-interest/fetch', methods=['POST'])
+def fetch_top_interest_api():
+    """관심종목등록 상위 데이터를 즉시 수집하도록 요청합니다. (동기화 관리 페이지의 job_run_log에도 기록됨)"""
+    try:
+        ok = run_job_top_interest(trigger_type='manual')
+        if not ok:
+            return jsonify({
+                "status": "error",
+                "message": "관심종목등록 상위 데이터 수집 실패"
+            }), 500
+
+        return jsonify({
+            "status": "success",
+            "message": "관심종목등록 상위 데이터 수집이 성공적으로 완료되었습니다."
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"관심종목등록 상위 데이터 수집 중 오류 발생: {str(e)}"
+        }), 500
+
 @app.route('/stock-investor')
 def stock_investor_view():
     return render_template('stock_investor.html')
@@ -515,6 +561,7 @@ SYNC_TABLE_MAP = {
     'investor_trend_daily':        sync_upsert_investor_trend,
     'sector_index_daily':          sync_upsert_sector_index,
     'stock_hts_top_view_hourly':   sync_upsert_hts_top_view,
+    'stock_top_interest_daily':    sync_upsert_top_interest,
 }
 
 def _get_client_ip():
@@ -631,6 +678,7 @@ JOB_RUNNERS = {
     'sector_index': lambda: run_job_sector_index(trigger_type='manual'),
     'market_cap_signal_score': lambda: run_job_market_cap_and_signal_score(trigger_type='manual'),
     'remote_sync': lambda: run_job_remote_sync(trigger_type='manual'),
+    'top_interest': lambda: run_job_top_interest(trigger_type='manual'),
 }
 
 @app.route('/api/job-log', methods=['GET'])
@@ -683,6 +731,12 @@ def sync_export_investor_trend():
 def sync_export_hts_top_view():
     limit = int(request.args.get('limit', 7))
     data = get_hts_top_view_export(limit_days=limit)
+    return jsonify({"status": "success", "count": len(data), "data": data})
+
+@app.route('/api/sync/export/top-interest', methods=['GET'])
+def sync_export_top_interest():
+    limit = int(request.args.get('limit', 7))
+    data = get_top_interest_export(limit_days=limit)
     return jsonify({"status": "success", "count": len(data), "data": data})
 
 # sector_index 캐시 폴백
@@ -878,6 +932,7 @@ def signal_score_preview_api():
                 'market_environment_score': s['market_environment_score'],
                 'risk_penalty_score': s['risk_penalty_score'],
                 'hts_top_view_bonus_score': s.get('hts_top_view_bonus_score', 0),
+                'top_interest_bonus_score': s.get('top_interest_bonus_score', 0),
                 'detail': s.get('detail', {}),
             })
 

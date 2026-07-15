@@ -7,6 +7,7 @@ from app.utils.db_manager import (
     get_investor_trend_history,
     get_sector_index_cached,
     get_hts_top_view_export,
+    get_top_interest_export,
 )
 
 logger = get_logger()
@@ -21,6 +22,7 @@ SYNC_STEPS = [
     ('sector_index_daily',        lambda limit: get_sector_index_cached('1001', limit=limit)),
     ('sector_index_daily',        lambda limit: get_sector_index_cached('2001', limit=limit)),
     ('stock_hts_top_view_hourly', lambda limit: get_hts_top_view_export(limit_days=limit)),
+    ('stock_top_interest_daily',  lambda limit: get_top_interest_export(limit_days=limit)),
 ]
 
 

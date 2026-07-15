@@ -71,7 +71,7 @@
         </div>
         <div class="info-section">
             <h6>📊 점수 산출 조건</h6>
-            <p class="small mb-2">총점 = 기본점수(모멘텀+수급+랭킹안정성+시장환경+리스크패널티, 최대 105점) + HTS조회상위 보너스(0~20점)</p>
+            <p class="small mb-2">총점 = 기본점수(모멘텀+수급+랭킹안정성+시장환경+리스크패널티, 최대 105점) + 관심도 보너스(HTS조회상위+관심종목등록, 합산 최대 30점)</p>
 
             <p class="small mb-1"><b>모멘텀 (0~30점)</b> — 20영업일 평균 대비 거래량 배수 × 당일 등락률</p>
             <div class="info-tip">배수 3배↑ &amp; 등락률 3%↑초과 → 30</div>
@@ -105,6 +105,13 @@
             <div class="info-tip">최고 순위 4~10위 등장 → 12</div>
             <div class="info-tip">최고 순위 11위 이하 등장 → 6</div>
             <div class="info-tip">그날 미등장 → 0</div>
+
+            <p class="small mb-1 mt-2"><b>관심종목등록가점 (0~10점)</b> — 당일 관심종목등록 상위(등록 건수 기준 랭킹) 등장 여부</p>
+            <div class="info-tip">순위 1~3위 등장 → 10</div>
+            <div class="info-tip">순위 4~10위 등장 → 6</div>
+            <div class="info-tip">순위 11위 이하 등장 → 3</div>
+            <div class="info-tip">그날 미등장 → 0</div>
+            <div class="info-warn">HTS조회상위가점 + 관심종목등록가점 합산이 30점을 넘으면 30점으로 상한 적용</div>
         </div>
         <div class="info-section">
             <h6>⚠️ 한계</h6>
@@ -126,6 +133,7 @@
         <a href="{{ url_for('sector_index_view') }}" class="nav-link">업종 일자별지수</a>
         <a href="{{ url_for('ranking_preview_view') }}" class="nav-link">순위분석 미리보기</a>
         <a href="{{ url_for('hts_top_view_view') }}" class="nav-link">HTS조회상위</a>
+        <a href="{{ url_for('top_interest_view') }}" class="nav-link">관심종목등록 상위</a>
         <a href="{{ url_for('signal_score_preview_view') }}" class="nav-link active">Signal Score 종목</a>
         <a href="{{ url_for('raw_data_view') }}" class="nav-link">원본 데이터</a>
         <a href="/grid" class="nav-link">리비전 관리</a>
@@ -178,7 +186,7 @@
                 <thead class="table-light">
                     <tr>
                         <th>순위</th><th>코드</th><th>종목명</th>
-                        <th>기본점수</th><th>HTS조회상위</th><th>총점</th><th>등급</th>
+                        <th>기본점수</th><th>HTS조회상위</th><th>관심종목등록</th><th>총점</th><th>등급</th>
                         <th>모멘텀</th><th>수급</th><th>랭킹안정성</th><th>시장환경</th><th>리스크</th>
                         <th>상세</th>
                     </tr>
@@ -245,7 +253,8 @@
 
             document.getElementById('tableBody').innerHTML = data.map((row, i) => {
                 const htsBonus = row.hts_top_view_bonus_score ?? 0;
-                const baseScore = row.total - htsBonus;
+                const topInterestBonus = row.top_interest_bonus_score ?? 0;
+                const baseScore = row.total - htsBonus - topInterestBonus;
                 return `
                 <tr${row.grade === 'A' ? ' class="table-danger"' : ''}>
                     <td data-order="${i + 1}">${i + 1}</td>
@@ -253,6 +262,7 @@
                     <td>${row.name ?? ''}</td>
                     <td data-order="${baseScore}">${baseScore}</td>
                     <td data-order="${htsBonus}">${htsBonus > 0 ? `+${htsBonus}` : htsBonus}</td>
+                    <td data-order="${topInterestBonus}">${topInterestBonus > 0 ? `+${topInterestBonus}` : topInterestBonus}</td>
                     <td data-order="${row.total}"><b>${row.total}</b></td>
                     <td><span class="badge ${GRADE_BADGE[row.grade] || 'bg-secondary'}">${row.grade}</span></td>
                     <td>${row.momentum_score}</td>
@@ -310,6 +320,7 @@
         const market = d.market_environment || {};
         const risk = d.risk_penalty || {};
         const hts = d.hts_top_view_bonus || {};
+        const topInt = d.top_interest_bonus || {};
 
         document.getElementById('detailModalTitle').textContent = `${row.name ?? ''} (${row.code}) 점수 상세`;
 
@@ -317,10 +328,13 @@
             ? risk.penalties.map(p => `<div class="info-${p.value >= 0 ? 'tip' : 'warn'}">${p.reason} → ${p.value >= 0 ? '+' : ''}${p.value}</div>`).join('')
             : '<span class="text-muted small">해당 사유 없음</span>';
 
+        const htsBonus = row.hts_top_view_bonus_score ?? 0;
+        const topInterestBonus = row.top_interest_bonus_score ?? 0;
+
         document.getElementById('detailModalBody').innerHTML = `
             <div class="mb-3 p-2" style="background:#f8f9fa; border-radius:8px;">
                 <div class="d-flex justify-content-between">
-                    <span>기본점수 ${row.total - (row.hts_top_view_bonus_score ?? 0)} + HTS조회상위 ${row.hts_top_view_bonus_score ?? 0}</span>
+                    <span>기본점수 ${row.total - htsBonus - topInterestBonus} + HTS조회상위 ${htsBonus} + 관심종목등록 ${topInterestBonus}</span>
                     <b>= 총점 ${row.total}점 (${row.grade}등급)</b>
                 </div>
             </div>
@@ -351,6 +365,10 @@
             ${detailSection('HTS조회상위', `${row.hts_top_view_bonus_score ?? 0}점`, [
                 ['최고 순위', hts.best_rank != null ? fmtNum(hts.best_rank, '위') : '당일 미등장'],
                 ['당일 등장 횟수', fmtNum(hts.appearances, '회')],
+            ])}
+            ${detailSection('관심종목등록', `${row.top_interest_bonus_score ?? 0}점`, [
+                ['순위', topInt.rank != null ? fmtNum(topInt.rank, '위') : '당일 미등장'],
+                ['관심종목 등록 건수', topInt.reg_count != null ? fmtNum(topInt.reg_count, '건') : '-'],
             ])}
         `;
 

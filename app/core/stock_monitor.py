@@ -4,7 +4,7 @@ import time
 from datetime import datetime
 from dataclasses import asdict
 from app.config import Config
-from app.utils.db_manager import save_stock_alert_to_db, init_db, save_api_token, get_api_token, save_stock_raw_data, save_daily_market_cap, save_daily_investor_trend, save_stock_investor_daily, save_sector_index_daily, get_signal_score_batch, save_hts_top_view, save_job_run_log, get_market_cap_history
+from app.utils.db_manager import save_stock_alert_to_db, init_db, save_api_token, get_api_token, save_stock_raw_data, save_daily_market_cap, save_daily_investor_trend, save_stock_investor_daily, save_sector_index_daily, get_signal_score_batch, save_hts_top_view, save_job_run_log, get_market_cap_history, save_top_interest_daily
 from app.core.kis_models import RequestHeader, RequestQueryParam, MarketCapQueryParam, FluctuationRankingResponse, MarketCapRankingResponse, StockInvestorDailyItem
 from app.core.upbit_monitor import send_slack_msg
 from app.utils.google_sheets import save_signal_score_to_sheet, save_signal_score_readme, save_investor_ranking_to_sheet
@@ -417,6 +417,85 @@ def fetch_hts_top_view(max_retries=2):
     return True
 
 
+def fetch_top_interest_stock(max_retries=2):
+    """관심종목등록 상위 수집 (일별 1회). 네이버 인기검색종목(lastsearch2.naver)의 대체 지표 —
+    해당 페이지는 robots.txt(Disallow: / for User-agent: *)로 크롤링이 막혀 있어, 비슷한 성격의
+    KIS 공식 API(관심종목등록 건수 기준 순위)를 대신 사용한다. 종목명/가격/등락률/등록건수가
+    한 번의 호출로 전부 내려와서 HTS조회상위와 달리 종목별 추가 호출이 필요 없다.
+    반환: 저장 성공 여부(bool)
+    """
+    global ACCESS_TOKEN
+    if ACCESS_TOKEN is None:
+        get_access_token()
+    if ACCESS_TOKEN is None:
+        logger.error("❌ KIS API 토큰이 없어 관심종목등록 상위 데이터를 가져올 수 없습니다.")
+        return False
+
+    url = f"{Config.KIS_URL_BASE}/uapi/domestic-stock/v1/ranking/top-interest-stock"
+    raw_items = None
+
+    for attempt in range(1, max_retries + 1):
+        header_obj = RequestHeader(
+            authorization=f"Bearer {ACCESS_TOKEN}",
+            appkey=Config.KIS_APP_KEY,
+            appsecret=Config.KIS_APP_SECRET,
+            tr_id="FHPST01800000",
+            custtype="P"
+        )
+        params = {
+            "fid_input_iscd_2": "000000",
+            "fid_cond_mrkt_div_code": "J",
+            "fid_cond_scr_div_code": "20180",
+            "fid_input_iscd": "0000",
+            "fid_trgt_cls_code": "0",
+            "fid_trgt_exls_cls_code": "0",
+            "fid_input_price_1": "",
+            "fid_input_price_2": "",
+            "fid_vol_cnt": "",
+            "fid_div_cls_code": "0",
+            "fid_input_cnt_1": "1",
+        }
+        try:
+            res = requests.get(url, headers=header_obj.to_dict(), params=params, timeout=10)
+            raw_json = res.json()
+
+            if res.status_code == 200:
+                if raw_json.get("rt_cd") != "0":
+                    logger.error(f"❌ 관심종목등록 상위 API 에러: {raw_json.get('msg1')}")
+                else:
+                    raw_items = raw_json.get("output", [])
+                    break
+            elif res.status_code == 401:
+                logger.info("🔑 토큰 만료! 재발급을 시도합니다.")
+                get_access_token()
+            else:
+                logger.error(f"❌ 관심종목등록 상위 실패! {res.status_code} - {res.text}")
+        except Exception as e:
+            logger.error(f"🔥 관심종목등록 상위 에러: {e}")
+
+        if attempt < max_retries:
+            time.sleep(2)
+
+    if not raw_items:
+        logger.error("❌ 관심종목등록 상위 수집 최종 실패 (재시도 초과)")
+        return False
+
+    items = [{
+        "rank": int(r.get("data_rank", idx)),
+        "code": r.get("mksc_shrn_iscd", ""),
+        "name": r.get("hts_kor_isnm"),
+        "market_div": r.get("mrkt_div_cls_name"),
+        "price": r.get("stck_prpr"),
+        "change_rate": r.get("prdy_ctrt"),
+        "reg_count": r.get("inter_issu_reg_csnu"),
+    } for idx, r in enumerate(raw_items, start=1)]
+
+    now = datetime.now()
+    save_top_interest_daily(items, date=now.strftime('%Y-%m-%d'))
+    logger.info(f"✅ 관심종목등록 상위 저장 성공 ({len(items)}건)")
+    return True
+
+
 def fetch_investor_trend(exch_div="J", mrkt_div="1"):
     """투자자별 프로그램 매매동향 조회"""
     if ACCESS_TOKEN is None:
@@ -533,10 +612,12 @@ def send_signal_score_alerts(scores: list):
 
     for s in a_grade:
         hts_bonus = s.get('hts_top_view_bonus_score', 0)
-        base_score = s['total'] - hts_bonus
+        top_interest_bonus = s.get('top_interest_bonus_score', 0)
+        interest_bonus = hts_bonus + top_interest_bonus
+        base_score = s['total'] - interest_bonus
         text = (
             f"🅰️ [Signal Score A등급] {s['name']}({s['code']}) 기본점수 {base_score}점"
-            f"{f' + HTS조회상위 {hts_bonus}점' if hts_bonus else ''} = 총점 {s['total']}점\n"
+            f"{f' + 관심도 보너스 {interest_bonus}점(HTS {hts_bonus}+관심등록 {top_interest_bonus})' if interest_bonus else ''} = 총점 {s['total']}점\n"
             f"모멘텀 {s['momentum_score']} | 수급 {s['supply_demand_score']} | "
             f"랭킹안정성 {s['rank_stability_score']} | 시장환경 {s['market_environment_score']} | "
             f"리스크 {s['risk_penalty_score']}\n"
@@ -571,6 +652,21 @@ def run_job_hts_top_view(trigger_type: str = 'auto') -> bool:
         error_message = str(e)
     _log_job_run('hts_top_view', 'HTS조회상위20종목 수집',
                  '/uapi/domestic-stock/v1/ranking/hts-top-view', start, ok,
+                 error_message=error_message, trigger_type=trigger_type)
+    return ok
+
+
+def run_job_top_interest(trigger_type: str = 'auto') -> bool:
+    """관심종목등록 상위 수집 실행 + 실행이력 기록."""
+    start = datetime.now()
+    error_message = None
+    try:
+        ok = fetch_top_interest_stock()
+    except Exception as e:
+        ok = False
+        error_message = str(e)
+    _log_job_run('top_interest', '관심종목등록 상위 수집',
+                 '/uapi/domestic-stock/v1/ranking/top-interest-stock', start, ok,
                  error_message=error_message, trigger_type=trigger_type)
     return ok
 
@@ -685,6 +781,7 @@ def run_stock_monitor():
     last_close_data_hour = None  # 14시 or 19시 수집 여부 (시간 단위로 추적)
     last_sync_date = None  # 20시 원격 서버 동기화 여부 (하루 1회)
     last_hts_top_view_hour = None  # HTS조회상위20종목 매시간 수집 여부 (시간 단위로 추적)
+    last_top_interest_date = None  # 관심종목등록 상위 일 1회 수집 여부
 
     while True:
         try:
@@ -700,6 +797,14 @@ def run_stock_monitor():
                         last_hts_top_view_hour = run_key
                     else:
                         logger.warning("⚠️ HTS조회상위 수집 실패 — 다음 루프에서 재시도합니다.")
+
+            # 평일 16시 — 관심종목등록 상위 수집 (하루 1회, 장마감 직후)
+            if now.weekday() < 5 and now.hour == 16 and last_top_interest_date != today_str:
+                logger.info("⏰ [스케줄] 16시 관심종목등록 상위 수집 시작")
+                if run_job_top_interest():
+                    last_top_interest_date = today_str
+                else:
+                    logger.warning("⚠️ 관심종목등록 상위 수집 실패 — 다음 루프에서 재시도합니다.")
 
             # 평일 14시 또는 19시 — 투자자별 매매동향 + 업종지수 수집 (시간당 1회)
             # 14시는 장중이라 업종지수는 잠정치로 저장되고, 19시(장마감 후)에 확정치로 덮어써진다.

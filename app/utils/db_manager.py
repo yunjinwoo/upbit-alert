@@ -169,6 +169,7 @@ def init_db():
             market_environment_score INTEGER,
             risk_penalty_score INTEGER,
             hts_top_view_bonus_score INTEGER,
+            top_interest_bonus_score INTEGER,
             total_score INTEGER,
             grade TEXT,
             timestamp TEXT,
@@ -191,6 +192,23 @@ def init_db():
             prdy_vrss TEXT,
             timestamp TEXT,
             UNIQUE(date, hour, code)
+        )
+    ''')
+
+    # 관심종목등록 상위 일별 저장 테이블 (네이버 인기검색종목 대체 — robots.txt로 크롤링 불가해서 KIS 공식 API 사용)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS stock_top_interest_daily (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT,
+            rank INTEGER,
+            code TEXT,
+            name TEXT,
+            market_div TEXT,
+            price TEXT,
+            change_rate TEXT,
+            reg_count TEXT,
+            timestamp TEXT,
+            UNIQUE(date, code)
         )
     ''')
 
@@ -221,6 +239,7 @@ def init_db():
         'CREATE UNIQUE INDEX IF NOT EXISTS idx_invtrend_unique ON investor_trend_daily(date, exch_div, mrkt_div, invr_cls_code)',
         'ALTER TABLE stock_hts_top_view_hourly ADD COLUMN prdy_vrss TEXT',
         'ALTER TABLE signal_score_daily ADD COLUMN hts_top_view_bonus_score INTEGER DEFAULT 0',
+        'ALTER TABLE signal_score_daily ADD COLUMN top_interest_bonus_score INTEGER DEFAULT 0',
         # net_buy는 이름과 달리 실제로는 KIS API의 invt_new_psdg(투자 신 심리도) 필드였음 — 이름 정정
         'ALTER TABLE sector_index_daily RENAME COLUMN net_buy TO psychology_index',
     ]
@@ -701,6 +720,87 @@ def sync_upsert_hts_top_view(rows: list) -> int:
                 timestamp=excluded.timestamp
         ''', (r.get('date'), r.get('hour'), r.get('rank'), r.get('code'), r.get('market_div'),
               r.get('name'), r.get('price'), r.get('change_rate'), r.get('prdy_vrss'),
+              r.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))))
+        saved += 1
+    conn.commit()
+    conn.close()
+    return saved
+
+
+def save_top_interest_daily(items: list, date: str):
+    """관심종목등록 상위 일별 스냅샷 저장 (같은 date 데이터는 덮어쓰기).
+    items: [{rank, code, name, market_div, price, change_rate, reg_count}, ...]
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    cursor.execute('DELETE FROM stock_top_interest_daily WHERE date = ?', (date,))
+
+    insert_data = [
+        (date, it['rank'], it['code'], it.get('name'), it.get('market_div'),
+         it.get('price'), it.get('change_rate'), it.get('reg_count'), timestamp)
+        for it in items
+    ]
+    cursor.executemany('''
+        INSERT INTO stock_top_interest_daily (date, rank, code, name, market_div, price, change_rate, reg_count, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', insert_data)
+
+    conn.commit()
+    conn.close()
+
+
+def get_top_interest_range(date_from: str, date_to: str) -> list:
+    """관심종목등록 상위 구간 조회 (date_from~date_to 포함, 날짜별 1스냅샷씩).
+    반환: [{date, rank, code, name, market_div, price, change_rate, reg_count, timestamp}, ...]
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT * FROM stock_top_interest_daily
+        WHERE date BETWEEN ? AND ?
+        ORDER BY date DESC, rank ASC
+    ''', (date_from, date_to))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_top_interest_export(limit_days: int = 7) -> list:
+    """동기화 전송용 — 최근 N일치 관심종목등록 상위 원본 스냅샷 전체 반환."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cutoff = (datetime.now() - timedelta(days=limit_days)).strftime('%Y-%m-%d')
+    cursor.execute('''
+        SELECT date, rank, code, name, market_div, price, change_rate, reg_count, timestamp
+        FROM stock_top_interest_daily
+        WHERE date >= ?
+        ORDER BY date DESC, rank ASC
+    ''', (cutoff,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def sync_upsert_top_interest(rows: list) -> int:
+    """stock_top_interest_daily upsert (date+code 기준) — 원격 동기화 수신용"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    saved = 0
+    for r in rows:
+        cursor.execute('''
+            INSERT INTO stock_top_interest_daily
+                (date, rank, code, name, market_div, price, change_rate, reg_count, timestamp)
+            VALUES (?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(date, code) DO UPDATE SET
+                rank=excluded.rank, name=excluded.name, market_div=excluded.market_div,
+                price=excluded.price, change_rate=excluded.change_rate, reg_count=excluded.reg_count,
+                timestamp=excluded.timestamp
+        ''', (r.get('date'), r.get('rank'), r.get('code'), r.get('name'), r.get('market_div'),
+              r.get('price'), r.get('change_rate'), r.get('reg_count'),
               r.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))))
         saved += 1
     conn.commit()
@@ -1396,6 +1496,47 @@ def get_hts_top_view_bonus(code: str, date: str = None) -> dict:
     return {'code': code, 'date': date, 'best_rank': best_rank, 'appearances': appearances, 'score': score}
 
 
+def get_top_interest_bonus(code: str, date: str = None) -> dict:
+    """관심종목등록 상위 당일 등장 여부에 따른 가점(0~10점) 산출.
+    HTS조회상위 가점(0~20점)과 합쳐 "관심도 보너스" 최대 30점을 구성하는 두 번째 축.
+    date 기준(미지정 시 최신 시가총액 날짜)으로 그날 관심종목등록 상위에 등장했다면 순위 구간별 가점.
+    - 1~3위 등장 → +10
+    - 4~10위 등장 → +6
+    - 11위 이하 등장 → +3
+    - 그날 미등장 → 0
+    반환: {code, date, rank, reg_count, score}
+    """
+    if not date:
+        date = get_latest_market_cap_date()
+    if not date:
+        return {'code': code, 'date': None, 'rank': None, 'reg_count': None, 'score': 0}
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT rank, reg_count FROM stock_top_interest_daily
+        WHERE code = ? AND date = ?
+        LIMIT 1
+    ''', (code, date))
+    row = cursor.fetchone()
+    conn.close()
+
+    rank = row['rank'] if row else None
+    reg_count = row['reg_count'] if row else None
+
+    if rank is None:
+        score = 0
+    elif rank <= 3:
+        score = 10
+    elif rank <= 10:
+        score = 6
+    else:
+        score = 3
+
+    return {'code': code, 'date': date, 'rank': rank, 'reg_count': reg_count, 'score': score}
+
+
 def _grade_for_score(total: int) -> str:
     """종합 점수 → 알림 등급(A/B/C/제외)."""
     if total >= 80:
@@ -1408,10 +1549,13 @@ def _grade_for_score(total: int) -> str:
 
 
 def get_signal_score(code: str, fid_input_iscd: str = "combined") -> dict:
-    """1~6번 점수(모멘텀·수급·랭킹안정성·시장환경·리스크패널티·HTS조회상위가점)를 합산한 종합 Signal Score 산출.
+    """1~7번 점수(모멘텀·수급·랭킹안정성·시장환경·리스크패널티·HTS조회상위가점·관심종목등록가점)를
+    합산한 종합 Signal Score 산출.
+    HTS조회상위가점(0~20)+관심종목등록가점(0~10) = "관심도 보너스" 최대 30점(합산 후 30점 상한).
     등급: A(80점↑) / B(65~79) / C(50~64) / 제외(50 미만)
     반환: {code, date, momentum_score, supply_demand_score, rank_stability_score,
-           market_environment_score, risk_penalty_score, hts_top_view_bonus_score, total, grade, detail}
+           market_environment_score, risk_penalty_score, hts_top_view_bonus_score,
+           top_interest_bonus_score, total, grade, detail}
     """
     momentum = get_momentum_score(code)
     supply = get_supply_demand_score(code, days=3)
@@ -1420,8 +1564,10 @@ def get_signal_score(code: str, fid_input_iscd: str = "combined") -> dict:
     risk = get_risk_penalty(code, fid_input_iscd=fid_input_iscd)
     date = momentum.get('date') or rank.get('date') or market.get('date') or risk.get('date')
     hts_bonus = get_hts_top_view_bonus(code, date=date)
+    top_interest_bonus = get_top_interest_bonus(code, date=date)
+    interest_bonus_total = min(hts_bonus['score'] + top_interest_bonus['score'], 30)
 
-    total = momentum['score'] + supply['score'] + rank['score'] + market['score'] + risk['score'] + hts_bonus['score']
+    total = momentum['score'] + supply['score'] + rank['score'] + market['score'] + risk['score'] + interest_bonus_total
 
     return {
         'code': code,
@@ -1432,6 +1578,7 @@ def get_signal_score(code: str, fid_input_iscd: str = "combined") -> dict:
         'market_environment_score': market['score'],
         'risk_penalty_score': risk['score'],
         'hts_top_view_bonus_score': hts_bonus['score'],
+        'top_interest_bonus_score': top_interest_bonus['score'],
         'total': total,
         'grade': _grade_for_score(total),
         'detail': {
@@ -1441,6 +1588,7 @@ def get_signal_score(code: str, fid_input_iscd: str = "combined") -> dict:
             'market_environment': market,
             'risk_penalty': risk,
             'hts_top_view_bonus': hts_bonus,
+            'top_interest_bonus': top_interest_bonus,
         },
     }
 
@@ -1497,8 +1645,9 @@ def save_signal_score_daily(rows: list) -> int:
         cursor.execute('''
             INSERT INTO signal_score_daily
                 (date, code, name, momentum_score, supply_demand_score, rank_stability_score,
-                 market_environment_score, risk_penalty_score, hts_top_view_bonus_score, total_score, grade, timestamp)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                 market_environment_score, risk_penalty_score, hts_top_view_bonus_score,
+                 top_interest_bonus_score, total_score, grade, timestamp)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(date, code) DO UPDATE SET
                 name=excluded.name, momentum_score=excluded.momentum_score,
                 supply_demand_score=excluded.supply_demand_score,
@@ -1506,10 +1655,11 @@ def save_signal_score_daily(rows: list) -> int:
                 market_environment_score=excluded.market_environment_score,
                 risk_penalty_score=excluded.risk_penalty_score,
                 hts_top_view_bonus_score=excluded.hts_top_view_bonus_score,
+                top_interest_bonus_score=excluded.top_interest_bonus_score,
                 total_score=excluded.total_score, grade=excluded.grade, timestamp=excluded.timestamp
         ''', (r['date'], r['code'], r['name'], r['momentum_score'], r['supply_demand_score'],
               r['rank_stability_score'], r['market_environment_score'], r['risk_penalty_score'],
-              r.get('hts_top_view_bonus_score', 0),
+              r.get('hts_top_view_bonus_score', 0), r.get('top_interest_bonus_score', 0),
               r['total'], r['grade'], timestamp))
         saved += 1
     conn.commit()
