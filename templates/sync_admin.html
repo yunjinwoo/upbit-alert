@@ -47,6 +47,7 @@
         <a href="{{ url_for('sector_index_view') }}" class="nav-link">업종 일자별지수</a>
         <a href="{{ url_for('ranking_preview_view') }}" class="nav-link">순위분석 미리보기</a>
         <a href="{{ url_for('hts_top_view_view') }}" class="nav-link">HTS조회상위</a>
+        <a href="{{ url_for('top_interest_view') }}" class="nav-link">관심종목등록 상위</a>
         <a href="{{ url_for('signal_score_preview_view') }}" class="nav-link">Signal Score 종목</a>
         <a href="{{ url_for('raw_data_view') }}" class="nav-link">원본 데이터</a>
         <a href="/grid" class="nav-link">리비전 관리</a>
@@ -89,6 +90,7 @@
             <div class="step-row"><span class="step-icon" id="si-sec1001">⏳</span><span class="step-label">업종 일자별지수 — 코스닥 (1001)</span><span class="step-count" id="sc-sec1001">-</span></div>
             <div class="step-row"><span class="step-icon" id="si-sec2001">⏳</span><span class="step-label">업종 일자별지수 — 코스피200 (2001)</span><span class="step-count" id="sc-sec2001">-</span></div>
             <div class="step-row"><span class="step-icon" id="si-hts">⏳</span><span class="step-label">HTS조회상위20종목 (stock_hts_top_view_hourly)</span><span class="step-count" id="sc-hts">-</span></div>
+            <div class="step-row"><span class="step-icon" id="si-topint">⏳</span><span class="step-label">관심종목등록 상위 (stock_top_interest_daily)</span><span class="step-count" id="sc-topint">-</span></div>
         </div>
         <div id="bulkLog" class="sync-log" style="display:none"></div>
     </div>
@@ -139,6 +141,7 @@
             <button class="btn btn-warning btn-sm text-dark" data-job="sector_index" onclick="runJobManual(this)">▶ 업종지수 실행</button>
             <button class="btn btn-warning btn-sm text-dark" data-job="market_cap_signal_score" onclick="runJobManual(this)">▶ 시가총액+Signal Score 실행</button>
             <button class="btn btn-warning btn-sm text-dark" data-job="remote_sync" onclick="runJobManual(this)">▶ 원격동기화 실행</button>
+            <button class="btn btn-warning btn-sm text-dark" data-job="top_interest" onclick="runJobManual(this)">▶ 관심종목등록 상위 실행</button>
         </div>
         <div class="text-muted small mb-2">⚠️ 수동실행은 미리보기가 아니라 즉시 실행입니다 — 실제로 KIS API를 호출하고 DB에 저장됩니다(Signal Score는 A등급 시 Slack도 발송됩니다).</div>
 
@@ -224,6 +227,11 @@
                 <tr>
                     <td><a href="api/sync/export/hts-top-view?limit=7" target="_blank">/api/sync/export/hts-top-view</a></td>
                     <td>HTS조회상위20종목 시간별 원시 데이터</td>
+                    <td>limit (기본 7일)</td>
+                </tr>
+                <tr>
+                    <td><a href="api/sync/export/top-interest?limit=7" target="_blank">/api/sync/export/top-interest</a></td>
+                    <td>관심종목등록 상위 일별 원시 데이터</td>
                     <td>limit (기본 7일)</td>
                 </tr>
             </tbody>
@@ -404,7 +412,7 @@
         document.getElementById('sc-' + id).textContent = n == null ? '-' : `${Number(n).toLocaleString()}건`;
     }
     function resetSteps() {
-        ['mkt','inv','trJ1','trJ4','sec0001','sec1001','sec2001','hts'].forEach(id => {
+        ['mkt','inv','trJ1','trJ4','sec0001','sec1001','sec2001','hts','topint'].forEach(id => {
             stepIcon(id, 'wait'); stepCount(id, null);
         });
     }
@@ -443,6 +451,7 @@
             { id: 'sec1001',fetch: () => fetch(`api/sector-index/cached?iscd=1001`).then(r=>r.json()),             table: 'sector_index_daily' },
             { id: 'sec2001',fetch: () => fetch(`api/sector-index/cached?iscd=2001`).then(r=>r.json()),             table: 'sector_index_daily' },
             { id: 'hts',    fetch: () => fetch(`api/sync/export/hts-top-view?limit=${limit}`).then(r=>r.json()),   table: 'stock_hts_top_view_hourly' },
+            { id: 'topint', fetch: () => fetch(`api/sync/export/top-interest?limit=${limit}`).then(r=>r.json()),   table: 'stock_top_interest_daily' },
         ];
 
         try {

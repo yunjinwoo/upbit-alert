@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HTS조회상위20종목 일별 순위 추이</title>
+    <title>관심종목등록 상위</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css" rel="stylesheet">
     <style>
@@ -13,18 +13,16 @@
         .table-container { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
         .up-rate { color: #d60000; font-weight: bold; }
         .down-rate { color: #0049af; font-weight: bold; }
-        .rate-tip { cursor: help; border-bottom: 1px dotted currentColor; }
         .ticker-link { text-decoration: none; color: #0049af; font-weight: bold; cursor: pointer; }
         .ticker-link:hover { text-decoration: underline; }
         .rank-badge { font-size: 0.72rem; padding: 0.28em 0.5em; }
         .table-scroll { overflow-x: auto; }
-        #htsTable { font-size: 0.8rem; }
-        #htsTable th, #htsTable td { white-space: nowrap; padding-top: 0.4rem; padding-bottom: 0.4rem; }
-        #htsTable td:nth-child(2) { white-space: normal; }
-        /* 날짜가 많아져도 어떤 종목 행인지 계속 보이도록 앞 2개 컬럼(시장구분/종목명)만 스크롤 시 고정 */
-        #htsTable th:nth-child(1), #htsTable td:nth-child(1) { position: sticky; left: 0; width: 74px; min-width: 74px; max-width: 74px; background: #fff; z-index: 2; }
-        #htsTable th:nth-child(2), #htsTable td:nth-child(2) { position: sticky; left: 74px; background: #fff; z-index: 2; box-shadow: 2px 0 4px rgba(0,0,0,0.06); }
-        #htsTable thead th:nth-child(1), #htsTable thead th:nth-child(2) { background: #f8f9fa; z-index: 3; }
+        #topintTable { font-size: 0.8rem; }
+        #topintTable th, #topintTable td { white-space: nowrap; padding-top: 0.4rem; padding-bottom: 0.4rem; }
+        #topintTable td:nth-child(2) { white-space: normal; }
+        #topintTable th:nth-child(1), #topintTable td:nth-child(1) { position: sticky; left: 0; width: 74px; min-width: 74px; max-width: 74px; background: #fff; z-index: 2; }
+        #topintTable th:nth-child(2), #topintTable td:nth-child(2) { position: sticky; left: 74px; background: #fff; z-index: 2; box-shadow: 2px 0 4px rgba(0,0,0,0.06); }
+        #topintTable thead th:nth-child(1), #topintTable thead th:nth-child(2) { background: #f8f9fa; z-index: 3; }
         .main-navbar { background-color: #1a1a2e; }
         .main-navbar .navbar-brand { color: #fff; font-weight: bold; }
         .main-navbar .nav-link { color: rgba(255,255,255,0.75) !important; font-size: 0.82rem; }
@@ -48,41 +46,33 @@
 <button class="info-btn" data-bs-toggle="offcanvas" data-bs-target="#infoPanel" title="페이지 안내">ℹ 안내</button>
 <div class="offcanvas offcanvas-end offcanvas-info" tabindex="-1" id="infoPanel" style="width:35vw">
     <div class="offcanvas-header">
-        <h5 class="offcanvas-title">👀 HTS조회상위20종목 페이지 안내</h5>
+        <h5 class="offcanvas-title">⭐ 관심종목등록 상위 페이지 안내</h5>
         <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
     </div>
     <div class="offcanvas-body">
         <div class="info-section">
             <h6>📌 목적</h6>
-            <p class="small">한국투자증권 HTS에서 실시간으로 가장 많이 조회되는 상위 20종목을, 날짜 단위로 얼마나 꾸준히 관심을 받았는지 추적합니다. 시가총액처럼 펀더멘털 기반 지표가 아니라 "지금 사람들의 관심"을 보여주는 지표입니다.</p>
+            <p class="small">얼마나 많은 투자자가 그 종목을 관심종목으로 등록했는지 기준의 랭킹입니다. 네이버 증권 "인기검색종목"과 비슷한 성격의 "관심도" 지표인데, 그 페이지는 <code>robots.txt</code>로 크롤링이 막혀 있어(<code>User-agent: *, Disallow: /</code>) 대신 KIS 공식 API로 대체했습니다.</p>
         </div>
         <div class="info-section">
             <h6>🔌 사용 API</h6>
-            <span class="info-tag">KIS HHMCM000100C0</span>
-            <p class="small mt-1">HTS조회상위20종목 조회 + 종목별 현재가 조회(FHKST01010100)로 이름/가격/등락률 보강</p>
+            <span class="info-tag">KIS FHPST01800000</span>
+            <p class="small mt-1">국내주식 관심종목등록 상위 — 한 번의 호출로 이름/가격/등락률/등록건수까지 전부 내려옴 (HTS조회상위처럼 종목별 추가 조회 불필요)</p>
         </div>
         <div class="info-section">
             <h6>⏱ 수집 주기</h6>
-            <p class="small">자동: 평일 09~15시 매시 10분 이후 첫 루프에서 수집 (시간당 1회)<br>수동: 즉시 수집 버튼</p>
+            <p class="small">자동: 평일 16시(장마감 후) 하루 1회<br>수동: 즉시 수집 버튼</p>
         </div>
         <div class="info-section">
             <h6>💡 활용 팁</h6>
-            <div class="info-tip">시작일~종료일 구간을 고르면, 그 구간에 데이터가 있는 날짜들이 열로 표시됨</div>
-            <div class="info-tip">날짜별 칸의 순위는 그날 모든 시간대 스냅샷을 (20-순위)점으로 합산한 뒤, 같은 날 등장한 종목들끼리 다시 순위를 매긴 값 — 시간대 노이즈를 없애고 "그날 하루 전체의 관심도 순위"를 보여줌</div>
-            <div class="info-tip">순위 배지 색상: <span class="badge bg-danger">1~3위</span> <span class="badge bg-primary">4~10위</span> <span class="badge bg-secondary">11위 이하</span></div>
-            <div class="info-tip">등락률에 마우스를 올리면 전일종가 → 현재가 기준 값을 툴팁으로 확인 가능 (점선 밑줄 표시)</div>
-            <div class="info-tip">구간 합계 = 시작일~종료일 전체 스냅샷에서 (20-순위)점을 통째로 합산 — 날짜별 순위와 별개로, 구간 전체 기준 랭킹. 괄호 안 숫자는 그 구간 내 등장 횟수</div>
-            <div class="info-tip">날짜가 많아지면 표는 좌우로 스크롤되고, 어떤 종목인지 알 수 있게 시장구분·종목명 칸만 계속 고정되어 보임 — 현재가/등락률/구간합계는 날짜 칸들과 함께 스크롤됨</div>
-            <div class="info-tip">"구간 내 있었지만 최근 날짜엔 빠진 종목만 보기"를 켜면, 구간 합계에는 있었지만 구간의 마지막 날짜엔 20위 밖으로 밀린 종목만 표시됨 (관심에서 멀어진 종목 파악용)</div>
+            <div class="info-tip">최대 30종목까지만 제공됨 (KIS API 자체 한계, 페이지네이션 시도했으나 31위 이상은 응답 없음)</div>
+            <div class="info-tip">정렬 기준은 "최신 등록건수" 내림차순 — 실제 등록 인원 수치라 순위보다 격차를 정량적으로 볼 수 있음</div>
+            <div class="info-tip">날짜 열은 그날의 실제 순위(1~30위), 등록건수/현재가/등락률은 선택 구간 중 가장 최근 값</div>
+            <div class="info-tip">"구간 내 있었지만 최근 날짜엔 빠진 종목만 보기"를 켜면 관심권에서 멀어진 종목만 표시됨</div>
         </div>
         <div class="info-section">
             <h6>⚠️ 한계</h6>
-            <div class="info-warn">원본 API는 종목코드만 반환 — 이름/가격은 종목별 현재가 API로 별도 조회해서 보강함 (실패 시 이름 없이 코드만 표시될 수 있음)</div>
-            <div class="info-warn">주말·공휴일 등 수집이 없었던 날짜는 열 자체가 생기지 않음</div>
-        </div>
-        <div class="info-section">
-            <h6>🔗 연관 페이지</h6>
-            <p class="small">→ 순위분석 미리보기: 정식 편입 전 API 응답 구조 확인용</p>
+            <div class="info-warn">하루 1회 수집이라 일중 변화는 보이지 않음 (HTS조회상위와 달리 시간대별 데이터 없음)</div>
         </div>
     </div>
 </div>
@@ -98,8 +88,8 @@
         <a href="{{ url_for('volume_ratio_view') }}" class="nav-link">거래량 배수</a>
         <a href="{{ url_for('sector_index_view') }}" class="nav-link">업종 일자별지수</a>
         <a href="{{ url_for('ranking_preview_view') }}" class="nav-link">순위분석 미리보기</a>
-        <a href="{{ url_for('hts_top_view_view') }}" class="nav-link active">HTS조회상위</a>
-        <a href="{{ url_for('top_interest_view') }}" class="nav-link">관심종목등록 상위</a>
+        <a href="{{ url_for('hts_top_view_view') }}" class="nav-link">HTS조회상위</a>
+        <a href="{{ url_for('top_interest_view') }}" class="nav-link active">관심종목등록 상위</a>
         <a href="{{ url_for('signal_score_preview_view') }}" class="nav-link">Signal Score 종목</a>
         <a href="{{ url_for('raw_data_view') }}" class="nav-link">원본 데이터</a>
         <a href="/grid" class="nav-link">리비전 관리</a>
@@ -110,7 +100,7 @@
 
 <div class="container dashboard-container">
     <div class="header-title">
-        <h2>👀 HTS조회상위20종목 일별 순위 추이</h2>
+        <h2>⭐ 관심종목등록 상위</h2>
         <div>
             <span id="update-timer" class="badge bg-secondary">로딩 중...</span>
             <button onclick="fetchNow()" class="btn btn-warning btn-sm ms-2 text-dark">즉시 수집</button>
@@ -142,7 +132,7 @@
 
     <div class="table-container">
         <div class="table-scroll">
-            <table id="htsTable" class="table table-hover" style="width:100%">
+            <table id="topintTable" class="table table-hover" style="width:100%">
                 <thead class="table-light"><tr id="tableHead"></tr></thead>
                 <tbody id="tableBody"></tbody>
             </table>
@@ -156,19 +146,8 @@
 <script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
 
 <script>
-    let dataTable;
-    let latestData = [];    // 현재가/등락률 참고용 — 날짜 무관, 가장 최근 스냅샷들
-    let dailyScores = [];   // 선택 구간의 날짜별 합산 점수 원본
-    let cumulativeMap = {}; // code -> {score, appearances, best_rank, name, market_div} (구간 전체 합계)
-
-    // latestData는 date desc, hour desc, rank asc로 정렬되어 오므로 코드별 첫 등장이 가장 최근 스냅샷
-    function buildLatestSeenMap() {
-        const map = {};
-        latestData.forEach(item => {
-            if (!(item.code in map)) map[item.code] = item;
-        });
-        return map;
-    }
+    let dataTable = null;
+    let rawData = [];
 
     function filterByName() {
         if (dataTable) dataTable.search(document.getElementById('nameSearch').value).draw();
@@ -182,14 +161,14 @@
     }
 
     async function fetchNow() {
-        if (!confirm("KIS API를 호출하여 HTS조회상위20종목 데이터를 지금 수집하시겠습니까?\n(현재 시간대 데이터는 덮어씌워집니다)")) return;
+        if (!confirm("KIS API를 호출하여 관심종목등록 상위 데이터를 지금 수집하시겠습니까?\n(오늘 데이터는 덮어씌워집니다)")) return;
 
         const btn = document.querySelector('button[onclick="fetchNow()"]');
         btn.innerText = "수집 중...";
         btn.disabled = true;
 
         try {
-            const res = await fetch('api/hts-top-view/fetch', { method: 'POST' });
+            const res = await fetch('api/top-interest/fetch', { method: 'POST' });
             const result = await res.json();
             btn.innerText = "즉시 수집";
             btn.disabled = false;
@@ -208,20 +187,19 @@
         }
     }
 
-    // 종목×날짜 매트릭스 렌더링 — 날짜별 합산 점수를 그날 순위로 환산해서 나란히 비교
+    // 종목×날짜 매트릭스 렌더링 — 날짜별 실제 순위를 열로 나란히 비교
     function renderTable() {
         const droppedOnly = document.getElementById('droppedOnly').checked;
-        const latestSeenMap = buildLatestSeenMap();
 
         if (dataTable) { dataTable.destroy(); dataTable = null; }
 
-        // date -> code -> score
-        const byDateScore = {};
-        dailyScores.forEach(item => {
-            byDateScore[item.date] = byDateScore[item.date] || {};
-            byDateScore[item.date][item.code] = item.score;
+        // date -> code -> item
+        const byDate = {};
+        rawData.forEach(item => {
+            byDate[item.date] = byDate[item.date] || {};
+            byDate[item.date][item.code] = item;
         });
-        const dates = Object.keys(byDateScore).sort();
+        const dates = Object.keys(byDate).sort();
 
         if (!dates.length) {
             document.getElementById('tableHead').innerHTML = '';
@@ -230,29 +208,28 @@
             return;
         }
 
-        // date -> code -> 그날 순위 (점수 내림차순으로 매김)
-        const byDateRank = {};
-        dates.forEach(d => {
-            const entries = Object.entries(byDateScore[d]).sort((a, b) => b[1] - a[1]);
-            byDateRank[d] = {};
-            entries.forEach(([code], idx) => { byDateRank[d][code] = idx + 1; });
+        // 코드별 최신 등장 정보(이름/시장/가격/등락률/등록건수) — 날짜 desc 정렬이므로 첫 등장이 최신
+        const latestSeenMap = {};
+        [...rawData].sort((a, b) => b.date.localeCompare(a.date)).forEach(item => {
+            if (!(item.code in latestSeenMap)) latestSeenMap[item.code] = item;
         });
 
         const lastDate = dates[dates.length - 1];
-        const lastDateCodes = new Set(Object.keys(byDateScore[lastDate] || {}));
+        const lastDateCodes = new Set(Object.keys(byDate[lastDate] || {}));
+        const allCodes = Object.keys(latestSeenMap);
 
         let codes;
         if (droppedOnly) {
-            codes = Object.keys(cumulativeMap).filter(c => !lastDateCodes.has(c));
+            codes = allCodes.filter(c => !lastDateCodes.has(c));
         } else {
-            codes = Object.keys(cumulativeMap);
+            codes = allCodes;
         }
 
         const rows = codes.map(code => {
-            const cum = cumulativeMap[code];
-            const info = latestSeenMap[code] || { code, market_div: cum.market_div, name: cum.name, price: null, change_rate: null };
-            return { code, info, cum };
-        }).sort((a, b) => (b.cum ? b.cum.score : -1) - (a.cum ? a.cum.score : -1));
+            const info = latestSeenMap[code];
+            const appearances = dates.filter(d => byDate[d][code]).length;
+            return { code, info, appearances };
+        }).sort((a, b) => (parseInt(b.info.reg_count) || 0) - (parseInt(a.info.reg_count) || 0));
 
         document.getElementById('tableHead').innerHTML = `
             <th>시장구분</th>
@@ -260,7 +237,8 @@
             ${dates.map(d => `<th class="text-center">${d.slice(5)}</th>`).join('')}
             <th class="text-end">현재가</th>
             <th class="text-end">등락률</th>
-            <th class="text-end">구간 합계</th>
+            <th class="text-end">등록건수</th>
+            <th class="text-end">등장횟수</th>
         `;
 
         document.getElementById('tableBody').innerHTML = rows.map(r => {
@@ -269,33 +247,19 @@
             const rate = r.info.change_rate !== null && r.info.change_rate !== undefined ? parseFloat(r.info.change_rate) : null;
             const rateClass = rate > 0 ? 'up-rate' : (rate < 0 ? 'down-rate' : '');
             const rateSign = rate > 0 ? '+' : '';
-            // prdy_vrss(전일대비, 정확값)가 있으면 그걸로, 없으면 저장된 현재가+등락률로 역산(근사값)
-            const prdyVrss = r.info.prdy_vrss !== null && r.info.prdy_vrss !== undefined ? parseInt(r.info.prdy_vrss) : null;
-            let prevClose = null;
-            let prevCloseApprox = false;
-            if (priceNum !== null && prdyVrss !== null) {
-                prevClose = priceNum - prdyVrss;
-            } else if (priceNum !== null && rate !== null && (1 + rate / 100) !== 0) {
-                prevClose = Math.round(priceNum / (1 + rate / 100));
-                prevCloseApprox = true;
-            }
-            const rateTitle = prevClose !== null
-                ? `전일종가 ${prevCloseApprox ? '약 ' : ''}${prevClose.toLocaleString()}원 → 현재가 ${price}원${prevCloseApprox ? ' (등락률 역산 근사값)' : ''}`
-                : '기준가 정보 없음';
-            const marketText = r.info.market_div === 'Q' ? '코스닥' : (r.info.market_div === 'J' ? '코스피' : (r.info.market_div || '-'));
-            const marketClass = r.info.market_div === 'Q' ? 'bg-success' : 'bg-primary';
+            const regCount = r.info.reg_count ? parseInt(r.info.reg_count).toLocaleString() : '-';
             const displayName = r.info.name || '(이름 조회 실패)';
 
             const dateCells = dates.map(d => {
-                const rank = byDateRank[d][r.code];
-                const order = rank || 999;
-                const cell = rank ? `<span class="badge rank-badge ${rankBadgeClass(rank)}">${rank}위</span>` : '<span class="text-muted">-</span>';
+                const item = byDate[d][r.code];
+                const order = item ? item.rank : 999;
+                const cell = item ? `<span class="badge rank-badge ${rankBadgeClass(item.rank)}">${item.rank}위</span>` : '<span class="text-muted">-</span>';
                 return `<td class="text-center" data-order="${order}">${cell}</td>`;
             }).join('');
 
             return `
                 <tr>
-                    <td><span class="badge rank-badge ${marketClass}">${marketText}</span></td>
+                    <td><span class="badge rank-badge bg-primary">${r.info.market_div || '-'}</span></td>
                     <td>
                         <a href="https://finance.naver.com/item/main.nhn?code=${r.code}" target="_blank" class="ticker-link">
                             ${displayName} <small class="text-muted">(${r.code})</small>
@@ -303,19 +267,15 @@
                     </td>
                     ${dateCells}
                     <td class="text-end">${price}${price !== '-' ? '원' : ''}</td>
-                    <td class="text-end">${rate !== null ? `<span class="${rateClass} rate-tip" title="${rateTitle}">${rateSign}${rate}%</span>` : '-'}</td>
-                    <td class="text-end" data-order="${r.cum ? r.cum.score : -1}">${r.cum ? `${r.cum.score}점 <small class="text-muted">(${r.cum.appearances}회)</small>` : '-'}</td>
+                    <td class="text-end">${rate !== null ? `<span class="${rateClass}">${rateSign}${rate}%</span>` : '-'}</td>
+                    <td class="text-end" data-order="${r.info.reg_count || 0}">${regCount}</td>
+                    <td class="text-end">${r.appearances}회</td>
                 </tr>`;
         }).join('');
 
-        dataTable = $('#htsTable').DataTable({
-            order: [],
-            pageLength: 100,
-            language: {
-                search: "결과 내 검색:",
-                lengthMenu: "_MENU_ 개씩 보기",
-                info: "총 _TOTAL_ 건 중 _START_~_END_ 표시"
-            }
+        dataTable = $('#topintTable').DataTable({
+            order: [], pageLength: 100, scrollX: true,
+            language: { search: "결과 내 검색:", lengthMenu: "_MENU_ 개씩 보기", info: "총 _TOTAL_ 건 중 _START_~_END_ 표시" }
         });
         filterByName();
     }
@@ -328,37 +288,26 @@
             return;
         }
 
-        document.getElementById('update-timer').innerText = '조회 중...';
+        document.getElementById('update-timer').textContent = '조회 중...';
 
         try {
-            const [cumRes, dailyRes, latestRes] = await Promise.all([
-                fetch(`api/hts-top-view/cumulative?date_from=${dateFrom}&date_to=${dateTo}`).then(r => r.json()),
-                fetch(`api/hts-top-view/daily-scores?date_from=${dateFrom}&date_to=${dateTo}`).then(r => r.json()),
-                fetch('api/hts-top-view').then(r => r.json()),
-            ]);
-
-            cumulativeMap = {};
-            if (cumRes.status === 'success') {
-                cumRes.data.forEach(item => {
-                    cumulativeMap[item.code] = {
-                        score: item.score, appearances: item.appearances, best_rank: item.best_rank,
-                        name: item.name, market_div: item.market_div,
-                    };
-                });
+            const res = await fetch(`api/top-interest?date_from=${dateFrom}&date_to=${dateTo}`);
+            const result = await res.json();
+            if (result.status !== 'success') {
+                document.getElementById('update-timer').textContent = '조회 실패: ' + result.message;
+                return;
             }
 
-            dailyScores = (dailyRes.status === 'success') ? dailyRes.data : [];
-            latestData = (latestRes.status === 'success') ? latestRes.data : [];
-
-            if (!Object.keys(cumulativeMap).length) {
+            rawData = result.data || [];
+            if (!rawData.length) {
                 document.getElementById('tableHead').innerHTML = '';
                 document.getElementById('tableBody').innerHTML = '';
-                document.getElementById('update-timer').innerText = `데이터 없음 (${new Date().toLocaleTimeString()})`;
+                document.getElementById('update-timer').textContent = `데이터 없음 (${new Date().toLocaleTimeString()})`;
                 return;
             }
 
             renderTable();
-            document.getElementById('update-timer').innerText = `구간: ${dateFrom} ~ ${dateTo} · 최근 업데이트: ${new Date().toLocaleTimeString()}`;
+            document.getElementById('update-timer').textContent = `구간: ${dateFrom} ~ ${dateTo} · 최근 업데이트: ${new Date().toLocaleTimeString()}`;
         } catch (e) {
             console.error(e);
             alert('데이터를 불러오는데 실패했습니다.');
