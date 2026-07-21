@@ -113,23 +113,35 @@
         </div>
     </div>
 
-    <div class="card-panel mb-3 d-flex align-items-end gap-2 flex-wrap">
-        <div>
-            <label class="form-label mb-1 small">업종 선택</label>
-            <select id="selIscd" class="form-select form-select-sm" onchange="loadFromDb()">
-                <option value="0001">코스피 (KOSPI)</option>
-                <option value="1001">코스닥 (KOSDAQ)</option>
-                <option value="2001">코스피200</option>
-            </select>
-            <!-- 옵션은 페이지 로드시 /api/sector-index/list로 세부 업종까지 채워짐 -->
+    <div class="card-panel mb-3">
+        <div class="row g-3">
+            <!-- 업종 선택영역 -->
+            <div class="col-md-5">
+                <label class="form-label mb-1 small fw-bold">업종 선택</label>
+                <select id="selIscd" class="form-select form-select-sm mb-2" onchange="loadFromDb()">
+                    <option value="0001">코스피 (KOSPI)</option>
+                    <option value="1001">코스닥 (KOSDAQ)</option>
+                    <option value="2001">코스피200</option>
+                </select>
+                <!-- 옵션은 페이지 로드시 /api/sector-index/list로 세부 업종까지 채워짐 -->
+                <label class="form-label mb-1 small fw-bold">업종 비교 (다중 선택)</label>
+                <select id="selCompare" class="form-select form-select-sm" multiple size="4"></select>
+            </div>
+            <!-- 기준일영역 -->
+            <div class="col-md-3">
+                <label class="form-label mb-1 small fw-bold">기준일 (최근 100거래일 조회)</label>
+                <input type="date" id="selDate" class="form-control form-control-sm">
+            </div>
+            <!-- 버튼영역 -->
+            <div class="col-md-4 d-flex flex-column justify-content-end gap-2">
+                <div class="d-flex gap-2">
+                    <button class="btn btn-primary btn-sm flex-fill" onclick="loadFromDb()">DB 조회</button>
+                    <button class="btn btn-warning btn-sm text-dark flex-fill" onclick="loadData()">API 조회</button>
+                </div>
+                <button class="btn btn-outline-primary btn-sm" onclick="loadCompare()">📊 업종 비교 조회</button>
+                <button class="btn btn-outline-secondary btn-sm" onclick="resetFilters()">초기화</button>
+            </div>
         </div>
-        <div>
-            <label class="form-label mb-1 small">기준일 (최근 100거래일 조회)</label>
-            <input type="date" id="selDate" class="form-control form-control-sm" style="width:145px">
-        </div>
-        <button class="btn btn-primary btn-sm" onclick="loadFromDb()">DB 조회</button>
-        <button class="btn btn-warning btn-sm text-dark" onclick="loadData()">API 조회</button>
-        <button class="btn btn-outline-secondary btn-sm" onclick="resetFilters()">초기화</button>
     </div>
 
     <!-- 요약 카드 -->
@@ -168,13 +180,7 @@
 
     <!-- 업종 비교 -->
     <div class="card-panel mb-3">
-        <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
-            <h6 class="mb-0">📊 업종 비교 (등락률 기준, 최근 100거래일)</h6>
-            <div class="d-flex align-items-center gap-2">
-                <select id="selCompare" class="form-select form-select-sm" multiple size="4" style="min-width:220px"></select>
-                <button class="btn btn-outline-primary btn-sm" onclick="loadCompare()">비교 조회</button>
-            </div>
-        </div>
+        <h6 class="mb-2">📊 업종 비교 (등락률 기준, 최근 100거래일)</h6>
         <canvas id="compareChart" height="70"></canvas>
     </div>
 
