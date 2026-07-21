@@ -49,6 +49,29 @@ def get_access_token():
         logger.error(f"❌ 토큰 요청 중 에러: {e}")
         return None
 
+# 코스피/코스닥 지수 + 세부 업종 코드 (KIS 국내업종 구분별전체시세 FHPUP02140000 조회로 확인한 실제 코드)
+SECTOR_NAMES = {
+    '0001': '코스피', '1001': '코스닥', '2001': '코스피200',
+    # 코스피 세부업종
+    '0002': '코스피 대형주', '0003': '코스피 중형주', '0004': '코스피 소형주',
+    '0005': '코스피 음식료·담배', '0006': '코스피 섬유·의류', '0007': '코스피 종이·목재',
+    '0008': '코스피 화학', '0009': '코스피 제약', '0010': '코스피 비금속',
+    '0011': '코스피 금속', '0012': '코스피 기계·장비', '0013': '코스피 전기·전자',
+    '0014': '코스피 의료·정밀기기', '0015': '코스피 운송장비·부품', '0016': '코스피 유통',
+    '0017': '코스피 전기·가스', '0018': '코스피 건설', '0019': '코스피 운송·창고',
+    '0020': '코스피 통신', '0021': '코스피 금융', '0024': '코스피 증권',
+    '0025': '코스피 보험', '0026': '코스피 일반서비스', '0027': '코스피 제조',
+    '0028': '코스피 부동산', '0029': '코스피 IT서비스', '0030': '코스피 오락·문화',
+    # 코스닥 세부업종
+    '1006': '코스닥 일반서비스', '1009': '코스닥 제조', '1010': '코스닥 건설',
+    '1011': '코스닥 유통', '1013': '코스닥 운송·창고', '1014': '코스닥 금융',
+    '1015': '코스닥 오락·문화', '1019': '코스닥 음식료·담배', '1020': '코스닥 섬유·의류',
+    '1021': '코스닥 종이·목재', '1023': '코스닥 화학', '1024': '코스닥 제약',
+    '1025': '코스닥 비금속', '1026': '코스닥 금속', '1027': '코스닥 기계·장비',
+    '1028': '코스닥 전기·전자', '1029': '코스닥 의료·정밀기기', '1030': '코스닥 운송장비·부품',
+    '1031': '코스닥 기타제조',
+}
+
 def fetch_sector_index_daily(iscd="0001", base_date=None):
     """업종 일자별지수 조회 (FHPUP02120000) — output2 배열 반환"""
     if ACCESS_TOKEN is None:
@@ -76,7 +99,6 @@ def fetch_sector_index_daily(iscd="0001", base_date=None):
         "FID_PERIOD_DIV_CODE": "D",
     }
 
-    SECTOR_NAMES = {'0001': '코스피', '1001': '코스닥', '2001': '코스피200'}
     sector_name = SECTOR_NAMES.get(iscd, iscd)
 
     try:
@@ -692,20 +714,20 @@ def run_job_investor_trend(trigger_type: str = 'auto') -> bool:
 
 
 def run_job_sector_index(trigger_type: str = 'auto') -> bool:
-    """업종 일자별지수 수집(코스피/코스닥/코스피200) 실행 + 실행이력 기록."""
+    """업종 일자별지수 수집(코스피/코스닥/코스피200 + 세부 업종 전체) 실행 + 실행이력 기록."""
     start = datetime.now()
     error_message = None
     count = 0
     try:
-        for iscd in ("0001", "1001", "2001"):
+        for iscd in SECTOR_NAMES:
             fetch_sector_index_daily(iscd=iscd)
             count += 1
-            time.sleep(2)
+            time.sleep(1)
         ok = True
     except Exception as e:
         ok = False
         error_message = str(e)
-    _log_job_run('sector_index', '업종 일자별지수 수집 (코스피/코스닥/코스피200)',
+    _log_job_run('sector_index', '업종 일자별지수 수집 (코스피/코스닥/코스피200 + 세부 업종)',
                  '/uapi/domestic-stock/v1/quotations/inquire-index-daily-price', start, ok,
                  count=count, error_message=error_message, trigger_type=trigger_type)
     return ok

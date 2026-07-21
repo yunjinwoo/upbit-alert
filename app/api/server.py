@@ -34,6 +34,7 @@ from app.core.stock_monitor import (
     fetch_ranking_preview,
     run_job_hts_top_view, run_job_investor_trend, run_job_sector_index,
     run_job_market_cap_and_signal_score, run_job_remote_sync, run_job_top_interest,
+    SECTOR_NAMES,
 )
 from app.config import Config
 import json
@@ -74,6 +75,11 @@ def sector_index_view():
     """업종 일자별지수 조회 페이지"""
     return render_template('sector_index.html')
 
+@app.route('/api/sector-index/list', methods=['GET'])
+def get_sector_index_list_api():
+    """업종 선택 드롭다운용 — 지원하는 전체 업종 코드/이름 목록 반환"""
+    return jsonify({'status': 'success', 'data': [{'code': c, 'name': n} for c, n in SECTOR_NAMES.items()]})
+
 @app.route('/api/sector-index', methods=['GET'])
 def get_sector_index_api():
     """업종 일자별지수 API — KIS 실시간 조회"""
@@ -81,7 +87,6 @@ def get_sector_index_api():
         iscd      = request.args.get('iscd', '0001')
         base_date = request.args.get('date')          # YYYYMMDD, 없으면 오늘
 
-        SECTOR_NAMES = {'0001': '코스피', '1001': '코스닥', '2001': '코스피200'}
         sector_name  = SECTOR_NAMES.get(iscd, iscd)
 
         records = fetch_sector_index_daily(iscd=iscd, base_date=base_date)
