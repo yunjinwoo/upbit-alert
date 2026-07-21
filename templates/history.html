@@ -50,27 +50,7 @@
 </head>
 <body>
 
-<nav class="navbar main-navbar px-3">
-    <a class="navbar-brand" href="{{ url_for('index') }}">📡 알림 시스템</a>
-    <div class="d-flex gap-3">
-        <a href="{{ url_for('index') }}" class="nav-link">대시보드</a>
-        <a href="{{ url_for('market_cap_view') }}" class="nav-link">시가총액 추이</a>
-        <a href="{{ url_for('stock_investor_view') }}" class="nav-link">시총×투자자</a>
-        <a href="{{ url_for('investor_trend_view') }}" class="nav-link">투자자별 매매동향</a>
-        <a href="{{ url_for('investor_ranking_view') }}" class="nav-link">순매수 랭킹</a>
-        <a href="{{ url_for('volume_ratio_view') }}" class="nav-link">거래량 배수</a>
-        <a href="{{ url_for('sector_index_view') }}" class="nav-link">업종 일자별지수</a>
-        <a href="{{ url_for('ranking_preview_view') }}" class="nav-link">순위분석 미리보기</a>
-        <a href="{{ url_for('hts_top_view_view') }}" class="nav-link">HTS조회상위</a>
-        <a href="{{ url_for('top_interest_view') }}" class="nav-link">관심종목등록 상위</a>
-        <a href="{{ url_for('signal_score_preview_view') }}" class="nav-link">Signal Score 종목</a>
-        <a href="{{ url_for('signal_score_history_view') }}" class="nav-link">Signal Score 이력</a>
-        <a href="{{ url_for('raw_data_view') }}" class="nav-link">원본 데이터</a>
-        <a href="/grid" class="nav-link">리비전 관리</a>
-        <a href="{{ url_for('history_view') }}" class="nav-link active">히스토리</a>
-        <a href="{{ url_for('sync_admin_view') }}" class="nav-link">동기화 관리</a>
-    </div>
-</nav>
+{% include '_navbar.html' %}
 
 <div class="container-fluid dashboard-container px-4" style="max-width:1100px">
     <h2 class="mb-4">📖 프로젝트 히스토리</h2>

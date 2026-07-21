@@ -1,0 +1,95 @@
+{% set group_map = {
+    'market_cap': 'data', 'stock_investor': 'data', 'investor_trend': 'data',
+    'investor_ranking': 'data', 'volume_ratio': 'data', 'sector_index': 'data',
+    'ranking_preview': 'data', 'hts_top_view': 'data', 'top_interest': 'data',
+    'signal_score_preview': 'signal', 'signal_score_history': 'signal',
+    'raw_data': 'ops', 'history': 'ops', 'sync_admin': 'ops'
+} %}
+{% set active_group = group_map.get(active_page) %}
+{% set group_items = {
+    'data': [
+        ('market_cap_view', 'market_cap', '시가총액 추이'),
+        ('stock_investor_view', 'stock_investor', '시총×투자자'),
+        ('investor_trend_view', 'investor_trend', '투자자별 매매동향'),
+        ('investor_ranking_view', 'investor_ranking', '순매수 랭킹'),
+        ('volume_ratio_view', 'volume_ratio', '거래량 배수'),
+        ('sector_index_view', 'sector_index', '업종 일자별지수'),
+        ('ranking_preview_view', 'ranking_preview', '순위분석 미리보기'),
+        ('hts_top_view_view', 'hts_top_view', 'HTS조회상위'),
+        ('top_interest_view', 'top_interest', '관심종목등록 상위'),
+    ],
+    'signal': [
+        ('signal_score_preview_view', 'signal_score_preview', 'Signal Score 종목'),
+        ('signal_score_history_view', 'signal_score_history', 'Signal Score 이력'),
+    ],
+    'ops': [
+        ('raw_data_view', 'raw_data', '원본 데이터'),
+        (None, None, '리비전 관리'),
+        ('history_view', 'history', '히스토리'),
+        ('sync_admin_view', 'sync_admin', '동기화 관리'),
+    ],
+} %}
+<style>
+    .main-navbar .navbar-toggler-icon { filter: invert(1); }
+    .main-navbar .navbar-toggler { border-color: rgba(255,255,255,0.3); }
+    .main-navbar .dropdown-toggle { background: none; border: none; }
+    .main-navbar .dropdown-menu { font-size: 0.85rem; min-width: 12rem; }
+    .main-navbar .dropdown-item.active { background: #4da6ff; }
+    .sub-navbar { background: #eef2f6; border-bottom: 1px solid #dde3ea; }
+    .sub-navbar .sub-nav-link { color: #475569; font-size: 0.8rem; padding: 6px 4px; text-decoration: none; border-bottom: 2px solid transparent; }
+    .sub-navbar .sub-nav-link:hover { color: #1a1a2e; }
+    .sub-navbar .sub-nav-link.active { color: #1a1a2e; font-weight: bold; border-bottom-color: #4da6ff; }
+</style>
+<nav class="navbar navbar-expand-lg main-navbar px-3">
+    <a class="navbar-brand" href="{{ url_for('index') }}">📡 알림 시스템</a>
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNavCollapse">
+        <span class="navbar-toggler-icon"></span>
+    </button>
+    <div class="collapse navbar-collapse" id="mainNavCollapse">
+        <div class="d-flex gap-2 flex-wrap align-items-center">
+            <a href="{{ url_for('index') }}" class="nav-link{{ ' active' if active_page == 'dashboard' }}">대시보드</a>
+
+            <div class="dropdown">
+                <a class="nav-link dropdown-toggle{{ ' active' if active_group == 'data' }}" href="#" role="button" data-bs-toggle="dropdown">데이터 조회</a>
+                <ul class="dropdown-menu">
+                    <li><a class="dropdown-item{{ ' active' if active_page == 'market_cap' }}" href="{{ url_for('market_cap_view') }}">시가총액 추이</a></li>
+                    <li><a class="dropdown-item{{ ' active' if active_page == 'stock_investor' }}" href="{{ url_for('stock_investor_view') }}">시총×투자자</a></li>
+                    <li><a class="dropdown-item{{ ' active' if active_page == 'investor_trend' }}" href="{{ url_for('investor_trend_view') }}">투자자별 매매동향</a></li>
+                    <li><a class="dropdown-item{{ ' active' if active_page == 'investor_ranking' }}" href="{{ url_for('investor_ranking_view') }}">순매수 랭킹</a></li>
+                    <li><a class="dropdown-item{{ ' active' if active_page == 'volume_ratio' }}" href="{{ url_for('volume_ratio_view') }}">거래량 배수</a></li>
+                    <li><a class="dropdown-item{{ ' active' if active_page == 'sector_index' }}" href="{{ url_for('sector_index_view') }}">업종 일자별지수</a></li>
+                    <li><a class="dropdown-item{{ ' active' if active_page == 'ranking_preview' }}" href="{{ url_for('ranking_preview_view') }}">순위분석 미리보기</a></li>
+                    <li><a class="dropdown-item{{ ' active' if active_page == 'hts_top_view' }}" href="{{ url_for('hts_top_view_view') }}">HTS조회상위</a></li>
+                    <li><a class="dropdown-item{{ ' active' if active_page == 'top_interest' }}" href="{{ url_for('top_interest_view') }}">관심종목등록 상위</a></li>
+                </ul>
+            </div>
+
+            <div class="dropdown">
+                <a class="nav-link dropdown-toggle{{ ' active' if active_group == 'signal' }}" href="#" role="button" data-bs-toggle="dropdown">Signal Score</a>
+                <ul class="dropdown-menu">
+                    <li><a class="dropdown-item{{ ' active' if active_page == 'signal_score_preview' }}" href="{{ url_for('signal_score_preview_view') }}">Signal Score 종목</a></li>
+                    <li><a class="dropdown-item{{ ' active' if active_page == 'signal_score_history' }}" href="{{ url_for('signal_score_history_view') }}">Signal Score 이력</a></li>
+                </ul>
+            </div>
+
+            <div class="dropdown">
+                <a class="nav-link dropdown-toggle{{ ' active' if active_group == 'ops' }}" href="#" role="button" data-bs-toggle="dropdown">운영/관리</a>
+                <ul class="dropdown-menu">
+                    <li><a class="dropdown-item{{ ' active' if active_page == 'raw_data' }}" href="{{ url_for('raw_data_view') }}">원본 데이터</a></li>
+                    <li><a class="dropdown-item" href="/grid">리비전 관리</a></li>
+                    <li><a class="dropdown-item{{ ' active' if active_page == 'history' }}" href="{{ url_for('history_view') }}">히스토리</a></li>
+                    <li><a class="dropdown-item{{ ' active' if active_page == 'sync_admin' }}" href="{{ url_for('sync_admin_view') }}">동기화 관리</a></li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</nav>
+{% if active_group %}
+<div class="sub-navbar px-3 py-1">
+    <div class="d-flex gap-3 flex-wrap">
+        {% for endpoint, page, label in group_items[active_group] %}
+            <a href="{{ url_for(endpoint) if endpoint else '/grid' }}" class="sub-nav-link{{ ' active' if active_page == page }}">{{ label }}</a>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}

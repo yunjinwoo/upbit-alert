@@ -41,6 +41,11 @@
         .info-tag { display: inline-block; background: #e8f0fe; color: #1a1a2e; border-radius: 4px; padding: 2px 8px; font-size: 0.8rem; margin: 2px; font-family: monospace; }
         .info-tip { background: #fff8e1; border-left: 3px solid #ffc107; padding: 6px 10px; border-radius: 0 4px 4px 0; font-size: 0.85rem; margin-bottom: 4px; }
         .info-warn { background: #fce4ec; border-left: 3px solid #e91e63; padding: 6px 10px; border-radius: 0 4px 4px 0; font-size: 0.85rem; margin-bottom: 4px; }
+
+        .sector-group-label { padding: 4px 4px 2px; }
+        .sector-row { border-radius: 4px; }
+        .sector-row:hover { background: #f4f7f6; }
+        .sector-row label { cursor: pointer; }
     </style>
 </head>
 <body>
@@ -80,145 +85,140 @@
     </div>
 </div>
 
-<nav class="navbar main-navbar px-3">
-    <a class="navbar-brand" href="{{ url_for('index') }}">📡 알림 시스템</a>
-    <div class="d-flex gap-3">
-        <a href="{{ url_for('index') }}" class="nav-link">대시보드</a>
-        <a href="{{ url_for('market_cap_view') }}" class="nav-link">시가총액 추이</a>
-        <a href="{{ url_for('stock_investor_view') }}" class="nav-link">시총×투자자</a>
-        <a href="{{ url_for('investor_trend_view') }}" class="nav-link">투자자별 매매동향</a>
-        <a href="{{ url_for('investor_ranking_view') }}" class="nav-link">순매수 랭킹</a>
-        <a href="{{ url_for('volume_ratio_view') }}" class="nav-link">거래량 배수</a>
-        <a href="{{ url_for('sector_index_view') }}" class="nav-link active">업종 일자별지수</a>
-        <a href="{{ url_for('ranking_preview_view') }}" class="nav-link">순위분석 미리보기</a>
-        <a href="{{ url_for('hts_top_view_view') }}" class="nav-link">HTS조회상위</a>
-        <a href="{{ url_for('top_interest_view') }}" class="nav-link">관심종목등록 상위</a>
-        <a href="{{ url_for('signal_score_preview_view') }}" class="nav-link">Signal Score 종목</a>
-        <a href="{{ url_for('signal_score_history_view') }}" class="nav-link">Signal Score 이력</a>
-        <a href="{{ url_for('raw_data_view') }}" class="nav-link">원본 데이터</a>
-        <a href="/grid" class="nav-link">리비전 관리</a>
-        <a href="{{ url_for("history_view") }}" class="nav-link">히스토리</a>
-        <a href="{{ url_for("sync_admin_view") }}" class="nav-link">동기화 관리</a>
-    </div>
-</nav>
+{% include '_navbar.html' %}
 
-<div class="container dashboard-container">
+<div class="container-fluid dashboard-container">
+    <div class="row g-3">
 
-    <!-- 헤더 + 필터 -->
-    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-        <h2>📈 국내업종 일자별지수</h2>
-        <div class="d-flex align-items-center gap-2">
-            <span id="update-timer" class="badge bg-secondary">로딩 중...</span>
-            <button onclick="openSyncModal()" class="btn btn-outline-info btn-sm">🔄 서버 전송</button>
-        </div>
-    </div>
+        <!-- 좌측 사이드바 (필터) -->
+        <div class="col-lg-3">
+            <div class="card-panel" style="position:sticky; top:16px;">
+                <!-- 1. 버튼영역 -->
+                <label class="form-label mb-1 small fw-bold">조회</label>
+                <div class="d-flex gap-2 mb-2">
+                    <button class="btn btn-primary btn-sm flex-fill" onclick="loadFromDb()">DB 조회</button>
+                    <button class="btn btn-warning btn-sm text-dark flex-fill" onclick="loadData()">API 조회</button>
+                </div>
+                <button class="btn btn-outline-secondary btn-sm w-100" onclick="resetFilters()">초기화</button>
+                <hr>
 
-    <div class="card-panel mb-3 d-flex align-items-end gap-2 flex-wrap">
-        <div>
-            <label class="form-label mb-1 small">업종 선택</label>
-            <select id="selIscd" class="form-select form-select-sm" onchange="loadFromDb()">
-                <option value="0001">코스피 (KOSPI)</option>
-                <option value="1001">코스닥 (KOSDAQ)</option>
-                <option value="2001">코스피200</option>
-            </select>
-            <!-- 옵션은 페이지 로드시 /api/sector-index/list로 세부 업종까지 채워짐 -->
-        </div>
-        <div>
-            <label class="form-label mb-1 small">기준일 (최근 100거래일 조회)</label>
-            <input type="date" id="selDate" class="form-control form-control-sm" style="width:145px">
-        </div>
-        <button class="btn btn-primary btn-sm" onclick="loadFromDb()">DB 조회</button>
-        <button class="btn btn-warning btn-sm text-dark" onclick="loadData()">API 조회</button>
-        <button class="btn btn-outline-secondary btn-sm" onclick="resetFilters()">초기화</button>
-    </div>
+                <!-- 2. 기준일영역 -->
+                <label class="form-label mb-1 small fw-bold">기준일 (최근 100거래일 조회)</label>
+                <input type="date" id="selDate" class="form-control form-control-sm">
+                <hr>
 
-    <!-- 요약 카드 -->
-    <div class="row g-3 mb-3" id="summaryCards" style="display:none!important">
-        <div class="col-6 col-md-3">
-            <div class="stat-card bg-light">
-                <div class="stat-label">최근 종가</div>
-                <div class="stat-value" id="statClose">-</div>
-                <div class="stat-sub" id="statChange">-</div>
+                <!-- 3. 선택된 업종 -->
+                <label class="form-label mb-1 small fw-bold">선택된 업종</label>
+                <div class="small mb-2">
+                    <div>단일조회: <span id="selectedSingle" class="badge bg-primary">코스피</span></div>
+                    <div class="mt-1">비교대상: <span id="selectedCompareList" class="text-muted">없음</span></div>
+                </div>
+                <button class="btn btn-outline-primary btn-sm w-100" onclick="loadCompare()">📊 업종 비교 조회</button>
+                <hr>
+
+                <!-- 4. 업종 선택영역 -->
+                <label class="form-label mb-1 small fw-bold">업종 (● 단일조회 · ☑ 비교대상)</label>
+                <div id="sectorList" class="border rounded p-2"></div>
+                <!-- 목록은 페이지 로드시 /api/sector-index/list로 세부 업종까지 채워짐 -->
             </div>
         </div>
-        <div class="col-6 col-md-3">
-            <div class="stat-card bg-light">
-                <div class="stat-label">기간 고가</div>
-                <div class="stat-value text-danger" id="statHigh">-</div>
-            </div>
-        </div>
-        <div class="col-6 col-md-3">
-            <div class="stat-card bg-light">
-                <div class="stat-label">기간 저가</div>
-                <div class="stat-value text-primary" id="statLow">-</div>
-            </div>
-        </div>
-        <div class="col-6 col-md-3">
-            <div class="stat-card bg-light">
-                <div class="stat-label">평균 20일 이격도</div>
-                <div class="stat-value" id="statD20">-</div>
-            </div>
-        </div>
-    </div>
 
-    <!-- 차트 -->
-    <div class="card-panel mb-3">
-        <canvas id="indexChart" height="90"></canvas>
-    </div>
+        <!-- 우측 메인 콘텐츠 -->
+        <div class="col-lg-9">
 
-    <!-- 업종 비교 -->
-    <div class="card-panel mb-3">
-        <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
-            <h6 class="mb-0">📊 업종 비교 (등락률 기준, 최근 100거래일)</h6>
-            <div class="d-flex align-items-center gap-2">
-                <select id="selCompare" class="form-select form-select-sm" multiple size="4" style="min-width:220px"></select>
-                <button class="btn btn-outline-primary btn-sm" onclick="loadCompare()">비교 조회</button>
+            <!-- 헤더 -->
+            <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+                <h2>📈 국내업종 일자별지수</h2>
+                <div class="d-flex align-items-center gap-2">
+                    <span id="update-timer" class="badge bg-secondary">로딩 중...</span>
+                    <button onclick="openSyncModal()" class="btn btn-outline-info btn-sm">🔄 서버 전송</button>
+                </div>
             </div>
-        </div>
-        <canvas id="compareChart" height="70"></canvas>
-    </div>
 
-    <!-- 업종 소속 종목 -->
-    <div class="card-panel mb-3">
-        <div class="d-flex justify-content-between align-items-center mb-2">
-            <h6 class="mb-0" id="stocksTitle">📋 업종 소속 종목</h6>
-            <span class="small text-muted">국내주식 등락률 순위 API로 실시간 조회 (최대 30종목)</span>
-        </div>
-        <table id="stocksTable" class="table table-hover table-sm" style="width:100%">
-            <thead class="table-light">
-                <tr>
-                    <th>순위</th>
-                    <th>종목코드</th>
-                    <th>종목명</th>
-                    <th class="text-end">현재가</th>
-                    <th>등락</th>
-                    <th class="text-end">등락률</th>
-                    <th class="text-end">거래량</th>
-                </tr>
-            </thead>
-            <tbody id="stocksTableBody"></tbody>
-        </table>
-    </div>
+            <!-- 요약 카드 -->
+            <div class="row g-3 mb-3" id="summaryCards" style="display:none!important">
+                <div class="col-6 col-md-3">
+                    <div class="stat-card bg-light">
+                        <div class="stat-label">최근 종가</div>
+                        <div class="stat-value" id="statClose">-</div>
+                        <div class="stat-sub" id="statChange">-</div>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="stat-card bg-light">
+                        <div class="stat-label">기간 고가</div>
+                        <div class="stat-value text-danger" id="statHigh">-</div>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="stat-card bg-light">
+                        <div class="stat-label">기간 저가</div>
+                        <div class="stat-value text-primary" id="statLow">-</div>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="stat-card bg-light">
+                        <div class="stat-label">평균 20일 이격도</div>
+                        <div class="stat-value" id="statD20">-</div>
+                    </div>
+                </div>
+            </div>
 
-    <!-- 테이블 -->
-    <div class="card-panel">
-        <table id="sectorTable" class="table table-hover" style="width:100%">
-            <thead class="table-light">
-                <tr>
-                    <th>날짜</th>
-                    <th class="text-end">종가</th>
-                    <th>등락</th>
-                    <th class="text-end">등락률</th>
-                    <th class="text-end">시가</th>
-                    <th class="text-end">고가</th>
-                    <th class="text-end">저가</th>
-                    <th class="text-end">거래량(천주)</th>
-                    <th class="text-end">투자심리도</th>
-                    <th class="text-end">20일이격도</th>
-                </tr>
-            </thead>
-            <tbody id="tableBody"></tbody>
-        </table>
+            <!-- 차트 -->
+            <div class="card-panel mb-3">
+                <canvas id="indexChart" height="90"></canvas>
+            </div>
+
+            <!-- 업종 비교 -->
+            <div class="card-panel mb-3">
+                <h6 class="mb-2">📊 업종 비교 (등락률 기준, 최근 100거래일)</h6>
+                <canvas id="compareChart" height="70"></canvas>
+            </div>
+
+            <!-- 업종 소속 종목 -->
+            <div class="card-panel mb-3">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h6 class="mb-0" id="stocksTitle">📋 업종 소속 종목</h6>
+                    <span class="small text-muted">국내주식 등락률 순위 API로 실시간 조회 (최대 30종목)</span>
+                </div>
+                <table id="stocksTable" class="table table-hover table-sm" style="width:100%">
+                    <thead class="table-light">
+                        <tr>
+                            <th>순위</th>
+                            <th>종목코드</th>
+                            <th>종목명</th>
+                            <th class="text-end">현재가</th>
+                            <th>등락</th>
+                            <th class="text-end">등락률</th>
+                            <th class="text-end">거래량</th>
+                        </tr>
+                    </thead>
+                    <tbody id="stocksTableBody"></tbody>
+                </table>
+            </div>
+
+            <!-- 테이블 -->
+            <div class="card-panel">
+                <table id="sectorTable" class="table table-hover" style="width:100%">
+                    <thead class="table-light">
+                        <tr>
+                            <th>날짜</th>
+                            <th class="text-end">종가</th>
+                            <th>등락</th>
+                            <th class="text-end">등락률</th>
+                            <th class="text-end">시가</th>
+                            <th class="text-end">고가</th>
+                            <th class="text-end">저가</th>
+                            <th class="text-end">거래량(천주)</th>
+                            <th class="text-end">투자심리도</th>
+                            <th class="text-end">20일이격도</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tableBody"></tbody>
+                </table>
+            </div>
+
+        </div>
     </div>
 </div>
 
@@ -230,6 +230,26 @@
 <script>
     let dataTable = null;
     let chartInstance = null;
+    const SECTOR_MAP = {};
+
+    function getSelectedIscd() {
+        const checked = document.querySelector('input[name="sectorRadio"]:checked');
+        return checked ? checked.value : '0001';
+    }
+
+    function getSectorName(code) {
+        return SECTOR_MAP[code] || code;
+    }
+
+    function getCompareSelection() {
+        return [...document.querySelectorAll('.compareCheck:checked')].map(cb => ({ code: cb.value, name: getSectorName(cb.value) }));
+    }
+
+    function updateSelectedInfo() {
+        document.getElementById('selectedSingle').textContent = getSectorName(getSelectedIscd());
+        const compare = getCompareSelection();
+        document.getElementById('selectedCompareList').textContent = compare.length ? compare.map(c => c.name).join(', ') : '없음';
+    }
 
     async function populateSectorOptions() {
         try {
@@ -239,23 +259,39 @@
 
             const groups = { '지수': [], '코스피 세부업종': [], '코스닥 세부업종': [] };
             result.data.forEach(({ code, name }) => {
+                SECTOR_MAP[code] = name;
                 if (['0001', '1001', '2001'].includes(code)) groups['지수'].push({ code, name });
                 else if (code.startsWith('0')) groups['코스피 세부업종'].push({ code, name });
                 else groups['코스닥 세부업종'].push({ code, name });
             });
 
-            const groupHtml = Object.entries(groups).map(([label, items]) => {
+            const currentIscd  = getSelectedIscd();
+            const checkedCodes = new Set(getCompareSelection().map(s => s.code));
+
+            const listEl = document.getElementById('sectorList');
+            listEl.innerHTML = Object.entries(groups).map(([label, items]) => {
                 if (!items.length) return '';
-                const opts = items.map(({ code, name }) => `<option value="${code}">${name}</option>`).join('');
-                return `<optgroup label="${label}">${opts}</optgroup>`;
+                const rows = items.map(({ code, name }) => `
+                    <div class="sector-row d-flex align-items-center gap-2 py-1 px-1">
+                        <input type="radio" name="sectorRadio" class="form-check-input m-0" value="${code}" ${code === currentIscd ? 'checked' : ''} title="단일 조회">
+                        <input type="checkbox" class="form-check-input compareCheck m-0" value="${code}" ${checkedCodes.has(code) ? 'checked' : ''} title="비교 대상 추가">
+                        <label class="small flex-grow-1 mb-0" data-code="${code}">${name}</label>
+                    </div>`).join('');
+                return `<div class="sector-group-label small fw-bold text-muted">${label}</div>${rows}`;
             }).join('');
 
-            const sel = document.getElementById('selIscd');
-            const current = sel.value;
-            sel.innerHTML = groupHtml;
-            if ([...sel.options].some(o => o.value === current)) sel.value = current;
+            listEl.querySelectorAll('input[name="sectorRadio"]').forEach(r => r.addEventListener('change', () => { updateSelectedInfo(); loadFromDb(); }));
+            listEl.querySelectorAll('.compareCheck').forEach(cb => cb.addEventListener('change', updateSelectedInfo));
+            listEl.querySelectorAll('.sector-row label').forEach(label => {
+                label.addEventListener('click', () => {
+                    const row = label.closest('.sector-row');
+                    row.querySelector('input[type="radio"]').checked = true;
+                    updateSelectedInfo();
+                    loadFromDb();
+                });
+            });
 
-            document.getElementById('selCompare').innerHTML = groupHtml;
+            updateSelectedInfo();
         } catch (e) {
             console.error('업종 목록 로드 실패', e);
         }
@@ -263,7 +299,10 @@
 
     function resetFilters() {
         document.getElementById('selDate').value = '';
-        document.getElementById('selIscd').value = '0001';
+        const first = document.querySelector('input[name="sectorRadio"][value="0001"]');
+        if (first) first.checked = true;
+        document.querySelectorAll('.compareCheck:checked').forEach(cb => cb.checked = false);
+        updateSelectedInfo();
         loadFromDb();
     }
 
@@ -355,7 +394,7 @@
     }
 
     async function loadFromDb() {
-        const iscd = document.getElementById('selIscd').value;
+        const iscd = getSelectedIscd();
         const url = `api/sector-index/cached?iscd=${iscd}`;
         try {
             const res    = await fetch(url);
@@ -391,7 +430,7 @@
                 order: [[0, 'desc']], pageLength: 50,
                 language: { search: "결과 내 검색:", lengthMenu: "_MENU_ 개씩 보기", info: "총 _TOTAL_ 건 중 _START_~_END_ 표시" }
             });
-            const sectorName = document.getElementById('selIscd').selectedOptions[0].text;
+            const sectorName = getSectorName(iscd);
             document.getElementById('update-timer').textContent = `${sectorName} · ${result.count}건 (DB) · ${new Date().toLocaleTimeString()}`;
             loadStocks(iscd);
         } catch(e) {
@@ -401,7 +440,7 @@
     }
 
     async function loadStocks(iscd) {
-        const sectorName = document.getElementById('selIscd').selectedOptions[0].text;
+        const sectorName = getSectorName(iscd);
         document.getElementById('stocksTitle').textContent = `📋 ${sectorName} 소속 종목`;
         try {
             const res    = await fetch(`api/sector-index/stocks?iscd=${iscd}`);
@@ -416,7 +455,7 @@
                 const sign = (rate >= 0 ? '+' : '') + fmt(rate) + '%';
                 return `<tr>
                     <td>${s.rank}</td>
-                    <td class="font-monospace small">${s.code}</td>
+                    <td class="font-monospace small"><a href="https://finance.naver.com/item/main.naver?code=${s.code}" target="_blank" rel="noopener">${s.code}</a></td>
                     <td>${s.name}</td>
                     <td class="text-end">${fmt(s.price, 0)}</td>
                     <td>${signBadge(s.change_sign)}</td>
@@ -433,8 +472,8 @@
     let compareChartInstance = null;
 
     async function loadCompare() {
-        const selected = [...document.getElementById('selCompare').selectedOptions].map(o => ({ code: o.value, name: o.text }));
-        if (!selected.length) { alert('비교할 업종을 선택해주세요.'); return; }
+        const selected = getCompareSelection();
+        if (!selected.length) { alert('비교할 업종의 체크박스를 선택해주세요.'); return; }
 
         const palette = ['#2563eb', '#dc2626', '#16a34a', '#f59e0b', '#7c3aed', '#0891b2', '#db2777', '#65a30d'];
         const seriesList = [];
@@ -498,7 +537,7 @@
     }
 
     async function loadData() {
-        const iscd = document.getElementById('selIscd').value;
+        const iscd = getSelectedIscd();
         const date = document.getElementById('selDate').value.replace(/-/g, '');
         let url = `api/sector-index?iscd=${iscd}`;
         if (date) url += `&date=${date}`;
@@ -546,7 +585,7 @@
                 }
             });
 
-            const sectorName = document.getElementById('selIscd').selectedOptions[0].text;
+            const sectorName = getSectorName(iscd);
             document.getElementById('update-timer').textContent = `${sectorName} · ${result.count}건 · ${new Date().toLocaleTimeString()}`;
             loadStocks(iscd);
 
@@ -644,7 +683,7 @@
     window.startPageSync = async function() {
         const btn = document.getElementById('syncStartBtn');
         const serverUrl = document.getElementById('syncServerUrl').value.trim().replace(/\/$/, '');
-        const iscd = document.getElementById('selIscd').value;
+        const iscd = getSelectedIscd();
         const date = document.getElementById('selDate').value.replace(/-/g, '');
         btn.disabled = true;
         btn.textContent = '전송 중...';
