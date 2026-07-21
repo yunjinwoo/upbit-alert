@@ -53,27 +53,27 @@ CORS(app)
 @app.route('/')
 def index():
     """대시보드 메인 페이지를 보여줍니다."""
-    return render_template('index.html')
+    return render_template('index.html', active_page='dashboard')
 
 @app.route('/raw-data')
 def raw_data_view():
     """주식 원본 데이터 확인 페이지를 보여줍니다."""
-    return render_template('raw_data.html')
+    return render_template('raw_data.html', active_page='raw_data')
 
 @app.route('/market-cap')
 def market_cap_view():
     """일별 시가총액 추이 페이지를 보여줍니다."""
-    return render_template('market_cap.html')
+    return render_template('market_cap.html', active_page='market_cap')
 
 @app.route('/hts-top-view')
 def hts_top_view_view():
     """HTS조회상위20종목 시간별 추이 페이지를 보여줍니다."""
-    return render_template('hts_top_view.html')
+    return render_template('hts_top_view.html', active_page='hts_top_view')
 
 @app.route('/sector-index')
 def sector_index_view():
     """업종 일자별지수 조회 페이지"""
-    return render_template('sector_index.html')
+    return render_template('sector_index.html', active_page='sector_index')
 
 @app.route('/api/sector-index/list', methods=['GET'])
 def get_sector_index_list_api():
@@ -182,7 +182,7 @@ def get_sector_index_api():
 @app.route('/investor-trend')
 def investor_trend_view():
     """투자자별 매매동향 페이지"""
-    return render_template('investor_trend.html')
+    return render_template('investor_trend.html', active_page='investor_trend')
 
 @app.route('/api/investor-trend', methods=['GET'])
 def get_investor_trend_api():
@@ -347,7 +347,7 @@ def get_hts_top_view_daily_scores_api():
 @app.route('/top-interest')
 def top_interest_view():
     """관심종목등록 상위 페이지를 보여줍니다. (네이버 인기검색종목 대체 — robots.txt 크롤링 제한으로 KIS API 사용)"""
-    return render_template('top_interest.html')
+    return render_template('top_interest.html', active_page='top_interest')
 
 @app.route('/api/top-interest', methods=['GET'])
 def get_top_interest_api():
@@ -390,7 +390,7 @@ def fetch_top_interest_api():
 
 @app.route('/stock-investor')
 def stock_investor_view():
-    return render_template('stock_investor.html')
+    return render_template('stock_investor.html', active_page='stock_investor')
 
 @app.route('/api/stock-investor', methods=['GET'])
 def get_stock_investor_api():
@@ -811,16 +811,16 @@ def get_investor_trend_cached_api():
 @app.route('/sync-admin')
 def sync_admin_view():
     """동기화 관리 페이지"""
-    return render_template('sync_admin.html')
+    return render_template('sync_admin.html', active_page='sync_admin')
 
 @app.route('/history')
 def history_view():
     """프로젝트 히스토리 페이지"""
-    return render_template('history.html')
+    return render_template('history.html', active_page='history')
 
 @app.route('/investor-ranking')
 def investor_ranking_view():
-    return render_template('investor_ranking.html')
+    return render_template('investor_ranking.html', active_page='investor_ranking')
 
 @app.route('/api/investor-ranking')
 def investor_ranking_api():
@@ -867,7 +867,7 @@ def investor_distribution_api():
 @app.route('/volume-ratio')
 def volume_ratio_view():
     """종목별 거래량 배수(당일 vs 평균) 페이지"""
-    return render_template('volume_ratio.html')
+    return render_template('volume_ratio.html', active_page='volume_ratio')
 
 @app.route('/api/volume-ratio')
 def volume_ratio_api():
@@ -968,7 +968,7 @@ RANKING_PREVIEW_TYPES = {
 @app.route('/signal-score-preview')
 def signal_score_preview_view():
     """Signal Score 등급/Slack 발송 예정 건수를 미리 확인하는 페이지 (저장·발송 없이 계산만)"""
-    return render_template('signal_score_preview.html')
+    return render_template('signal_score_preview.html', active_page='signal_score_preview')
 
 @app.route('/api/signal-score/preview', methods=['GET'])
 def signal_score_preview_api():
@@ -1003,7 +1003,7 @@ def signal_score_preview_api():
 @app.route('/signal-score-history')
 def signal_score_history_view():
     """Signal Score 이력 페이지 (일별 스냅샷 조회 + 날짜별 추이 매트릭스)"""
-    return render_template('signal_score_history.html')
+    return render_template('signal_score_history.html', active_page='signal_score_history')
 
 @app.route('/api/signal-score/history', methods=['GET'])
 def signal_score_history_api():
@@ -1038,7 +1038,7 @@ def signal_score_range_api():
 def ranking_preview_view():
     """순위분석 신규 API 미리보기 페이지 (Signal Score 반영 전 검토용)"""
     types = [{'key': k, 'name': v['name']} for k, v in RANKING_PREVIEW_TYPES.items()]
-    return render_template('ranking_preview.html', ranking_types=types)
+    return render_template('ranking_preview.html', ranking_types=types, active_page='ranking_preview')
 
 @app.route('/api/ranking-preview', methods=['GET'])
 def ranking_preview_api():
