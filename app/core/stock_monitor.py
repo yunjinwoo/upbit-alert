@@ -4,7 +4,7 @@ import time
 from datetime import datetime
 from dataclasses import asdict
 from app.config import Config
-from app.utils.db_manager import save_stock_alert_to_db, init_db, save_api_token, get_api_token, save_stock_raw_data, save_daily_market_cap, save_daily_investor_trend, save_stock_investor_daily, save_sector_index_daily, get_signal_score_batch, save_hts_top_view, save_job_run_log, get_market_cap_history, save_top_interest_daily
+from app.utils.db_manager import save_stock_alert_to_db, init_db, save_api_token, get_api_token, save_stock_raw_data, save_daily_market_cap, save_daily_investor_trend, save_stock_investor_daily, save_sector_index_daily, save_sector_stocks_daily, get_signal_score_batch, save_hts_top_view, save_job_run_log, get_market_cap_history, save_top_interest_daily
 from app.core.kis_models import RequestHeader, RequestQueryParam, MarketCapQueryParam, FluctuationRankingResponse, MarketCapRankingResponse, StockInvestorDailyItem
 from app.core.upbit_monitor import send_slack_msg
 from app.utils.google_sheets import save_signal_score_to_sheet, save_signal_score_readme, save_investor_ranking_to_sheet
@@ -114,6 +114,59 @@ def fetch_sector_index_daily(iscd="0001", base_date=None):
         return records
     except Exception as e:
         logger.error(f"❌ 업종지수 조회 에러: {e}")
+        return []
+
+
+def fetch_sector_stocks(iscd):
+    """업종 소속 종목 조회 (국내주식 등락률 순위 FHPST01700000 — 업종코드로 필터링) — 당일 스냅샷으로 DB 저장"""
+    global ACCESS_TOKEN
+    if ACCESS_TOKEN is None:
+        get_access_token()
+    if ACCESS_TOKEN is None:
+        logger.error("❌ KIS API 토큰이 없어 업종 소속 종목을 가져올 수 없습니다.")
+        return []
+
+    url = f"{Config.KIS_URL_BASE}/uapi/domestic-stock/v1/ranking/fluctuation"
+    headers = {
+        "content-type": "application/json",
+        "authorization": f"Bearer {ACCESS_TOKEN}",
+        "appkey": Config.KIS_APP_KEY,
+        "appsecret": Config.KIS_APP_SECRET,
+        "tr_id": "FHPST01700000",
+        "custtype": "P",
+    }
+    params = {
+        "fid_rsfl_rate2": "",
+        "fid_cond_mrkt_div_code": "J",
+        "fid_cond_scr_div_code": "20170",
+        "fid_input_iscd": iscd,
+        "fid_rank_sort_cls_code": "0",
+        "fid_input_cnt_1": "0",
+        "fid_prc_cls_code": "0",
+        "fid_input_price_1": "",
+        "fid_input_price_2": "",
+        "fid_vol_cnt": "",
+        "fid_trgt_cls_code": "0",
+        "fid_trgt_exls_cls_code": "0",
+        "fid_div_cls_code": "0",
+        "fid_rsfl_rate1": "",
+    }
+
+    sector_name = SECTOR_NAMES.get(iscd, iscd)
+
+    try:
+        res = requests.get(url, headers=headers, params=params)
+        data = res.json()
+        if data.get("rt_cd") != "0":
+            logger.error(f"❌ 업종 소속 종목 API 오류: {data.get('msg1')}")
+            return []
+        records = data.get("output", [])
+        if records:
+            saved = save_sector_stocks_daily(records, iscd, sector_name)
+            logger.info(f"[업종소속종목] {sector_name}({iscd}) {saved}건 DB 저장")
+        return records
+    except Exception as e:
+        logger.error(f"❌ 업종 소속 종목 조회 에러: {e}")
         return []
 
 
@@ -714,7 +767,7 @@ def run_job_investor_trend(trigger_type: str = 'auto') -> bool:
 
 
 def run_job_sector_index(trigger_type: str = 'auto') -> bool:
-    """업종 일자별지수 수집(코스피/코스닥/코스피200 + 세부 업종 전체) 실행 + 실행이력 기록."""
+    """업종 일자별지수 + 업종 소속 종목 수집(코스피/코스닥/코스피200 + 세부 업종 전체) 실행 + 실행이력 기록."""
     start = datetime.now()
     error_message = None
     count = 0
@@ -723,11 +776,14 @@ def run_job_sector_index(trigger_type: str = 'auto') -> bool:
             fetch_sector_index_daily(iscd=iscd)
             count += 1
             time.sleep(1)
+            fetch_sector_stocks(iscd)
+            count += 1
+            time.sleep(1)
         ok = True
     except Exception as e:
         ok = False
         error_message = str(e)
-    _log_job_run('sector_index', '업종 일자별지수 수집 (코스피/코스닥/코스피200 + 세부 업종)',
+    _log_job_run('sector_index', '업종 일자별지수 + 소속 종목 수집 (코스피/코스닥/코스피200 + 세부 업종)',
                  '/uapi/domestic-stock/v1/quotations/inquire-index-daily-price', start, ok,
                  count=count, error_message=error_message, trigger_type=trigger_type)
     return ok
@@ -837,7 +893,7 @@ def run_stock_monitor():
                     run_job_investor_trend()
                     logger.info("✅ [스케줄] 투자자별 매매동향 수집 완료 (코스피/코스닥)")
                     run_job_sector_index()
-                    logger.info("✅ [스케줄] 업종 일자별지수 수집 완료 (코스피/코스닥/코스피200)")
+                    logger.info("✅ [스케줄] 업종 일자별지수 수집 완료 (코스피/코스닥/코스피200 + 세부 업종)")
                     last_close_data_hour = run_key
 
             # 평일 20시 — 원격 서버로 전체 데이터 자동 전송 ("동기화 관리" 페이지의 수동 전송과 동일 로직)

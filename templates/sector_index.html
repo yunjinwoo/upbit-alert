@@ -116,7 +116,7 @@
     <div class="card-panel mb-3 d-flex align-items-end gap-2 flex-wrap">
         <div>
             <label class="form-label mb-1 small">업종 선택</label>
-            <select id="selIscd" class="form-select form-select-sm">
+            <select id="selIscd" class="form-select form-select-sm" onchange="loadFromDb()">
                 <option value="0001">코스피 (KOSPI)</option>
                 <option value="1001">코스닥 (KOSDAQ)</option>
                 <option value="2001">코스피200</option>
@@ -166,6 +166,40 @@
         <canvas id="indexChart" height="90"></canvas>
     </div>
 
+    <!-- 업종 비교 -->
+    <div class="card-panel mb-3">
+        <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+            <h6 class="mb-0">📊 업종 비교 (등락률 기준, 최근 100거래일)</h6>
+            <div class="d-flex align-items-center gap-2">
+                <select id="selCompare" class="form-select form-select-sm" multiple size="4" style="min-width:220px"></select>
+                <button class="btn btn-outline-primary btn-sm" onclick="loadCompare()">비교 조회</button>
+            </div>
+        </div>
+        <canvas id="compareChart" height="70"></canvas>
+    </div>
+
+    <!-- 업종 소속 종목 -->
+    <div class="card-panel mb-3">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h6 class="mb-0" id="stocksTitle">📋 업종 소속 종목</h6>
+            <span class="small text-muted">국내주식 등락률 순위 API로 실시간 조회 (최대 30종목)</span>
+        </div>
+        <table id="stocksTable" class="table table-hover table-sm" style="width:100%">
+            <thead class="table-light">
+                <tr>
+                    <th>순위</th>
+                    <th>종목코드</th>
+                    <th>종목명</th>
+                    <th class="text-end">현재가</th>
+                    <th>등락</th>
+                    <th class="text-end">등락률</th>
+                    <th class="text-end">거래량</th>
+                </tr>
+            </thead>
+            <tbody id="stocksTableBody"></tbody>
+        </table>
+    </div>
+
     <!-- 테이블 -->
     <div class="card-panel">
         <table id="sectorTable" class="table table-hover" style="width:100%">
@@ -210,14 +244,18 @@
                 else groups['코스닥 세부업종'].push({ code, name });
             });
 
-            const sel = document.getElementById('selIscd');
-            const current = sel.value;
-            sel.innerHTML = Object.entries(groups).map(([label, items]) => {
+            const groupHtml = Object.entries(groups).map(([label, items]) => {
                 if (!items.length) return '';
                 const opts = items.map(({ code, name }) => `<option value="${code}">${name}</option>`).join('');
                 return `<optgroup label="${label}">${opts}</optgroup>`;
             }).join('');
+
+            const sel = document.getElementById('selIscd');
+            const current = sel.value;
+            sel.innerHTML = groupHtml;
             if ([...sel.options].some(o => o.value === current)) sel.value = current;
+
+            document.getElementById('selCompare').innerHTML = groupHtml;
         } catch (e) {
             console.error('업종 목록 로드 실패', e);
         }
@@ -323,7 +361,8 @@
             const res    = await fetch(url);
             const result = await res.json();
             if (result.status !== 'success' || !result.data.length) {
-                document.getElementById('update-timer').textContent = 'DB 데이터 없음 — API 조회 버튼을 눌러주세요';
+                document.getElementById('update-timer').textContent = 'DB 데이터 없음 — API 실시간 조회 중...';
+                await loadData();
                 return;
             }
             renderSummary(result.data);
@@ -354,10 +393,108 @@
             });
             const sectorName = document.getElementById('selIscd').selectedOptions[0].text;
             document.getElementById('update-timer').textContent = `${sectorName} · ${result.count}건 (DB) · ${new Date().toLocaleTimeString()}`;
+            loadStocks(iscd);
         } catch(e) {
             console.error(e);
             document.getElementById('update-timer').textContent = 'DB 조회 실패';
         }
+    }
+
+    async function loadStocks(iscd) {
+        const sectorName = document.getElementById('selIscd').selectedOptions[0].text;
+        document.getElementById('stocksTitle').textContent = `📋 ${sectorName} 소속 종목`;
+        try {
+            const res    = await fetch(`api/sector-index/stocks?iscd=${iscd}`);
+            const result = await res.json();
+            if (result.status !== 'success' || !result.data.length) {
+                document.getElementById('stocksTableBody').innerHTML = '<tr><td colspan="7" class="text-center text-muted">조회된 종목이 없습니다.</td></tr>';
+                return;
+            }
+            document.getElementById('stocksTableBody').innerHTML = result.data.map(s => {
+                const rate = parseFloat(s.change_rate);
+                const cls  = rate > 0 ? 'up-rate' : rate < 0 ? 'down-rate' : '';
+                const sign = (rate >= 0 ? '+' : '') + fmt(rate) + '%';
+                return `<tr>
+                    <td>${s.rank}</td>
+                    <td class="font-monospace small">${s.code}</td>
+                    <td>${s.name}</td>
+                    <td class="text-end">${fmt(s.price, 0)}</td>
+                    <td>${signBadge(s.change_sign)}</td>
+                    <td class="text-end"><span class="${cls}">${sign}</span></td>
+                    <td class="text-end">${fmtVol(s.volume)}</td>
+                </tr>`;
+            }).join('');
+        } catch (e) {
+            console.error(e);
+            document.getElementById('stocksTableBody').innerHTML = '<tr><td colspan="7" class="text-center text-danger">조회 실패</td></tr>';
+        }
+    }
+
+    let compareChartInstance = null;
+
+    async function loadCompare() {
+        const selected = [...document.getElementById('selCompare').selectedOptions].map(o => ({ code: o.value, name: o.text }));
+        if (!selected.length) { alert('비교할 업종을 선택해주세요.'); return; }
+
+        const palette = ['#2563eb', '#dc2626', '#16a34a', '#f59e0b', '#7c3aed', '#0891b2', '#db2777', '#65a30d'];
+        const seriesList = [];
+
+        for (let i = 0; i < selected.length; i++) {
+            const { code, name } = selected[i];
+            try {
+                const res    = await fetch(`api/sector-index/cached?iscd=${code}&limit=100`);
+                const result = await res.json();
+                if (result.status !== 'success' || !result.data.length) continue;
+
+                const sorted = [...result.data].reverse(); // 오래된 → 최근
+                const base   = parseFloat(sorted[0].close);
+                seriesList.push({
+                    name,
+                    dates: sorted.map(d => d.date),
+                    values: sorted.map(d => (parseFloat(d.close) / base - 1) * 100),
+                });
+            } catch (e) {
+                console.error(`${name} 비교 데이터 로드 실패`, e);
+            }
+        }
+
+        if (!seriesList.length) { alert('선택한 업종의 DB 데이터가 없습니다. 먼저 각 업종을 한 번씩 조회해주세요.'); return; }
+
+        // 가장 데이터가 많은 시리즈의 날짜를 공통 라벨로 사용
+        const labels = seriesList.reduce((a, b) => a.dates.length >= b.dates.length ? a : b).dates;
+        const datasets = seriesList.map((s, i) => {
+            const byDate = new Map(s.dates.map((d, idx) => [d, s.values[idx]]));
+            return {
+                label: s.name,
+                data: labels.map(d => byDate.has(d) ? byDate.get(d) : null),
+                borderColor: palette[i % palette.length],
+                backgroundColor: 'transparent',
+                tension: 0.3,
+                pointRadius: 0,
+                borderWidth: 2,
+                spanGaps: true,
+            };
+        });
+
+        if (compareChartInstance) compareChartInstance.destroy();
+        compareChartInstance = new Chart(document.getElementById('compareChart'), {
+            type: 'line',
+            data: { labels, datasets },
+            options: {
+                responsive: true,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { position: 'top' },
+                    tooltip: { callbacks: {
+                        label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y >= 0 ? '+' : ''}${ctx.parsed.y.toFixed(2)}%`
+                    }}
+                },
+                scales: {
+                    x: { ticks: { maxTicksLimit: 15, font: { size: 11 } } },
+                    y: { ticks: { font: { size: 11 }, callback: v => (v >= 0 ? '+' : '') + v + '%' } }
+                }
+            }
+        });
     }
 
     async function loadData() {
@@ -411,6 +548,7 @@
 
             const sectorName = document.getElementById('selIscd').selectedOptions[0].text;
             document.getElementById('update-timer').textContent = `${sectorName} · ${result.count}건 · ${new Date().toLocaleTimeString()}`;
+            loadStocks(iscd);
 
         } catch(e) {
             console.error(e);

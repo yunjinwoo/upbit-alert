@@ -156,6 +156,23 @@ def init_db():
         )
     ''')
 
+    # 업종 소속 종목 (일별 스냅샷)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS sector_stocks_daily (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT,
+            sector_code TEXT,
+            sector_name TEXT,
+            rank TEXT,
+            code TEXT,
+            name TEXT,
+            price TEXT, change TEXT, change_sign TEXT, change_rate TEXT,
+            volume TEXT,
+            timestamp TEXT,
+            UNIQUE(date, sector_code, code)
+        )
+    ''')
+
     # Signal Score 일별 결과 저장 테이블
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS signal_score_daily (
@@ -1902,6 +1919,81 @@ def save_sector_index_daily(records: list, iscd: str, sector_name: str):
             r.get('acml_vol_rlim', '0'), r.get('invt_new_psdg', '0'),
             r.get('d20_dsrt', '0'), timestamp
         ))
+        saved += 1
+    conn.commit()
+    conn.close()
+    return saved
+
+
+def save_sector_stocks_daily(records: list, iscd: str, sector_name: str):
+    """업종 소속 종목 저장 (KIS 등락률 순위 API 원시 레코드 → sector_stocks_daily upsert, 당일 스냅샷)"""
+    SIGN = {'1': '상한', '2': '상승', '3': '보합', '4': '하한', '5': '하락'}
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    date = datetime.now().strftime('%Y-%m-%d')
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    saved = 0
+    for r in records:
+        code = r.get('stck_shrn_iscd', '')
+        if not code:
+            continue
+        cursor.execute('''
+            INSERT INTO sector_stocks_daily
+                (date, sector_code, sector_name, rank, code, name, price, change, change_sign, change_rate, volume, timestamp)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(date, sector_code, code) DO UPDATE SET
+                sector_name=excluded.sector_name, rank=excluded.rank, name=excluded.name,
+                price=excluded.price, change=excluded.change, change_sign=excluded.change_sign,
+                change_rate=excluded.change_rate, volume=excluded.volume, timestamp=excluded.timestamp
+        ''', (
+            date, iscd, sector_name,
+            r.get('data_rank', '0'), code, r.get('hts_kor_isnm', ''),
+            r.get('stck_prpr', '0'), r.get('prdy_vrss', '0'),
+            SIGN.get(r.get('prdy_vrss_sign', '3'), '보합'),
+            r.get('prdy_ctrt', '0'), r.get('acml_vol', '0'), timestamp
+        ))
+        saved += 1
+    conn.commit()
+    conn.close()
+    return saved
+
+
+def get_sector_stocks_cached(sector_code: str, limit: int = 30) -> list:
+    """sector_stocks_daily 최신 날짜 캐시 조회"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT * FROM sector_stocks_daily
+        WHERE sector_code = ? AND date = (
+            SELECT MAX(date) FROM sector_stocks_daily WHERE sector_code = ?
+        )
+        ORDER BY CAST(rank AS INTEGER) ASC LIMIT ?
+    ''', (sector_code, sector_code, limit))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def sync_upsert_sector_stocks(rows: list) -> int:
+    """sector_stocks_daily upsert (date+sector_code+code 기준) — 원격 동기화 수신용"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    saved = 0
+    for r in rows:
+        cursor.execute('''
+            INSERT INTO sector_stocks_daily
+                (date, sector_code, sector_name, rank, code, name, price, change, change_sign, change_rate, volume, timestamp)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(date, sector_code, code) DO UPDATE SET
+                sector_name=excluded.sector_name, rank=excluded.rank, name=excluded.name,
+                price=excluded.price, change=excluded.change, change_sign=excluded.change_sign,
+                change_rate=excluded.change_rate, volume=excluded.volume, timestamp=excluded.timestamp
+        ''', (r.get('date'), r.get('sector_code'), r.get('sector_name'),
+              r.get('rank', '0'), r.get('code'), r.get('name', ''),
+              r.get('price', '0'), r.get('change', '0'), r.get('change_sign', '3'),
+              r.get('change_rate', '0'), r.get('volume', '0'),
+              r.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))))
         saved += 1
     conn.commit()
     conn.close()

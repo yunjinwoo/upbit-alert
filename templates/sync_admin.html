@@ -87,9 +87,8 @@
             <div class="step-row"><span class="step-icon" id="si-inv">⏳</span><span class="step-label">종목별 투자자 (stock_investor_daily)</span><span class="step-count" id="sc-inv">-</span></div>
             <div class="step-row"><span class="step-icon" id="si-trJ1">⏳</span><span class="step-label">투자자별 매매동향 — KRX 코스피</span><span class="step-count" id="sc-trJ1">-</span></div>
             <div class="step-row"><span class="step-icon" id="si-trJ4">⏳</span><span class="step-label">투자자별 매매동향 — KRX 코스닥</span><span class="step-count" id="sc-trJ4">-</span></div>
-            <div class="step-row"><span class="step-icon" id="si-sec0001">⏳</span><span class="step-label">업종 일자별지수 — 코스피 (0001)</span><span class="step-count" id="sc-sec0001">-</span></div>
-            <div class="step-row"><span class="step-icon" id="si-sec1001">⏳</span><span class="step-label">업종 일자별지수 — 코스닥 (1001)</span><span class="step-count" id="sc-sec1001">-</span></div>
-            <div class="step-row"><span class="step-icon" id="si-sec2001">⏳</span><span class="step-label">업종 일자별지수 — 코스피200 (2001)</span><span class="step-count" id="sc-sec2001">-</span></div>
+            <div class="step-row"><span class="step-icon" id="si-sec_all">⏳</span><span class="step-label">업종 일자별지수 — 전체(코스피/코스닥 + 세부업종)</span><span class="step-count" id="sc-sec_all">-</span></div>
+            <div class="step-row"><span class="step-icon" id="si-sec_stocks">⏳</span><span class="step-label">업종 소속 종목 — 전체(코스피/코스닥 + 세부업종)</span><span class="step-count" id="sc-sec_stocks">-</span></div>
             <div class="step-row"><span class="step-icon" id="si-hts">⏳</span><span class="step-label">HTS조회상위20종목 (stock_hts_top_view_hourly)</span><span class="step-count" id="sc-hts">-</span></div>
             <div class="step-row"><span class="step-icon" id="si-topint">⏳</span><span class="step-label">관심종목등록 상위 (stock_top_interest_daily)</span><span class="step-count" id="sc-topint">-</span></div>
         </div>
@@ -413,7 +412,7 @@
         document.getElementById('sc-' + id).textContent = n == null ? '-' : `${Number(n).toLocaleString()}건`;
     }
     function resetSteps() {
-        ['mkt','inv','trJ1','trJ4','sec0001','sec1001','sec2001','hts','topint'].forEach(id => {
+        ['mkt','inv','trJ1','trJ4','sec_all','sec_stocks','hts','topint'].forEach(id => {
             stepIcon(id, 'wait'); stepCount(id, null);
         });
     }
@@ -448,9 +447,26 @@
             { id: 'inv',    fetch: () => fetch(`api/sync/export/stock-investor?limit=${limit}`).then(r=>r.json()), table: 'stock_investor_daily' },
             { id: 'trJ1',   fetch: () => fetch(`api/sync/export/investor-trend?exch=J&mrkt=1&days=${limit}`).then(r=>r.json()), table: 'investor_trend_daily' },
             { id: 'trJ4',   fetch: () => fetch(`api/sync/export/investor-trend?exch=J&mrkt=4&days=${limit}`).then(r=>r.json()), table: 'investor_trend_daily' },
-            { id: 'sec0001',fetch: () => fetch(`api/sector-index/cached?iscd=0001`).then(r=>r.json()),             table: 'sector_index_daily' },
-            { id: 'sec1001',fetch: () => fetch(`api/sector-index/cached?iscd=1001`).then(r=>r.json()),             table: 'sector_index_daily' },
-            { id: 'sec2001',fetch: () => fetch(`api/sector-index/cached?iscd=2001`).then(r=>r.json()),             table: 'sector_index_daily' },
+            { id: 'sec_all',fetch: async () => {
+                const listRes = await fetch(`api/sector-index/list`).then(r=>r.json());
+                const codes = (listRes.data || []).map(s => s.code);
+                let all = [];
+                for (const code of codes) {
+                    const r = await fetch(`api/sector-index/cached?iscd=${code}&limit=${limit}`).then(r=>r.json());
+                    all = all.concat(r.data || []);
+                }
+                return { data: all };
+            }, table: 'sector_index_daily' },
+            { id: 'sec_stocks',fetch: async () => {
+                const listRes = await fetch(`api/sector-index/list`).then(r=>r.json());
+                const codes = (listRes.data || []).map(s => s.code);
+                let all = [];
+                for (const code of codes) {
+                    const r = await fetch(`api/sector-index/stocks/cached?iscd=${code}`).then(r=>r.json());
+                    all = all.concat(r.data || []);
+                }
+                return { data: all };
+            }, table: 'sector_stocks_daily' },
             { id: 'hts',    fetch: () => fetch(`api/sync/export/hts-top-view?limit=${limit}`).then(r=>r.json()),   table: 'stock_hts_top_view_hourly' },
             { id: 'topint', fetch: () => fetch(`api/sync/export/top-interest?limit=${limit}`).then(r=>r.json()),   table: 'stock_top_interest_daily' },
         ];
