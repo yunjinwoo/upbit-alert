@@ -117,6 +117,53 @@ def fetch_sector_index_daily(iscd="0001", base_date=None):
         return []
 
 
+def fetch_sector_stocks(iscd):
+    """업종 소속 종목 조회 (국내주식 등락률 순위 FHPST01700000 — 업종코드로 필터링, 실시간 조회 전용, DB 미저장)"""
+    global ACCESS_TOKEN
+    if ACCESS_TOKEN is None:
+        get_access_token()
+    if ACCESS_TOKEN is None:
+        logger.error("❌ KIS API 토큰이 없어 업종 소속 종목을 가져올 수 없습니다.")
+        return []
+
+    url = f"{Config.KIS_URL_BASE}/uapi/domestic-stock/v1/ranking/fluctuation"
+    headers = {
+        "content-type": "application/json",
+        "authorization": f"Bearer {ACCESS_TOKEN}",
+        "appkey": Config.KIS_APP_KEY,
+        "appsecret": Config.KIS_APP_SECRET,
+        "tr_id": "FHPST01700000",
+        "custtype": "P",
+    }
+    params = {
+        "fid_rsfl_rate2": "",
+        "fid_cond_mrkt_div_code": "J",
+        "fid_cond_scr_div_code": "20170",
+        "fid_input_iscd": iscd,
+        "fid_rank_sort_cls_code": "0",
+        "fid_input_cnt_1": "0",
+        "fid_prc_cls_code": "0",
+        "fid_input_price_1": "",
+        "fid_input_price_2": "",
+        "fid_vol_cnt": "",
+        "fid_trgt_cls_code": "0",
+        "fid_trgt_exls_cls_code": "0",
+        "fid_div_cls_code": "0",
+        "fid_rsfl_rate1": "",
+    }
+
+    try:
+        res = requests.get(url, headers=headers, params=params)
+        data = res.json()
+        if data.get("rt_cd") != "0":
+            logger.error(f"❌ 업종 소속 종목 API 오류: {data.get('msg1')}")
+            return []
+        return data.get("output", [])
+    except Exception as e:
+        logger.error(f"❌ 업종 소속 종목 조회 에러: {e}")
+        return []
+
+
 def fetch_market_cap_ranking(mrkt_div_code="J", input_iscd="0000", div_cls_code="0", max_retries=2, max_pages=3):
     """시가총액 순위 종목 조회 (일별 1회 수집).
     KIS API는 1회 호출당 최대 30건만 반환하므로, 연속조회(tr_cont)로 최대 max_pages회

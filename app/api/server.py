@@ -31,7 +31,7 @@ from app.utils.db_manager import (
 )
 from app.core.stock_monitor import (
     fetch_market_cap_ranking, fetch_investor_trend, fetch_sector_index_daily, fetch_stock_investor_daily,
-    fetch_ranking_preview,
+    fetch_ranking_preview, fetch_sector_stocks,
     run_job_hts_top_view, run_job_investor_trend, run_job_sector_index,
     run_job_market_cap_and_signal_score, run_job_remote_sync, run_job_top_interest,
     SECTOR_NAMES,
@@ -79,6 +79,26 @@ def sector_index_view():
 def get_sector_index_list_api():
     """업종 선택 드롭다운용 — 지원하는 전체 업종 코드/이름 목록 반환"""
     return jsonify({'status': 'success', 'data': [{'code': c, 'name': n} for c, n in SECTOR_NAMES.items()]})
+
+@app.route('/api/sector-index/stocks', methods=['GET'])
+def get_sector_stocks_api():
+    """업종 소속 종목 조회 — 국내주식 등락률 순위(FHPST01700000) API를 업종코드로 필터링해 실시간 반환"""
+    try:
+        iscd = request.args.get('iscd', '0001')
+        records = fetch_sector_stocks(iscd)
+        result = [{
+            'rank':        r.get('data_rank', ''),
+            'code':        r.get('stck_shrn_iscd', ''),
+            'name':        r.get('hts_kor_isnm', ''),
+            'price':       r.get('stck_prpr', ''),
+            'change':      r.get('prdy_vrss', ''),
+            'change_sign': r.get('prdy_vrss_sign', '3'),
+            'change_rate': r.get('prdy_ctrt', ''),
+            'volume':      r.get('acml_vol', ''),
+        } for r in records]
+        return jsonify({'status': 'success', 'count': len(result), 'data': result})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/api/sector-index', methods=['GET'])
 def get_sector_index_api():
@@ -749,8 +769,9 @@ def sync_export_top_interest():
 # sector_index 캐시 폴백
 @app.route('/api/sector-index/cached', methods=['GET'])
 def get_sector_index_cached_api():
-    iscd = request.args.get('iscd', '0001')
-    data = get_sector_index_cached(iscd)
+    iscd  = request.args.get('iscd', '0001')
+    limit = int(request.args.get('limit', 30))
+    data = get_sector_index_cached(iscd, limit=limit)
     return jsonify({'status': 'success', 'count': len(data), 'data': data, 'source': 'cache'})
 
 # investor_trend 캐시 폴백
