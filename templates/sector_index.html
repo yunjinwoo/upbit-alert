@@ -56,25 +56,26 @@
 
         <div class="info-section">
             <h6>📌 목적</h6>
-            <p class="small">코스피·코스닥·코스피200 업종별 지수를 일별로 조회하여 섹터 흐름을 파악합니다.</p>
+            <p class="small">코스피/코스닥 종합지수뿐 아니라 화학·전기전자·건설 등 실제 세부 업종별 지수를 일별로 조회하여 섹터 흐름을 파악합니다.</p>
         </div>
         <div class="info-section">
             <h6>🔌 사용 API</h6>
             <span class="info-tag">KIS FHPUP02120000</span>
-            <p class="small mt-1">국내주식 업종 일자별 지수 (한국투자증권 Open API)</p>
+            <p class="small mt-1">국내주식업종기간별시세(일/주/월/년) — 업종 상세코드로 세부 업종까지 조회 가능. 세부 업종 코드 목록은 국내업종 구분별전체시세(FHPUP02140000)로 확인함.</p>
         </div>
         <div class="info-section">
             <h6>⏱ 수집 방식</h6>
-            <p class="small">실시간 조회 — DB 저장 없이 KIS API 직접 호출</p>
+            <p class="small">평일 14시/19시 자동 수집(전체 업종) — DB 캐시 조회가 기본, 최신 데이터가 필요하면 "API 조회"로 실시간 호출</p>
         </div>
         <div class="info-section">
             <h6>💡 활용 팁</h6>
-            <div class="info-tip">날짜 기준으로 최근 30일 업종 지수 조회 가능</div>
+            <div class="info-tip">업종 선택 드롭다운에서 코스피/코스닥 세부 업종으로 전환 가능</div>
+            <div class="info-tip">날짜 기준으로 최근 100거래일 업종 지수 조회 가능</div>
             <div class="info-tip">거래량 비율로 시장 참여도 확인</div>
         </div>
         <div class="info-section">
             <h6>⚠️ 한계</h6>
-            <div class="info-warn">DB에 저장하지 않아 과거 비교 불가</div>
+            <div class="info-warn">KIS 세부 업종은 GICS 표준 산업분류이며, 네이버 등에서 보는 "테마"(2차전지, AI 등 관련주 묶음)와는 다른 개념입니다 — 테마별 등락률은 KIS Open API에서 제공하지 않습니다.</div>
         </div>
     </div>
 </div>
@@ -120,6 +121,7 @@
                 <option value="1001">코스닥 (KOSDAQ)</option>
                 <option value="2001">코스피200</option>
             </select>
+            <!-- 옵션은 페이지 로드시 /api/sector-index/list로 세부 업종까지 채워짐 -->
         </div>
         <div>
             <label class="form-label mb-1 small">기준일 (최근 100거래일 조회)</label>
@@ -194,6 +196,32 @@
 <script>
     let dataTable = null;
     let chartInstance = null;
+
+    async function populateSectorOptions() {
+        try {
+            const res = await fetch('api/sector-index/list');
+            const result = await res.json();
+            if (result.status !== 'success') return;
+
+            const groups = { '지수': [], '코스피 세부업종': [], '코스닥 세부업종': [] };
+            result.data.forEach(({ code, name }) => {
+                if (['0001', '1001', '2001'].includes(code)) groups['지수'].push({ code, name });
+                else if (code.startsWith('0')) groups['코스피 세부업종'].push({ code, name });
+                else groups['코스닥 세부업종'].push({ code, name });
+            });
+
+            const sel = document.getElementById('selIscd');
+            const current = sel.value;
+            sel.innerHTML = Object.entries(groups).map(([label, items]) => {
+                if (!items.length) return '';
+                const opts = items.map(({ code, name }) => `<option value="${code}">${name}</option>`).join('');
+                return `<optgroup label="${label}">${opts}</optgroup>`;
+            }).join('');
+            if ([...sel.options].some(o => o.value === current)) sel.value = current;
+        } catch (e) {
+            console.error('업종 목록 로드 실패', e);
+        }
+    }
 
     function resetFilters() {
         document.getElementById('selDate').value = '';
@@ -390,7 +418,10 @@
         }
     }
 
-    document.addEventListener('DOMContentLoaded', loadFromDb);
+    document.addEventListener('DOMContentLoaded', async () => {
+        await populateSectorOptions();
+        loadFromDb();
+    });
 </script>
 <script>
     document.getElementById('infoPanel').addEventListener('show.bs.offcanvas', () => document.querySelector('.info-btn').style.display = 'none');
