@@ -455,7 +455,7 @@
                 const sign = (rate >= 0 ? '+' : '') + fmt(rate) + '%';
                 return `<tr>
                     <td>${s.rank}</td>
-                    <td class="font-monospace small">${s.code}</td>
+                    <td class="font-monospace small"><a href="https://finance.naver.com/item/main.naver?code=${s.code}" target="_blank" rel="noopener">${s.code}</a></td>
                     <td>${s.name}</td>
                     <td class="text-end">${fmt(s.price, 0)}</td>
                     <td>${signBadge(s.change_sign)}</td>
