@@ -162,6 +162,11 @@ def fetch_sector_stocks(iscd):
             return []
         records = data.get("output", [])
         if records:
+            # KIS API가 업종코드로 필터링 시 fid_rank_sort_cls_code를 무시하고 정렬이 뒤섞여 내려오므로
+            # 등락률(prdy_ctrt) 내림차순으로 직접 정렬 후 순위를 다시 매긴다.
+            records.sort(key=lambda r: float(r.get('prdy_ctrt', 0) or 0), reverse=True)
+            for i, r in enumerate(records, start=1):
+                r['data_rank'] = str(i)
             saved = save_sector_stocks_daily(records, iscd, sector_name)
             logger.info(f"[업종소속종목] {sector_name}({iscd}) {saved}건 DB 저장")
         return records
