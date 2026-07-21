@@ -25,6 +25,8 @@ from app.utils.db_manager import (
     get_top_interest_range,
     get_top_interest_export,
     get_signal_score_batch,
+    get_signal_score_history,
+    get_signal_score_range,
     get_job_run_log
 )
 from app.core.stock_monitor import (
@@ -943,6 +945,40 @@ def signal_score_preview_api():
             "grade_counts": grade_counts,
             "data": rows
         })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/signal-score-history')
+def signal_score_history_view():
+    """Signal Score 이력 페이지 (일별 스냅샷 조회 + 날짜별 추이 매트릭스)"""
+    return render_template('signal_score_history.html')
+
+@app.route('/api/signal-score/history', methods=['GET'])
+def signal_score_history_api():
+    """특정 날짜(미지정 시 최신 저장일)의 Signal Score 스냅샷을 반환합니다."""
+    try:
+        date = request.args.get('date')
+        grade = request.args.get('grade')
+        data = get_signal_score_history(date=date, grade=grade, limit=200)
+        return jsonify({
+            "status": "success",
+            "date": data[0]['date'] if data else date,
+            "count": len(data),
+            "data": data
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/signal-score/range', methods=['GET'])
+def signal_score_range_api():
+    """구간(date_from~date_to) 내 Signal Score 저장 이력을 반환합니다 (날짜별 추이 매트릭스용)."""
+    try:
+        date_from = request.args.get('date_from')
+        date_to   = request.args.get('date_to')
+        if not date_from or not date_to:
+            return jsonify({"status": "error", "message": "date_from, date_to 파라미터가 필요합니다."}), 400
+        data = get_signal_score_range(date_from=date_from, date_to=date_to)
+        return jsonify({"status": "success", "count": len(data), "data": data})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 

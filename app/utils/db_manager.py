@@ -1696,6 +1696,23 @@ def get_signal_score_history(date: str = None, grade: str = None, limit: int = 1
     return [dict(r) for r in rows]
 
 
+def get_signal_score_range(date_from: str, date_to: str) -> list:
+    """signal_score_daily 저장된 결과를 구간(date_from~date_to)으로 조회 — 날짜별 추이 매트릭스용.
+    반환: [{date, code, name, ...점수 필드들..., total_score, grade}, ...] (날짜 오름차순, 날짜 내 총점 내림차순)
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT * FROM signal_score_daily
+        WHERE date BETWEEN ? AND ?
+        ORDER BY date ASC, total_score DESC
+    ''', (date_from, date_to))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 # Initialize DB on load
 init_db()
 

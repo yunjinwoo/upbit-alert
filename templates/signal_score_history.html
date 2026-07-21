@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Signal Score 이력</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f4f7f6; font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; }
+        .dashboard-container { margin-top: 30px; margin-bottom: 50px; }
+        .header-title { margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+        .table-container { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
+        .ticker-link { text-decoration: none; color: #0049af; font-weight: bold; cursor: pointer; }
+        .ticker-link:hover { text-decoration: underline; }
+        .table-scroll { overflow-x: auto; }
+        #snapshotTable, #trendTable { font-size: 0.8rem; }
+        #snapshotTable th, #snapshotTable td, #trendTable th, #trendTable td { white-space: nowrap; padding-top: 0.4rem; padding-bottom: 0.4rem; }
+        #trendTable td:nth-child(2) { white-space: normal; }
+        #trendTable th:nth-child(1), #trendTable td:nth-child(1) { position: sticky; left: 0; width: 74px; min-width: 74px; max-width: 74px; background: #fff; z-index: 2; }
+        #trendTable th:nth-child(2), #trendTable td:nth-child(2) { position: sticky; left: 74px; background: #fff; z-index: 2; box-shadow: 2px 0 4px rgba(0,0,0,0.06); }
+        #trendTable thead th:nth-child(1), #trendTable thead th:nth-child(2) { background: #f8f9fa; z-index: 3; }
+
+        .badge-grade-A { background: #ee5253; }
+        .badge-grade-B { background: #2e86de; }
+        .badge-grade-C { background: #747d8c; }
+        .badge-grade-none { background: #ced6e0; color: #57606f; }
+
+        .view-tab { border: 1px solid #dee2e6; background: #fff; color: #495057; }
+        .view-tab.active { background: #1a1a2e; color: #fff; border-color: #1a1a2e; }
+
+        .main-navbar { background-color: #1a1a2e; }
+        .main-navbar .navbar-brand { color: #fff; font-weight: bold; }
+        .main-navbar .nav-link { color: rgba(255,255,255,0.75) !important; font-size: 0.82rem; }
+        .main-navbar .nav-link:hover, .main-navbar .nav-link.active { color: #fff !important; }
+        .main-navbar .nav-link.active { border-bottom: 2px solid #4da6ff; }
+
+        .info-btn { position: fixed; right: 0; top: 50%; transform: translateY(-50%); z-index: 1050; background: #1a1a2e; color: #fff; border: none; border-radius: 8px 0 0 8px; padding: 16px 14px 24px 14px; min-width: 36px; writing-mode: vertical-rl; overflow: visible; font-size: 0.8rem; cursor: pointer; letter-spacing: 2px; }
+        .info-btn:hover { background: #4da6ff; }
+        .offcanvas-info .offcanvas-header { background: #2a2a4a; color: #fff; padding: 0 1rem; height: 56px; min-height: 56px; display: flex; align-items: center; }
+        .offcanvas-info .offcanvas-header .btn-close { filter: invert(1); }
+        .info-section { margin-bottom: 1.2rem; }
+        .info-section h6 { font-weight: bold; color: #1a1a2e; border-bottom: 2px solid #4da6ff; padding-bottom: 4px; margin-bottom: 8px; }
+        .info-tip { background: #fff8e1; border-left: 3px solid #ffc107; padding: 6px 10px; border-radius: 0 4px 4px 0; font-size: 0.85rem; margin-bottom: 4px; }
+        .info-warn { background: #fce4ec; border-left: 3px solid #e91e63; padding: 6px 10px; border-radius: 0 4px 4px 0; font-size: 0.85rem; margin-bottom: 4px; }
+    </style>
+</head>
+<body>
+
+<!-- 페이지 안내 슬라이드 패널 -->
+<button class="info-btn" data-bs-toggle="offcanvas" data-bs-target="#infoPanel" title="페이지 안내">ℹ 안내</button>
+<div class="offcanvas offcanvas-end offcanvas-info" tabindex="-1" id="infoPanel" style="width:35vw">
+    <div class="offcanvas-header">
+        <h5 class="offcanvas-title">📜 Signal Score 이력 페이지 안내</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body">
+        <div class="info-section">
+            <h6>📌 목적</h6>
+            <p class="small">Signal Score 종목 페이지("미리보기")는 지금 시점 기준으로 매번 새로 계산하는 dry-run이라 기록이 안 남습니다. 이 페이지는 실제로 <b>매일 15:40 자동 계산 시 DB에 저장된 결과</b>를 조회합니다.</p>
+        </div>
+        <div class="info-section">
+            <h6>🗂 두 가지 보기</h6>
+            <div class="info-tip"><b>일별 스냅샷</b>: 날짜 하나를 골라 그날 계산된 전체 종목 점수/등급을 표로 확인</div>
+            <div class="info-tip"><b>날짜별 추이</b>: 시작일~종료일 구간에서 종목별로 날짜에 따라 총점/등급이 어떻게 바뀌었는지 매트릭스로 확인</div>
+        </div>
+        <div class="info-section">
+            <h6>⚠️ 한계</h6>
+            <div class="info-warn">저장된 데이터는 최종 점수/등급까지만 있고, 모멘텀 배수·수급 금액 같은 세부 근거(detail)는 저장되지 않아 상세보기는 지원하지 않음 (실시간 근거는 Signal Score 종목 페이지에서 확인)</div>
+            <div class="info-warn">평일 15:40 자동 계산이 실패했거나 아직 안 돈 날짜는 데이터가 없음</div>
+        </div>
+    </div>
+</div>
+
+<nav class="navbar main-navbar px-3">
+    <a class="navbar-brand" href="{{ url_for('index') }}">📡 알림 시스템</a>
+    <div class="d-flex gap-3">
+        <a href="{{ url_for('index') }}" class="nav-link">대시보드</a>
+        <a href="{{ url_for('market_cap_view') }}" class="nav-link">시가총액 추이</a>
+        <a href="{{ url_for('stock_investor_view') }}" class="nav-link">시총×투자자</a>
+        <a href="{{ url_for('investor_trend_view') }}" class="nav-link">투자자별 매매동향</a>
+        <a href="{{ url_for('investor_ranking_view') }}" class="nav-link">순매수 랭킹</a>
+        <a href="{{ url_for('volume_ratio_view') }}" class="nav-link">거래량 배수</a>
+        <a href="{{ url_for('sector_index_view') }}" class="nav-link">업종 일자별지수</a>
+        <a href="{{ url_for('ranking_preview_view') }}" class="nav-link">순위분석 미리보기</a>
+        <a href="{{ url_for('hts_top_view_view') }}" class="nav-link">HTS조회상위</a>
+        <a href="{{ url_for('top_interest_view') }}" class="nav-link">관심종목등록 상위</a>
+        <a href="{{ url_for('signal_score_preview_view') }}" class="nav-link">Signal Score 종목</a>
+        <a href="{{ url_for('signal_score_history_view') }}" class="nav-link active">Signal Score 이력</a>
+        <a href="{{ url_for('raw_data_view') }}" class="nav-link">원본 데이터</a>
+        <a href="/grid" class="nav-link">리비전 관리</a>
+        <a href="{{ url_for("history_view") }}" class="nav-link">히스토리</a>
+        <a href="{{ url_for("sync_admin_view") }}" class="nav-link">동기화 관리</a>
+    </div>
+</nav>
+
+<div class="container dashboard-container">
+    <div class="header-title">
+        <h2>📜 Signal Score 이력</h2>
+        <div class="d-flex gap-2">
+            <button class="btn view-tab active btn-sm" id="tabSnapshotBtn" onclick="switchView('snapshot')">일별 스냅샷</button>
+            <button class="btn view-tab btn-sm" id="tabTrendBtn" onclick="switchView('trend')">날짜별 추이</button>
+        </div>
+    </div>
+
+    <!-- 일별 스냅샷 뷰 -->
+    <div id="snapshotView">
+        <div class="d-flex align-items-end gap-2 mb-3 flex-wrap">
+            <div>
+                <label class="form-label mb-1 small">날짜 (비우면 최신 저장일)</label>
+                <input type="date" id="snapshotDate" class="form-control form-control-sm" style="width:145px">
+            </div>
+            <div>
+                <label class="form-label mb-1 small">등급</label>
+                <select id="snapshotGrade" class="form-select form-select-sm" style="width:110px">
+                    <option value="">전체</option>
+                    <option value="A">A</option>
+                    <option value="B">B</option>
+                    <option value="C">C</option>
+                    <option value="제외">제외</option>
+                </select>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="loadSnapshot()">조회</button>
+            <span id="snapshot-timer" class="badge bg-secondary">로딩 중...</span>
+        </div>
+        <div class="table-container">
+            <div id="snapshotEmpty" class="text-muted small" style="display:none">데이터가 없습니다. (그날 15:40 자동 계산이 아직 안 됐거나 실패했을 수 있습니다)</div>
+            <div class="table-scroll">
+                <table id="snapshotTable" class="table table-hover table-sm" style="width:100%">
+                    <thead class="table-light">
+                        <tr>
+                            <th>순위</th><th>코드</th><th>종목명</th><th>총점</th><th>등급</th>
+                            <th>모멘텀</th><th>수급</th><th>랭킹안정성</th><th>시장환경</th><th>리스크</th>
+                            <th>HTS조회상위</th><th>관심종목등록</th>
+                        </tr>
+                    </thead>
+                    <tbody id="snapshotBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- 날짜별 추이 뷰 -->
+    <div id="trendView" style="display:none">
+        <div class="d-flex align-items-end gap-2 mb-3 flex-wrap">
+            <div>
+                <label class="form-label mb-1 small">시작일</label>
+                <input type="date" id="rangeFrom" class="form-control form-control-sm" style="width:145px">
+            </div>
+            <div>
+                <label class="form-label mb-1 small">종료일</label>
+                <input type="date" id="rangeTo" class="form-control form-control-sm" style="width:145px">
+            </div>
+            <div>
+                <label class="form-label mb-1 small">종목명</label>
+                <input type="text" id="trendNameSearch" class="form-control form-control-sm" placeholder="예: 삼성" style="width:110px" oninput="filterTrendByName()">
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="loadTrend()">조회</button>
+            <span id="trend-timer" class="badge bg-secondary">로딩 중...</span>
+        </div>
+        <div class="table-container">
+            <div id="trendEmpty" class="text-muted small" style="display:none">선택 구간에 데이터가 없습니다.</div>
+            <div class="table-scroll">
+                <table id="trendTable" class="table table-hover" style="width:100%">
+                    <thead class="table-light"><tr id="trendHead"></tr></thead>
+                    <tbody id="trendBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
+
+<script>
+    let snapshotTable = null;
+    let trendTable = null;
+    let trendRaw = [];
+    const GRADE_BADGE = { 'A': 'badge-grade-A', 'B': 'badge-grade-B', 'C': 'badge-grade-C', '제외': 'badge-grade-none' };
+
+    function switchView(view) {
+        document.getElementById('snapshotView').style.display = view === 'snapshot' ? '' : 'none';
+        document.getElementById('trendView').style.display = view === 'trend' ? '' : 'none';
+        document.getElementById('tabSnapshotBtn').classList.toggle('active', view === 'snapshot');
+        document.getElementById('tabTrendBtn').classList.toggle('active', view === 'trend');
+        if (view === 'trend' && !trendRaw.length) loadTrend();
+    }
+
+    // ── 일별 스냅샷 ──────────────────────────────
+    async function loadSnapshot() {
+        const date = document.getElementById('snapshotDate').value;
+        const grade = document.getElementById('snapshotGrade').value;
+        document.getElementById('snapshot-timer').textContent = '조회 중...';
+
+        try {
+            let url = 'api/signal-score/history';
+            const params = [];
+            if (date) params.push(`date=${date}`);
+            if (grade) params.push(`grade=${grade}`);
+            if (params.length) url += '?' + params.join('&');
+
+            const res = await fetch(url);
+            const result = await res.json();
+            if (result.status !== 'success') {
+                document.getElementById('snapshot-timer').textContent = '조회 실패: ' + result.message;
+                return;
+            }
+
+            const data = result.data || [];
+            if (snapshotTable) { snapshotTable.destroy(); snapshotTable = null; }
+
+            const emptyMsg = document.getElementById('snapshotEmpty');
+            if (!data.length) {
+                emptyMsg.style.display = '';
+                document.getElementById('snapshotBody').innerHTML = '';
+                document.getElementById('snapshot-timer').textContent = `데이터 없음 · ${new Date().toLocaleTimeString()}`;
+                return;
+            }
+            emptyMsg.style.display = 'none';
+            if (!date) document.getElementById('snapshotDate').value = result.date;
+
+            document.getElementById('snapshotBody').innerHTML = data.map((row, i) => `
+                <tr${row.grade === 'A' ? ' class="table-danger"' : ''}>
+                    <td data-order="${i + 1}">${i + 1}</td>
+                    <td><a href="https://finance.naver.com/item/main.nhn?code=${row.code}" target="_blank" class="ticker-link">${row.code}</a></td>
+                    <td>${row.name ?? ''}</td>
+                    <td data-order="${row.total_score}"><b>${row.total_score}</b></td>
+                    <td><span class="badge ${GRADE_BADGE[row.grade] || 'bg-secondary'}">${row.grade}</span></td>
+                    <td>${row.momentum_score}</td>
+                    <td>${row.supply_demand_score}</td>
+                    <td>${row.rank_stability_score}</td>
+                    <td>${row.market_environment_score}</td>
+                    <td>${row.risk_penalty_score}</td>
+                    <td>${row.hts_top_view_bonus_score ?? 0}</td>
+                    <td>${row.top_interest_bonus_score ?? 0}</td>
+                </tr>
+            `).join('');
+
+            snapshotTable = $('#snapshotTable').DataTable({
+                pageLength: 100, scrollX: true, order: [],
+                language: { search: "결과 내 검색:", lengthMenu: "_MENU_ 개씩 보기", info: "총 _TOTAL_ 건 중 _START_~_END_ 표시" }
+            });
+
+            document.getElementById('snapshot-timer').textContent = `기준일 ${result.date} · 총 ${result.count}건 · ${new Date().toLocaleTimeString()}`;
+        } catch (e) {
+            console.error(e);
+            document.getElementById('snapshot-timer').textContent = '조회 중 오류 발생';
+        }
+    }
+
+    // ── 날짜별 추이 ──────────────────────────────
+    function filterTrendByName() {
+        if (trendTable) trendTable.search(document.getElementById('trendNameSearch').value).draw();
+    }
+
+    function renderTrend() {
+        if (trendTable) { trendTable.destroy(); trendTable = null; }
+
+        const byDate = {};
+        trendRaw.forEach(item => {
+            byDate[item.date] = byDate[item.date] || {};
+            byDate[item.date][item.code] = item;
+        });
+        const dates = Object.keys(byDate).sort();
+
+        if (!dates.length) {
+            document.getElementById('trendEmpty').style.display = '';
+            document.getElementById('trendHead').innerHTML = '';
+            document.getElementById('trendBody').innerHTML = '';
+            return;
+        }
+        document.getElementById('trendEmpty').style.display = 'none';
+
+        const latestSeenMap = {};
+        [...trendRaw].sort((a, b) => b.date.localeCompare(a.date)).forEach(item => {
+            if (!(item.code in latestSeenMap)) latestSeenMap[item.code] = item;
+        });
+        const codes = Object.keys(latestSeenMap).sort((a, b) => latestSeenMap[b].total_score - latestSeenMap[a].total_score);
+
+        document.getElementById('trendHead').innerHTML = `
+            <th>코드</th><th>종목명</th>
+            ${dates.map(d => `<th class="text-center">${d.slice(5)}</th>`).join('')}
+            <th class="text-end">최신 총점</th><th>최신 등급</th>
+        `;
+
+        document.getElementById('trendBody').innerHTML = codes.map(code => {
+            const latest = latestSeenMap[code];
+            const dateCells = dates.map(d => {
+                const item = byDate[d][code];
+                if (!item) return `<td class="text-center text-muted" data-order="-1">-</td>`;
+                return `<td class="text-center" data-order="${item.total_score}"><span class="badge ${GRADE_BADGE[item.grade] || 'bg-secondary'}">${item.total_score}</span></td>`;
+            }).join('');
+            return `
+                <tr>
+                    <td><a href="https://finance.naver.com/item/main.nhn?code=${code}" target="_blank" class="ticker-link">${code}</a></td>
+                    <td>${latest.name ?? ''}</td>
+                    ${dateCells}
+                    <td class="text-end" data-order="${latest.total_score}"><b>${latest.total_score}</b></td>
+                    <td><span class="badge ${GRADE_BADGE[latest.grade] || 'bg-secondary'}">${latest.grade}</span></td>
+                </tr>`;
+        }).join('');
+
+        trendTable = $('#trendTable').DataTable({
+            order: [], pageLength: 100, scrollX: true,
+            language: { search: "결과 내 검색:", lengthMenu: "_MENU_ 개씩 보기", info: "총 _TOTAL_ 건 중 _START_~_END_ 표시" }
+        });
+        filterTrendByName();
+    }
+
+    async function loadTrend() {
+        const dateFrom = document.getElementById('rangeFrom').value;
+        const dateTo   = document.getElementById('rangeTo').value;
+        if (!dateFrom || !dateTo) { alert('시작일/종료일을 선택하세요.'); return; }
+
+        document.getElementById('trend-timer').textContent = '조회 중...';
+        try {
+            const res = await fetch(`api/signal-score/range?date_from=${dateFrom}&date_to=${dateTo}`);
+            const result = await res.json();
+            if (result.status !== 'success') {
+                document.getElementById('trend-timer').textContent = '조회 실패: ' + result.message;
+                return;
+            }
+            trendRaw = result.data || [];
+            renderTrend();
+            document.getElementById('trend-timer').textContent = `구간: ${dateFrom} ~ ${dateTo} · 종목 ${new Set(trendRaw.map(r => r.code)).size}개 · ${new Date().toLocaleTimeString()}`;
+        } catch (e) {
+            console.error(e);
+            document.getElementById('trend-timer').textContent = '조회 중 오류 발생';
+        }
+    }
+
+    function initDefaults() {
+        const today = new Date();
+        const from = new Date(today);
+        from.setDate(from.getDate() - 6);
+        document.getElementById('rangeFrom').value = from.toISOString().slice(0, 10);
+        document.getElementById('rangeTo').value = today.toISOString().slice(0, 10);
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        initDefaults();
+        loadSnapshot();
+    });
+</script>
+<script>
+    document.getElementById('infoPanel').addEventListener('show.bs.offcanvas', () => document.querySelector('.info-btn').style.display = 'none');
+    document.getElementById('infoPanel').addEventListener('hidden.bs.offcanvas', () => document.querySelector('.info-btn').style.display = '');
+</script>
+</body>
+</html>

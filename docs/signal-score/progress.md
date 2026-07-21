@@ -20,7 +20,8 @@
 | 6 | 리스크 패널티 함수 | ✅ 완료 (2026-07-10) | 상세: [step6-risk-penalty.md](step6-risk-penalty.md) |
 | 7 | 종합 Signal Score 통합 + A/B/C 등급 분기 | ✅ 완료 (2026-07-10) | 상세: [step7-signal-score-integration.md](step7-signal-score-integration.md) |
 | 8 | 주식 알림 Slack 연동 배선 | ✅ 완료 (2026-07-10) | 상세: [step8-slack-integration.md](step8-slack-integration.md) |
-| 9 | 투자자 매매동향 수집 대상 전종목 확대 (선택) | 대기 | API 호출량/레이트리밋 고려 필요 |
+| 9 | Signal Score 이력 조회 페이지 + 점수식 확장(HTS조회상위/관심종목등록 보너스, 리스크패널티 부호 전환) | ✅ 완료 (2026-07-21) | 상세: [step9-history-page.md](step9-history-page.md) |
+| 10 | 투자자 매매동향 수집 대상 전종목 확대 (선택) | 대기 | API 호출량/레이트리밋 고려 필요 |
 
 ## 상태 값 정의
 - 대기: 아직 착수 안 함
@@ -41,3 +42,5 @@
 - 2026-07-10: 6번 작업(리스크 패널티 함수) 완료. 상세 내용은 [step6-risk-penalty.md](step6-risk-penalty.md) 참고. 커밋(`2386b08`).
 - 2026-07-10: 7번 작업(종합 Signal Score 통합 + 등급 분기) 완료. 상세 내용은 [step7-signal-score-integration.md](step7-signal-score-integration.md) 참고. 코스닥 30종목 실제 데이터로 검증 — 거래량 데이터 미누적으로 현재는 최대 C등급까지만 나옴(예상된 결과). 커밋(`d4d171c`).
 - 2026-07-10: 8번 작업(주식 알림 Slack 연동 배선) 완료. 상세 내용은 [step8-slack-integration.md](step8-slack-integration.md) 참고. 실제 Slack 웹훅이 설정되어 있어 A등급 없는 상태로 안전하게 실행 검증만 하고, 실제 발송은 트리거하지 않음.
+- 2026-07-14~07-21: 별도 세션들에서 점수식이 여러 차례 조정됨 — 리스크패널티 "5일 과열 -15점"→"7일 강한 상승 추세 +15점" 전환, HTS조회상위가점(0~10→0~20점) 및 관심종목등록가점(신규 0~10점) 도입, 두 가점 합산 "관심도 보너스" 최대 30점 상한 적용. 등급 기준(80/65/50)은 변경 없음. PR #6~#9로 반영.
+- 2026-07-21: 9번 작업(Signal Score 이력 조회 페이지) 완료. 상세 내용은 [step9-history-page.md](step9-history-page.md) 참고. 일별 스냅샷 60건 + 날짜별 추이 64개 종목 실제 데이터로 검증.

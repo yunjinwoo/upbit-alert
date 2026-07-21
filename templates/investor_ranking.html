@@ -95,6 +95,7 @@
         <a href="{{ url_for('hts_top_view_view') }}" class="nav-link">HTS조회상위</a>
         <a href="{{ url_for('top_interest_view') }}" class="nav-link">관심종목등록 상위</a>
         <a href="{{ url_for('signal_score_preview_view') }}" class="nav-link">Signal Score 종목</a>
+        <a href="{{ url_for('signal_score_history_view') }}" class="nav-link">Signal Score 이력</a>
         <a href="{{ url_for('raw_data_view') }}" class="nav-link">원본 데이터</a>
         <a href="/grid" class="nav-link">리비전 관리</a>
         <a href="{{ url_for('history_view') }}" class="nav-link">히스토리</a>
@@ -323,6 +324,18 @@
                 animation: { duration: 400 },
             },
             plugins: [{
+                beforeDraw(chart) {
+                    const { ctx, scales: { x, y }, chartArea } = chart;
+                    const x0 = x.getPixelForValue(0), y0 = y.getPixelForValue(0);
+                    ctx.save();
+                    // 동반 순매수 사분면(우하) 배경 — 매수색과 동일 톤
+                    ctx.fillStyle = '#fef2f2';
+                    ctx.fillRect(x0, y0, chartArea.right - x0, chartArea.bottom - y0);
+                    // 동반 순매도 사분면(좌상) 배경 — 매도색과 동일 톤
+                    ctx.fillStyle = '#eff6ff';
+                    ctx.fillRect(chartArea.left, chartArea.top, x0 - chartArea.left, y0 - chartArea.top);
+                    ctx.restore();
+                },
                 afterDraw(chart) {
                     const { ctx, scales: { x, y }, chartArea } = chart;
                     ctx.save();
@@ -359,7 +372,7 @@
 
     function renderTable(dates, data) {
         const tableDates = dates;
-        const amtCls = 'amount-buy';
+        const amtCls = _direction === 'sell' ? 'amount-sell' : 'amount-buy';
 
         const head = document.getElementById('rankHead');
         let hRow = '<tr><th style="width:18px">#</th>';
