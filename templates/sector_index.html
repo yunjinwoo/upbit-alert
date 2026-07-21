@@ -119,7 +119,6 @@
                     <button class="btn btn-primary btn-sm flex-fill" onclick="loadFromDb()">DB 조회</button>
                     <button class="btn btn-warning btn-sm text-dark flex-fill" onclick="loadData()">API 조회</button>
                 </div>
-                <button class="btn btn-outline-primary btn-sm w-100 mb-2" onclick="loadCompare()">📊 업종 비교 조회</button>
                 <button class="btn btn-outline-secondary btn-sm w-100" onclick="resetFilters()">초기화</button>
                 <hr>
 
@@ -130,10 +129,11 @@
 
                 <!-- 3. 선택된 업종 -->
                 <label class="form-label mb-1 small fw-bold">선택된 업종</label>
-                <div class="small mb-0">
+                <div class="small mb-2">
                     <div>단일조회: <span id="selectedSingle" class="badge bg-primary">코스피</span></div>
                     <div class="mt-1">비교대상: <span id="selectedCompareList" class="text-muted">없음</span></div>
                 </div>
+                <button class="btn btn-outline-primary btn-sm w-100" onclick="loadCompare()">📊 업종 비교 조회</button>
                 <hr>
 
                 <!-- 4. 업종 선택영역 -->
