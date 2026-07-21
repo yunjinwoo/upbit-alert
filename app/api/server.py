@@ -9,9 +9,9 @@ from app.utils.db_manager import (
     get_stock_investor_combined, get_latest_market_cap_date,
     get_stock_investor_trend,
     sync_upsert_market_cap, sync_upsert_investor_daily,
-    sync_upsert_investor_trend, sync_upsert_sector_index,
+    sync_upsert_investor_trend, sync_upsert_sector_index, sync_upsert_sector_stocks,
     sync_upsert_hts_top_view, sync_upsert_top_interest,
-    get_sector_index_cached, get_investor_trend_cached,
+    get_sector_index_cached, get_sector_stocks_cached, get_investor_trend_cached,
     get_stock_investor_raw,
     get_investor_ranking,
     get_investor_distribution,
@@ -80,11 +80,20 @@ def get_sector_index_list_api():
     """업종 선택 드롭다운용 — 지원하는 전체 업종 코드/이름 목록 반환"""
     return jsonify({'status': 'success', 'data': [{'code': c, 'name': n} for c, n in SECTOR_NAMES.items()]})
 
+@app.route('/api/sector-index/stocks/cached', methods=['GET'])
+def get_sector_stocks_cached_api():
+    """업종 소속 종목 DB 캐시 조회 (가장 최근 저장일 기준)"""
+    iscd = request.args.get('iscd', '0001')
+    data = get_sector_stocks_cached(iscd)
+    return jsonify({'status': 'success', 'count': len(data), 'data': data, 'source': 'cache'})
+
 @app.route('/api/sector-index/stocks', methods=['GET'])
 def get_sector_stocks_api():
-    """업종 소속 종목 조회 — 국내주식 등락률 순위(FHPST01700000) API를 업종코드로 필터링해 실시간 반환"""
+    """업종 소속 종목 조회 — 국내주식 등락률 순위(FHPST01700000) API를 업종코드로 필터링해 실시간 반환.
+    KIS API 실패/무응답 시 DB 캐시(가장 최근 저장 스냅샷)로 폴백."""
+    SIGN = {'1': '상한', '2': '상승', '3': '보합', '4': '하한', '5': '하락'}
+    iscd = request.args.get('iscd', '0001')
     try:
-        iscd = request.args.get('iscd', '0001')
         records = fetch_sector_stocks(iscd)
         result = [{
             'rank':        r.get('data_rank', ''),
@@ -92,12 +101,28 @@ def get_sector_stocks_api():
             'name':        r.get('hts_kor_isnm', ''),
             'price':       r.get('stck_prpr', ''),
             'change':      r.get('prdy_vrss', ''),
-            'change_sign': r.get('prdy_vrss_sign', '3'),
+            'change_sign': SIGN.get(r.get('prdy_vrss_sign', '3'), '보합'),
             'change_rate': r.get('prdy_ctrt', ''),
             'volume':      r.get('acml_vol', ''),
         } for r in records]
-        return jsonify({'status': 'success', 'count': len(result), 'data': result})
+
+        if result:
+            return jsonify({'status': 'success', 'count': len(result), 'data': result})
+
+        cached = get_sector_stocks_cached(iscd)
+        if cached:
+            app.logger.info(f"[sector-stocks] KIS API 결과 없음 → DB 캐시 {len(cached)}건 반환 (iscd={iscd})")
+            return jsonify({'status': 'success', 'count': len(cached), 'data': cached, 'source': 'cache'})
+
+        return jsonify({'status': 'success', 'count': 0, 'data': []})
     except Exception as e:
+        try:
+            cached = get_sector_stocks_cached(iscd)
+            if cached:
+                app.logger.warning(f"[sector-stocks] KIS API 오류 → DB 캐시 반환: {e}")
+                return jsonify({'status': 'success', 'count': len(cached), 'data': cached, 'source': 'cache'})
+        except Exception:
+            pass
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/api/sector-index', methods=['GET'])
@@ -587,6 +612,7 @@ SYNC_TABLE_MAP = {
     'stock_investor_daily':        sync_upsert_investor_daily,
     'investor_trend_daily':        sync_upsert_investor_trend,
     'sector_index_daily':          sync_upsert_sector_index,
+    'sector_stocks_daily':         sync_upsert_sector_stocks,
     'stock_hts_top_view_hourly':   sync_upsert_hts_top_view,
     'stock_top_interest_daily':    sync_upsert_top_interest,
 }

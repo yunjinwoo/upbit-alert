@@ -6,6 +6,7 @@ from app.utils.db_manager import (
     get_stock_investor_raw,
     get_investor_trend_history,
     get_sector_index_cached,
+    get_sector_stocks_cached,
     get_hts_top_view_export,
     get_top_interest_export,
 )
@@ -24,6 +25,11 @@ def _build_sync_steps():
         ('investor_trend_daily',      lambda limit: get_investor_trend_history(exch_div='J', mrkt_div='4', limit_days=limit)),
         *[
             ('sector_index_daily', lambda limit, _code=code: get_sector_index_cached(_code, limit=limit))
+            for code in SECTOR_NAMES
+        ],
+        # 업종 소속 종목은 당일 스냅샷이라 day-limit이 아닌 종목 수(최대 30)로 조회
+        *[
+            ('sector_stocks_daily', lambda limit, _code=code: get_sector_stocks_cached(_code, limit=30))
             for code in SECTOR_NAMES
         ],
         ('stock_hts_top_view_hourly', lambda limit: get_hts_top_view_export(limit_days=limit)),
