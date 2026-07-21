@@ -107,123 +107,138 @@
     </div>
 </nav>
 
-<div class="container dashboard-container">
+<div class="container-fluid dashboard-container">
+    <div class="row g-3">
 
-    <!-- 헤더 + 필터 -->
-    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-        <h2>📈 국내업종 일자별지수</h2>
-        <div class="d-flex align-items-center gap-2">
-            <span id="update-timer" class="badge bg-secondary">로딩 중...</span>
-            <button onclick="openSyncModal()" class="btn btn-outline-info btn-sm">🔄 서버 전송</button>
-        </div>
-    </div>
-
-    <div class="card-panel mb-3">
-        <div class="row g-3">
-            <!-- 업종 선택영역 -->
-            <div class="col-md-5">
-                <label class="form-label mb-1 small fw-bold">업종 (● 단일조회 · ☑ 비교대상)</label>
-                <div id="sectorList" class="border rounded p-2" style="max-height:230px; overflow-y:auto;"></div>
-                <!-- 목록은 페이지 로드시 /api/sector-index/list로 세부 업종까지 채워짐 -->
-            </div>
-            <!-- 기준일영역 -->
-            <div class="col-md-3">
-                <label class="form-label mb-1 small fw-bold">기준일 (최근 100거래일 조회)</label>
-                <input type="date" id="selDate" class="form-control form-control-sm">
-            </div>
-            <!-- 버튼영역 -->
-            <div class="col-md-4 d-flex flex-column justify-content-end gap-2">
-                <div class="d-flex gap-2">
+        <!-- 좌측 사이드바 (필터) -->
+        <div class="col-lg-3">
+            <div class="card-panel" style="position:sticky; top:16px;">
+                <!-- 1. 버튼영역 -->
+                <label class="form-label mb-1 small fw-bold">조회</label>
+                <div class="d-flex gap-2 mb-2">
                     <button class="btn btn-primary btn-sm flex-fill" onclick="loadFromDb()">DB 조회</button>
                     <button class="btn btn-warning btn-sm text-dark flex-fill" onclick="loadData()">API 조회</button>
                 </div>
-                <button class="btn btn-outline-primary btn-sm" onclick="loadCompare()">📊 업종 비교 조회</button>
-                <button class="btn btn-outline-secondary btn-sm" onclick="resetFilters()">초기화</button>
+                <button class="btn btn-outline-primary btn-sm w-100 mb-2" onclick="loadCompare()">📊 업종 비교 조회</button>
+                <button class="btn btn-outline-secondary btn-sm w-100" onclick="resetFilters()">초기화</button>
+                <hr>
+
+                <!-- 2. 기준일영역 -->
+                <label class="form-label mb-1 small fw-bold">기준일 (최근 100거래일 조회)</label>
+                <input type="date" id="selDate" class="form-control form-control-sm">
+                <hr>
+
+                <!-- 3. 선택된 업종 -->
+                <label class="form-label mb-1 small fw-bold">선택된 업종</label>
+                <div class="small mb-0">
+                    <div>단일조회: <span id="selectedSingle" class="badge bg-primary">코스피</span></div>
+                    <div class="mt-1">비교대상: <span id="selectedCompareList" class="text-muted">없음</span></div>
+                </div>
+                <hr>
+
+                <!-- 4. 업종 선택영역 -->
+                <label class="form-label mb-1 small fw-bold">업종 (● 단일조회 · ☑ 비교대상)</label>
+                <div id="sectorList" class="border rounded p-2" style="max-height:420px; overflow-y:auto;"></div>
+                <!-- 목록은 페이지 로드시 /api/sector-index/list로 세부 업종까지 채워짐 -->
             </div>
         </div>
-    </div>
 
-    <!-- 요약 카드 -->
-    <div class="row g-3 mb-3" id="summaryCards" style="display:none!important">
-        <div class="col-6 col-md-3">
-            <div class="stat-card bg-light">
-                <div class="stat-label">최근 종가</div>
-                <div class="stat-value" id="statClose">-</div>
-                <div class="stat-sub" id="statChange">-</div>
+        <!-- 우측 메인 콘텐츠 -->
+        <div class="col-lg-9">
+
+            <!-- 헤더 -->
+            <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+                <h2>📈 국내업종 일자별지수</h2>
+                <div class="d-flex align-items-center gap-2">
+                    <span id="update-timer" class="badge bg-secondary">로딩 중...</span>
+                    <button onclick="openSyncModal()" class="btn btn-outline-info btn-sm">🔄 서버 전송</button>
+                </div>
             </div>
-        </div>
-        <div class="col-6 col-md-3">
-            <div class="stat-card bg-light">
-                <div class="stat-label">기간 고가</div>
-                <div class="stat-value text-danger" id="statHigh">-</div>
+
+            <!-- 요약 카드 -->
+            <div class="row g-3 mb-3" id="summaryCards" style="display:none!important">
+                <div class="col-6 col-md-3">
+                    <div class="stat-card bg-light">
+                        <div class="stat-label">최근 종가</div>
+                        <div class="stat-value" id="statClose">-</div>
+                        <div class="stat-sub" id="statChange">-</div>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="stat-card bg-light">
+                        <div class="stat-label">기간 고가</div>
+                        <div class="stat-value text-danger" id="statHigh">-</div>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="stat-card bg-light">
+                        <div class="stat-label">기간 저가</div>
+                        <div class="stat-value text-primary" id="statLow">-</div>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="stat-card bg-light">
+                        <div class="stat-label">평균 20일 이격도</div>
+                        <div class="stat-value" id="statD20">-</div>
+                    </div>
+                </div>
             </div>
-        </div>
-        <div class="col-6 col-md-3">
-            <div class="stat-card bg-light">
-                <div class="stat-label">기간 저가</div>
-                <div class="stat-value text-primary" id="statLow">-</div>
+
+            <!-- 차트 -->
+            <div class="card-panel mb-3">
+                <canvas id="indexChart" height="90"></canvas>
             </div>
-        </div>
-        <div class="col-6 col-md-3">
-            <div class="stat-card bg-light">
-                <div class="stat-label">평균 20일 이격도</div>
-                <div class="stat-value" id="statD20">-</div>
+
+            <!-- 업종 비교 -->
+            <div class="card-panel mb-3">
+                <h6 class="mb-2">📊 업종 비교 (등락률 기준, 최근 100거래일)</h6>
+                <canvas id="compareChart" height="70"></canvas>
             </div>
+
+            <!-- 업종 소속 종목 -->
+            <div class="card-panel mb-3">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h6 class="mb-0" id="stocksTitle">📋 업종 소속 종목</h6>
+                    <span class="small text-muted">국내주식 등락률 순위 API로 실시간 조회 (최대 30종목)</span>
+                </div>
+                <table id="stocksTable" class="table table-hover table-sm" style="width:100%">
+                    <thead class="table-light">
+                        <tr>
+                            <th>순위</th>
+                            <th>종목코드</th>
+                            <th>종목명</th>
+                            <th class="text-end">현재가</th>
+                            <th>등락</th>
+                            <th class="text-end">등락률</th>
+                            <th class="text-end">거래량</th>
+                        </tr>
+                    </thead>
+                    <tbody id="stocksTableBody"></tbody>
+                </table>
+            </div>
+
+            <!-- 테이블 -->
+            <div class="card-panel">
+                <table id="sectorTable" class="table table-hover" style="width:100%">
+                    <thead class="table-light">
+                        <tr>
+                            <th>날짜</th>
+                            <th class="text-end">종가</th>
+                            <th>등락</th>
+                            <th class="text-end">등락률</th>
+                            <th class="text-end">시가</th>
+                            <th class="text-end">고가</th>
+                            <th class="text-end">저가</th>
+                            <th class="text-end">거래량(천주)</th>
+                            <th class="text-end">투자심리도</th>
+                            <th class="text-end">20일이격도</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tableBody"></tbody>
+                </table>
+            </div>
+
         </div>
-    </div>
-
-    <!-- 차트 -->
-    <div class="card-panel mb-3">
-        <canvas id="indexChart" height="90"></canvas>
-    </div>
-
-    <!-- 업종 비교 -->
-    <div class="card-panel mb-3">
-        <h6 class="mb-2">📊 업종 비교 (등락률 기준, 최근 100거래일)</h6>
-        <canvas id="compareChart" height="70"></canvas>
-    </div>
-
-    <!-- 업종 소속 종목 -->
-    <div class="card-panel mb-3">
-        <div class="d-flex justify-content-between align-items-center mb-2">
-            <h6 class="mb-0" id="stocksTitle">📋 업종 소속 종목</h6>
-            <span class="small text-muted">국내주식 등락률 순위 API로 실시간 조회 (최대 30종목)</span>
-        </div>
-        <table id="stocksTable" class="table table-hover table-sm" style="width:100%">
-            <thead class="table-light">
-                <tr>
-                    <th>순위</th>
-                    <th>종목코드</th>
-                    <th>종목명</th>
-                    <th class="text-end">현재가</th>
-                    <th>등락</th>
-                    <th class="text-end">등락률</th>
-                    <th class="text-end">거래량</th>
-                </tr>
-            </thead>
-            <tbody id="stocksTableBody"></tbody>
-        </table>
-    </div>
-
-    <!-- 테이블 -->
-    <div class="card-panel">
-        <table id="sectorTable" class="table table-hover" style="width:100%">
-            <thead class="table-light">
-                <tr>
-                    <th>날짜</th>
-                    <th class="text-end">종가</th>
-                    <th>등락</th>
-                    <th class="text-end">등락률</th>
-                    <th class="text-end">시가</th>
-                    <th class="text-end">고가</th>
-                    <th class="text-end">저가</th>
-                    <th class="text-end">거래량(천주)</th>
-                    <th class="text-end">투자심리도</th>
-                    <th class="text-end">20일이격도</th>
-                </tr>
-            </thead>
-            <tbody id="tableBody"></tbody>
-        </table>
     </div>
 </div>
 
@@ -248,6 +263,12 @@
 
     function getCompareSelection() {
         return [...document.querySelectorAll('.compareCheck:checked')].map(cb => ({ code: cb.value, name: getSectorName(cb.value) }));
+    }
+
+    function updateSelectedInfo() {
+        document.getElementById('selectedSingle').textContent = getSectorName(getSelectedIscd());
+        const compare = getCompareSelection();
+        document.getElementById('selectedCompareList').textContent = compare.length ? compare.map(c => c.name).join(', ') : '없음';
     }
 
     async function populateSectorOptions() {
@@ -279,14 +300,18 @@
                 return `<div class="sector-group-label small fw-bold text-muted">${label}</div>${rows}`;
             }).join('');
 
-            listEl.querySelectorAll('input[name="sectorRadio"]').forEach(r => r.addEventListener('change', loadFromDb));
+            listEl.querySelectorAll('input[name="sectorRadio"]').forEach(r => r.addEventListener('change', () => { updateSelectedInfo(); loadFromDb(); }));
+            listEl.querySelectorAll('.compareCheck').forEach(cb => cb.addEventListener('change', updateSelectedInfo));
             listEl.querySelectorAll('.sector-row label').forEach(label => {
                 label.addEventListener('click', () => {
                     const row = label.closest('.sector-row');
                     row.querySelector('input[type="radio"]').checked = true;
+                    updateSelectedInfo();
                     loadFromDb();
                 });
             });
+
+            updateSelectedInfo();
         } catch (e) {
             console.error('업종 목록 로드 실패', e);
         }
@@ -297,6 +322,7 @@
         const first = document.querySelector('input[name="sectorRadio"][value="0001"]');
         if (first) first.checked = true;
         document.querySelectorAll('.compareCheck:checked').forEach(cb => cb.checked = false);
+        updateSelectedInfo();
         loadFromDb();
     }
 
