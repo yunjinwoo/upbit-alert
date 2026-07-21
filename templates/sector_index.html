@@ -41,6 +41,11 @@
         .info-tag { display: inline-block; background: #e8f0fe; color: #1a1a2e; border-radius: 4px; padding: 2px 8px; font-size: 0.8rem; margin: 2px; font-family: monospace; }
         .info-tip { background: #fff8e1; border-left: 3px solid #ffc107; padding: 6px 10px; border-radius: 0 4px 4px 0; font-size: 0.85rem; margin-bottom: 4px; }
         .info-warn { background: #fce4ec; border-left: 3px solid #e91e63; padding: 6px 10px; border-radius: 0 4px 4px 0; font-size: 0.85rem; margin-bottom: 4px; }
+
+        .sector-group-label { padding: 4px 4px 2px; }
+        .sector-row { border-radius: 4px; }
+        .sector-row:hover { background: #f4f7f6; }
+        .sector-row label { cursor: pointer; }
     </style>
 </head>
 <body>
@@ -117,15 +122,9 @@
         <div class="row g-3">
             <!-- 업종 선택영역 -->
             <div class="col-md-5">
-                <label class="form-label mb-1 small fw-bold">업종 선택</label>
-                <select id="selIscd" class="form-select form-select-sm mb-2" onchange="loadFromDb()">
-                    <option value="0001">코스피 (KOSPI)</option>
-                    <option value="1001">코스닥 (KOSDAQ)</option>
-                    <option value="2001">코스피200</option>
-                </select>
-                <!-- 옵션은 페이지 로드시 /api/sector-index/list로 세부 업종까지 채워짐 -->
-                <label class="form-label mb-1 small fw-bold">업종 비교 (다중 선택)</label>
-                <select id="selCompare" class="form-select form-select-sm" multiple size="4"></select>
+                <label class="form-label mb-1 small fw-bold">업종 (● 단일조회 · ☑ 비교대상)</label>
+                <div id="sectorList" class="border rounded p-2" style="max-height:230px; overflow-y:auto;"></div>
+                <!-- 목록은 페이지 로드시 /api/sector-index/list로 세부 업종까지 채워짐 -->
             </div>
             <!-- 기준일영역 -->
             <div class="col-md-3">
@@ -236,6 +235,20 @@
 <script>
     let dataTable = null;
     let chartInstance = null;
+    const SECTOR_MAP = {};
+
+    function getSelectedIscd() {
+        const checked = document.querySelector('input[name="sectorRadio"]:checked');
+        return checked ? checked.value : '0001';
+    }
+
+    function getSectorName(code) {
+        return SECTOR_MAP[code] || code;
+    }
+
+    function getCompareSelection() {
+        return [...document.querySelectorAll('.compareCheck:checked')].map(cb => ({ code: cb.value, name: getSectorName(cb.value) }));
+    }
 
     async function populateSectorOptions() {
         try {
@@ -245,23 +258,35 @@
 
             const groups = { '지수': [], '코스피 세부업종': [], '코스닥 세부업종': [] };
             result.data.forEach(({ code, name }) => {
+                SECTOR_MAP[code] = name;
                 if (['0001', '1001', '2001'].includes(code)) groups['지수'].push({ code, name });
                 else if (code.startsWith('0')) groups['코스피 세부업종'].push({ code, name });
                 else groups['코스닥 세부업종'].push({ code, name });
             });
 
-            const groupHtml = Object.entries(groups).map(([label, items]) => {
+            const currentIscd  = getSelectedIscd();
+            const checkedCodes = new Set(getCompareSelection().map(s => s.code));
+
+            const listEl = document.getElementById('sectorList');
+            listEl.innerHTML = Object.entries(groups).map(([label, items]) => {
                 if (!items.length) return '';
-                const opts = items.map(({ code, name }) => `<option value="${code}">${name}</option>`).join('');
-                return `<optgroup label="${label}">${opts}</optgroup>`;
+                const rows = items.map(({ code, name }) => `
+                    <div class="sector-row d-flex align-items-center gap-2 py-1 px-1">
+                        <input type="radio" name="sectorRadio" class="form-check-input m-0" value="${code}" ${code === currentIscd ? 'checked' : ''} title="단일 조회">
+                        <input type="checkbox" class="form-check-input compareCheck m-0" value="${code}" ${checkedCodes.has(code) ? 'checked' : ''} title="비교 대상 추가">
+                        <label class="small flex-grow-1 mb-0" data-code="${code}">${name}</label>
+                    </div>`).join('');
+                return `<div class="sector-group-label small fw-bold text-muted">${label}</div>${rows}`;
             }).join('');
 
-            const sel = document.getElementById('selIscd');
-            const current = sel.value;
-            sel.innerHTML = groupHtml;
-            if ([...sel.options].some(o => o.value === current)) sel.value = current;
-
-            document.getElementById('selCompare').innerHTML = groupHtml;
+            listEl.querySelectorAll('input[name="sectorRadio"]').forEach(r => r.addEventListener('change', loadFromDb));
+            listEl.querySelectorAll('.sector-row label').forEach(label => {
+                label.addEventListener('click', () => {
+                    const row = label.closest('.sector-row');
+                    row.querySelector('input[type="radio"]').checked = true;
+                    loadFromDb();
+                });
+            });
         } catch (e) {
             console.error('업종 목록 로드 실패', e);
         }
@@ -269,7 +294,9 @@
 
     function resetFilters() {
         document.getElementById('selDate').value = '';
-        document.getElementById('selIscd').value = '0001';
+        const first = document.querySelector('input[name="sectorRadio"][value="0001"]');
+        if (first) first.checked = true;
+        document.querySelectorAll('.compareCheck:checked').forEach(cb => cb.checked = false);
         loadFromDb();
     }
 
@@ -361,7 +388,7 @@
     }
 
     async function loadFromDb() {
-        const iscd = document.getElementById('selIscd').value;
+        const iscd = getSelectedIscd();
         const url = `api/sector-index/cached?iscd=${iscd}`;
         try {
             const res    = await fetch(url);
@@ -397,7 +424,7 @@
                 order: [[0, 'desc']], pageLength: 50,
                 language: { search: "결과 내 검색:", lengthMenu: "_MENU_ 개씩 보기", info: "총 _TOTAL_ 건 중 _START_~_END_ 표시" }
             });
-            const sectorName = document.getElementById('selIscd').selectedOptions[0].text;
+            const sectorName = getSectorName(iscd);
             document.getElementById('update-timer').textContent = `${sectorName} · ${result.count}건 (DB) · ${new Date().toLocaleTimeString()}`;
             loadStocks(iscd);
         } catch(e) {
@@ -407,7 +434,7 @@
     }
 
     async function loadStocks(iscd) {
-        const sectorName = document.getElementById('selIscd').selectedOptions[0].text;
+        const sectorName = getSectorName(iscd);
         document.getElementById('stocksTitle').textContent = `📋 ${sectorName} 소속 종목`;
         try {
             const res    = await fetch(`api/sector-index/stocks?iscd=${iscd}`);
@@ -439,8 +466,8 @@
     let compareChartInstance = null;
 
     async function loadCompare() {
-        const selected = [...document.getElementById('selCompare').selectedOptions].map(o => ({ code: o.value, name: o.text }));
-        if (!selected.length) { alert('비교할 업종을 선택해주세요.'); return; }
+        const selected = getCompareSelection();
+        if (!selected.length) { alert('비교할 업종의 체크박스를 선택해주세요.'); return; }
 
         const palette = ['#2563eb', '#dc2626', '#16a34a', '#f59e0b', '#7c3aed', '#0891b2', '#db2777', '#65a30d'];
         const seriesList = [];
@@ -504,7 +531,7 @@
     }
 
     async function loadData() {
-        const iscd = document.getElementById('selIscd').value;
+        const iscd = getSelectedIscd();
         const date = document.getElementById('selDate').value.replace(/-/g, '');
         let url = `api/sector-index?iscd=${iscd}`;
         if (date) url += `&date=${date}`;
@@ -552,7 +579,7 @@
                 }
             });
 
-            const sectorName = document.getElementById('selIscd').selectedOptions[0].text;
+            const sectorName = getSectorName(iscd);
             document.getElementById('update-timer').textContent = `${sectorName} · ${result.count}건 · ${new Date().toLocaleTimeString()}`;
             loadStocks(iscd);
 
@@ -650,7 +677,7 @@
     window.startPageSync = async function() {
         const btn = document.getElementById('syncStartBtn');
         const serverUrl = document.getElementById('syncServerUrl').value.trim().replace(/\/$/, '');
-        const iscd = document.getElementById('selIscd').value;
+        const iscd = getSelectedIscd();
         const date = document.getElementById('selDate').value.replace(/-/g, '');
         btn.disabled = true;
         btn.textContent = '전송 중...';
