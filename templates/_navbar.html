@@ -6,12 +6,39 @@
     'raw_data': 'ops', 'history': 'ops', 'sync_admin': 'ops'
 } %}
 {% set active_group = group_map.get(active_page) %}
+{% set group_items = {
+    'data': [
+        ('market_cap_view', 'market_cap', '시가총액 추이'),
+        ('stock_investor_view', 'stock_investor', '시총×투자자'),
+        ('investor_trend_view', 'investor_trend', '투자자별 매매동향'),
+        ('investor_ranking_view', 'investor_ranking', '순매수 랭킹'),
+        ('volume_ratio_view', 'volume_ratio', '거래량 배수'),
+        ('sector_index_view', 'sector_index', '업종 일자별지수'),
+        ('ranking_preview_view', 'ranking_preview', '순위분석 미리보기'),
+        ('hts_top_view_view', 'hts_top_view', 'HTS조회상위'),
+        ('top_interest_view', 'top_interest', '관심종목등록 상위'),
+    ],
+    'signal': [
+        ('signal_score_preview_view', 'signal_score_preview', 'Signal Score 종목'),
+        ('signal_score_history_view', 'signal_score_history', 'Signal Score 이력'),
+    ],
+    'ops': [
+        ('raw_data_view', 'raw_data', '원본 데이터'),
+        (None, None, '리비전 관리'),
+        ('history_view', 'history', '히스토리'),
+        ('sync_admin_view', 'sync_admin', '동기화 관리'),
+    ],
+} %}
 <style>
     .main-navbar .navbar-toggler-icon { filter: invert(1); }
     .main-navbar .navbar-toggler { border-color: rgba(255,255,255,0.3); }
     .main-navbar .dropdown-toggle { background: none; border: none; }
     .main-navbar .dropdown-menu { font-size: 0.85rem; min-width: 12rem; }
     .main-navbar .dropdown-item.active { background: #4da6ff; }
+    .sub-navbar { background: #eef2f6; border-bottom: 1px solid #dde3ea; }
+    .sub-navbar .sub-nav-link { color: #475569; font-size: 0.8rem; padding: 6px 4px; text-decoration: none; border-bottom: 2px solid transparent; }
+    .sub-navbar .sub-nav-link:hover { color: #1a1a2e; }
+    .sub-navbar .sub-nav-link.active { color: #1a1a2e; font-weight: bold; border-bottom-color: #4da6ff; }
 </style>
 <nav class="navbar navbar-expand-lg main-navbar px-3">
     <a class="navbar-brand" href="{{ url_for('index') }}">📡 알림 시스템</a>
@@ -57,3 +84,12 @@
         </div>
     </div>
 </nav>
+{% if active_group %}
+<div class="sub-navbar px-3 py-1">
+    <div class="d-flex gap-3 flex-wrap">
+        {% for endpoint, page, label in group_items[active_group] %}
+            <a href="{{ url_for(endpoint) if endpoint else '/grid' }}" class="sub-nav-link{{ ' active' if active_page == page }}">{{ label }}</a>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
