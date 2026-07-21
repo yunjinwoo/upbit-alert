@@ -884,7 +884,7 @@ def run_stock_monitor():
                     run_job_investor_trend()
                     logger.info("✅ [스케줄] 투자자별 매매동향 수집 완료 (코스피/코스닥)")
                     run_job_sector_index()
-                    logger.info("✅ [스케줄] 업종 일자별지수 수집 완료 (코스피/코스닥/코스피200)")
+                    logger.info("✅ [스케줄] 업종 일자별지수 수집 완료 (코스피/코스닥/코스피200 + 세부 업종)")
                     last_close_data_hour = run_key
 
             # 평일 20시 — 원격 서버로 전체 데이터 자동 전송 ("동기화 관리" 페이지의 수동 전송과 동일 로직)

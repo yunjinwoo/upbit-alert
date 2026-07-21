@@ -12,18 +12,23 @@ from app.utils.db_manager import (
 
 logger = get_logger()
 
-# 동기화 관리 페이지의 "전체 전송" 버튼과 동일한 순서/조합 (templates/sync_admin.html 참고)
-SYNC_STEPS = [
-    ('stock_market_cap_daily',    lambda limit: get_market_cap_history(limit_dates=limit, fid_input_iscd='combined')),
-    ('stock_investor_daily',      lambda limit: get_stock_investor_raw(limit_dates=limit)),
-    ('investor_trend_daily',      lambda limit: get_investor_trend_history(exch_div='J', mrkt_div='1', limit_days=limit)),
-    ('investor_trend_daily',      lambda limit: get_investor_trend_history(exch_div='J', mrkt_div='4', limit_days=limit)),
-    ('sector_index_daily',        lambda limit: get_sector_index_cached('0001', limit=limit)),
-    ('sector_index_daily',        lambda limit: get_sector_index_cached('1001', limit=limit)),
-    ('sector_index_daily',        lambda limit: get_sector_index_cached('2001', limit=limit)),
-    ('stock_hts_top_view_hourly', lambda limit: get_hts_top_view_export(limit_days=limit)),
-    ('stock_top_interest_daily',  lambda limit: get_top_interest_export(limit_days=limit)),
-]
+
+def _build_sync_steps():
+    """SYNC_STEPS 구성 — stock_monitor.SECTOR_NAMES는 stock_monitor가 sync_client를 임포트하는
+    순환참조를 피하기 위해 호출 시점에 지연 임포트한다."""
+    from app.core.stock_monitor import SECTOR_NAMES
+    return [
+        ('stock_market_cap_daily',    lambda limit: get_market_cap_history(limit_dates=limit, fid_input_iscd='combined')),
+        ('stock_investor_daily',      lambda limit: get_stock_investor_raw(limit_dates=limit)),
+        ('investor_trend_daily',      lambda limit: get_investor_trend_history(exch_div='J', mrkt_div='1', limit_days=limit)),
+        ('investor_trend_daily',      lambda limit: get_investor_trend_history(exch_div='J', mrkt_div='4', limit_days=limit)),
+        *[
+            ('sector_index_daily', lambda limit, _code=code: get_sector_index_cached(_code, limit=limit))
+            for code in SECTOR_NAMES
+        ],
+        ('stock_hts_top_view_hourly', lambda limit: get_hts_top_view_export(limit_days=limit)),
+        ('stock_top_interest_daily',  lambda limit: get_top_interest_export(limit_days=limit)),
+    ]
 
 
 def push_all_tables_to_server(server_url: str = None, limit: int = None) -> dict:
@@ -49,7 +54,7 @@ def push_all_tables_to_server(server_url: str = None, limit: int = None) -> dict
     total_rows = 0
     synced_tables = []
     try:
-        for table, fetch_fn in SYNC_STEPS:
+        for table, fetch_fn in _build_sync_steps():
             rows = fetch_fn(limit)
             if not rows:
                 continue
