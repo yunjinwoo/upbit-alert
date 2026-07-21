@@ -116,7 +116,7 @@
     <div class="card-panel mb-3 d-flex align-items-end gap-2 flex-wrap">
         <div>
             <label class="form-label mb-1 small">업종 선택</label>
-            <select id="selIscd" class="form-select form-select-sm">
+            <select id="selIscd" class="form-select form-select-sm" onchange="loadFromDb()">
                 <option value="0001">코스피 (KOSPI)</option>
                 <option value="1001">코스닥 (KOSDAQ)</option>
                 <option value="2001">코스피200</option>
@@ -323,7 +323,8 @@
             const res    = await fetch(url);
             const result = await res.json();
             if (result.status !== 'success' || !result.data.length) {
-                document.getElementById('update-timer').textContent = 'DB 데이터 없음 — API 조회 버튼을 눌러주세요';
+                document.getElementById('update-timer').textContent = 'DB 데이터 없음 — API 실시간 조회 중...';
+                await loadData();
                 return;
             }
             renderSummary(result.data);
