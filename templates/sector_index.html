@@ -95,17 +95,16 @@
             <!-- 상단 고정 패널: 버튼/기준일/선택된 업종 -->
             <div class="card-panel" style="position: fixed; top: 110px; width: 300px;">
                 <!-- 1. 버튼영역 -->
-                <label class="form-label mb-1 small fw-bold">조회</label>
-                <div class="d-flex gap-2 mb-2">
-                    <button class="btn btn-primary btn-sm flex-fill" onclick="loadFromDb()">DB 조회</button>
-                    <button class="btn btn-warning btn-sm text-dark flex-fill" onclick="loadData()">API 조회</button>
+                <div class="d-flex gap-1 mb-2">
+                    <button class="btn btn-primary btn-sm flex-fill px-1" onclick="loadFromDb()">DB 조회</button>
+                    <button class="btn btn-warning btn-sm text-dark flex-fill px-1" onclick="loadData()">API 조회</button>
+                    <button class="btn btn-outline-secondary btn-sm flex-fill px-1" onclick="resetFilters()">초기화</button>
                 </div>
-                <button class="btn btn-outline-secondary btn-sm w-100" onclick="resetFilters()">초기화</button>
                 <hr>
 
                 <!-- 2. 기준일영역 -->
-                <label class="form-label mb-1 small fw-bold">기준일 (최근 100거래일 조회)</label>
                 <input type="date" id="selDate" class="form-control form-control-sm">
+                <label class="form-label mt-1 mb-0 small text-muted">(기준일 최근 100거래일 조회)</label>
                 <hr>
 
                 <!-- 3. 선택된 업종 -->
