@@ -249,7 +249,7 @@
     function updateSelectedInfo() {
         document.getElementById('selectedSingle').textContent = getSectorName(getSelectedIscd());
         const compare = getCompareSelection();
-        document.getElementById('selectedCompareList').textContent = compare.length ? compare.map(c => c.name).join(', ') : '없음';
+        document.getElementById('selectedCompareList').textContent = compare.length ? `${compare.length}개 선택됨` : '없음';
     }
 
     async function populateSectorOptions() {
@@ -286,9 +286,9 @@
             listEl.querySelectorAll('.sector-row label').forEach(label => {
                 label.addEventListener('click', () => {
                     const row = label.closest('.sector-row');
-                    row.querySelector('input[type="radio"]').checked = true;
+                    const checkbox = row.querySelector('input[type="checkbox"]');
+                    checkbox.checked = !checkbox.checked;
                     updateSelectedInfo();
-                    loadFromDb();
                 });
             });
 
