@@ -95,15 +95,14 @@
             <!-- 상단 고정 패널: 버튼/기준일/선택된 업종 -->
             <div class="card-panel" style="position: sticky; top: 16px;">
                 <!-- 1. 버튼영역 -->
-                <div class="d-flex gap-1 mb-2">
-                    <button class="btn btn-primary btn-sm flex-fill px-1" onclick="loadFromDb()">DB 조회</button>
-                    <button class="btn btn-warning btn-sm text-dark flex-fill px-1" onclick="loadData()">API 조회</button>
-                    <button class="btn btn-outline-secondary btn-sm flex-fill px-1" onclick="resetFilters()">초기화</button>
-                </div>
+                <button class="btn btn-primary btn-sm w-100 mb-2" onclick="loadFromDb()">DB 조회</button>
                 <hr>
 
                 <!-- 2. 기준일영역 -->
-                <input type="date" id="selDate" class="form-control form-control-sm">
+                <div class="d-flex gap-1">
+                    <input type="date" id="selDate" class="form-control form-control-sm">
+                    <button class="btn btn-warning btn-sm text-dark px-2" onclick="loadData()">API 조회</button>
+                </div>
                 <label class="form-label mt-1 mb-0 small text-muted">(기준일 최근 100거래일 조회)</label>
                 <hr>
 
@@ -112,7 +111,10 @@
                     <div>단일조회: <span id="selectedSingle" class="badge bg-primary">코스피</span></div>
                     <div class="mt-1">비교대상: <span id="selectedCompareList" class="text-muted">없음</span></div>
                 </div>
-                <button class="btn btn-outline-primary btn-sm w-100" onclick="loadCompare()">📊 업종 비교 조회</button>
+                <div class="d-flex gap-1">
+                    <button class="btn btn-outline-primary btn-sm flex-fill" onclick="loadCompare()">📊 업종 비교 조회</button>
+                    <button class="btn btn-outline-secondary btn-sm px-2" onclick="resetFilters()">초기화</button>
+                </div>
             </div>
 
             <!-- 하단 고정 패널: 업종 선택영역 (독립 스크롤) -->
