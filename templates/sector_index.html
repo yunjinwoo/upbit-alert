@@ -93,7 +93,7 @@
         <!-- 좌측 사이드바 (필터) -->
         <div class="col-lg-3">
             <!-- 상단 고정 패널: 버튼/기준일/선택된 업종 -->
-            <div class="card-panel" style="position: fixed; top: 110px; width: 300px;">
+            <div class="card-panel" style="position: sticky; top: 16px;">
                 <!-- 1. 버튼영역 -->
                 <div class="d-flex gap-1 mb-2">
                     <button class="btn btn-primary btn-sm flex-fill px-1" onclick="loadFromDb()">DB 조회</button>
@@ -116,7 +116,7 @@
             </div>
 
             <!-- 하단 고정 패널: 업종 선택영역 (독립 스크롤) -->
-            <div class="card-panel" style="position: fixed; overflow: scroll; top: 400px; height: calc(100vh - 410px); width: 300px;">
+            <div class="card-panel" style="position: sticky; overflow: scroll; top: 311px; height: calc(100vh - 327px);">
                 <!-- 4. 업종 선택영역 -->
                 <label class="form-label mb-1 small fw-bold">업종 (● 단일조회 · ☑ 비교대상)</label>
                 <div id="sectorList" class="border rounded p-2"></div>
