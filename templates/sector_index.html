@@ -96,11 +96,12 @@
             <div class="card-panel" style="position: sticky; top: 16px;">
                 <!-- 1. 버튼영역 + 2. 기준일영역 -->
                 <div class="d-flex gap-1">
-                    <input type="date" id="selDate" class="form-control form-control-sm px-1" style="min-width:0;" onchange="loadData()">
+                    <input type="date" id="selDate" class="form-control form-control-sm px-1" style="min-width:0;width: auto;" >
+                    <button class="btn btn-warning btn-sm text-dark px-2" onclick="loadData()">조회</button>
                     <button class="btn btn-outline-secondary btn-sm px-2" onclick="clearDate()" title="기준일 지우기">✕</button>
-                    <button class="btn btn-warning btn-sm text-dark px-2" onclick="loadData()">API 조회</button>
+                    <label class="form-label mt-1 mb-0 small text-muted">(기준일 최근 100거래일)</label>
                 </div>
-                <label class="form-label mt-1 mb-0 small text-muted">(기준일 최근 100거래일)</label>
+
                 <hr>
 
                 <!-- 3. 선택된 업종 -->
@@ -115,7 +116,7 @@
             </div>
 
             <!-- 하단 고정 패널: 업종 선택영역 (독립 스크롤) -->
-            <div class="card-panel" style="position: sticky; overflow: scroll; top: 311px; height: calc(100vh - 327px);">
+            <div class="card-panel" style="position: sticky; overflow: scroll; top: 211px; height: calc(100vh - 220px);">
                 <!-- 4. 업종 선택영역 -->
                 <div id="sectorList" class="border rounded p-2"></div>
                 <label class="form-label mt-1 mb-0 small text-muted">(업종 · ● 단일조회 · ☑ 비교대상)</label>
