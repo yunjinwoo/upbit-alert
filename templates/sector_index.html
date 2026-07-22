@@ -92,7 +92,8 @@
 
         <!-- 좌측 사이드바 (필터) -->
         <div class="col-lg-3">
-            <div class="card-panel" style="position: fixed;overflow: scroll;top: 110px;height: calc(100vh - 120px);">
+            <!-- 상단 고정 패널: 버튼/기준일/선택된 업종 -->
+            <div class="card-panel" style="position: fixed; top: 110px; width: 300px;">
                 <!-- 1. 버튼영역 -->
                 <label class="form-label mb-1 small fw-bold">조회</label>
                 <div class="d-flex gap-2 mb-2">
@@ -114,8 +115,10 @@
                     <div class="mt-1">비교대상: <span id="selectedCompareList" class="text-muted">없음</span></div>
                 </div>
                 <button class="btn btn-outline-primary btn-sm w-100" onclick="loadCompare()">📊 업종 비교 조회</button>
-                <hr>
+            </div>
 
+            <!-- 하단 고정 패널: 업종 선택영역 (독립 스크롤) -->
+            <div class="card-panel" style="position: fixed; overflow: scroll; top: 500px; height: calc(100vh - 510px); width: 300px;">
                 <!-- 4. 업종 선택영역 -->
                 <label class="form-label mb-1 small fw-bold">업종 (● 단일조회 · ☑ 비교대상)</label>
                 <div id="sectorList" class="border rounded p-2"></div>
