@@ -92,33 +92,34 @@
 
         <!-- 좌측 사이드바 (필터) -->
         <div class="col-lg-3">
-            <div class="card-panel" style="position:sticky; top:16px;">
-                <!-- 1. 버튼영역 -->
-                <label class="form-label mb-1 small fw-bold">조회</label>
-                <div class="d-flex gap-2 mb-2">
-                    <button class="btn btn-primary btn-sm flex-fill" onclick="loadFromDb()">DB 조회</button>
-                    <button class="btn btn-warning btn-sm text-dark flex-fill" onclick="loadData()">API 조회</button>
+            <!-- 상단 고정 패널: 버튼/기준일/선택된 업종 -->
+            <div class="card-panel" style="position: sticky; top: 16px;">
+                <!-- 1. 버튼영역 + 2. 기준일영역 -->
+                <div class="d-flex gap-1">
+                    <input type="date" id="selDate" class="form-control form-control-sm px-1" style="min-width:0;width: auto;" >
+                    <button class="btn btn-warning btn-sm text-dark px-2" onclick="loadData()">조회</button>
+                    <button class="btn btn-outline-secondary btn-sm px-2" onclick="clearDate()" title="기준일 지우기">✕</button>
+                    <label class="form-label mt-1 mb-0 small text-muted">(기준일 최근 100거래일)</label>
                 </div>
-                <button class="btn btn-outline-secondary btn-sm w-100" onclick="resetFilters()">초기화</button>
-                <hr>
 
-                <!-- 2. 기준일영역 -->
-                <label class="form-label mb-1 small fw-bold">기준일 (최근 100거래일 조회)</label>
-                <input type="date" id="selDate" class="form-control form-control-sm">
                 <hr>
 
                 <!-- 3. 선택된 업종 -->
-                <label class="form-label mb-1 small fw-bold">선택된 업종</label>
                 <div class="small mb-2">
                     <div>단일조회: <span id="selectedSingle" class="badge bg-primary">코스피</span></div>
                     <div class="mt-1">비교대상: <span id="selectedCompareList" class="text-muted">없음</span></div>
                 </div>
-                <button class="btn btn-outline-primary btn-sm w-100" onclick="loadCompare()">📊 업종 비교 조회</button>
-                <hr>
+                <div class="d-flex gap-1">
+                    <button class="btn btn-outline-primary btn-sm flex-fill" onclick="loadCompare()">📊 업종 비교 조회</button>
+                    <button class="btn btn-outline-secondary btn-sm px-2" onclick="resetFilters()">초기화</button>
+                </div>
+            </div>
 
+            <!-- 하단 고정 패널: 업종 선택영역 (독립 스크롤) -->
+            <div class="card-panel" style="position: sticky; overflow: scroll; top: 211px; height: calc(100vh - 220px);">
                 <!-- 4. 업종 선택영역 -->
-                <label class="form-label mb-1 small fw-bold">업종 (● 단일조회 · ☑ 비교대상)</label>
                 <div id="sectorList" class="border rounded p-2"></div>
+                <label class="form-label mt-1 mb-0 small text-muted">(업종 · ● 단일조회 · ☑ 비교대상)</label>
                 <!-- 목록은 페이지 로드시 /api/sector-index/list로 세부 업종까지 채워짐 -->
             </div>
         </div>
@@ -248,7 +249,7 @@
     function updateSelectedInfo() {
         document.getElementById('selectedSingle').textContent = getSectorName(getSelectedIscd());
         const compare = getCompareSelection();
-        document.getElementById('selectedCompareList').textContent = compare.length ? compare.map(c => c.name).join(', ') : '없음';
+        document.getElementById('selectedCompareList').textContent = compare.length ? `${compare.length}개 선택됨` : '없음';
     }
 
     async function populateSectorOptions() {
@@ -285,9 +286,9 @@
             listEl.querySelectorAll('.sector-row label').forEach(label => {
                 label.addEventListener('click', () => {
                     const row = label.closest('.sector-row');
-                    row.querySelector('input[type="radio"]').checked = true;
+                    const checkbox = row.querySelector('input[type="checkbox"]');
+                    checkbox.checked = !checkbox.checked;
                     updateSelectedInfo();
-                    loadFromDb();
                 });
             });
 
@@ -295,6 +296,11 @@
         } catch (e) {
             console.error('업종 목록 로드 실패', e);
         }
+    }
+
+    function clearDate() {
+        document.getElementById('selDate').value = '';
+        loadFromDb();
     }
 
     function resetFilters() {
