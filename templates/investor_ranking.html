@@ -103,15 +103,6 @@
         </div>
     </div>
 
-    <!-- 탭 (테이블 전용) -->
-    <div class="type-tabs mb-3">
-        <button class="type-tab active-buy"  data-inv="frgn" data-dir="buy"  onclick="switchTab(this)">🟥 외국인 순매수</button>
-        <button class="type-tab"             data-inv="frgn" data-dir="sell" onclick="switchTab(this)">🟦 외국인 순매도</button>
-        <button class="type-tab"             data-inv="orgn" data-dir="buy"  onclick="switchTab(this)">🟥 기관 순매수</button>
-        <button class="type-tab"             data-inv="orgn" data-dir="sell" onclick="switchTab(this)">🟦 기관 순매도</button>
-        <span class="ms-3 small text-muted align-self-center">← 테이블 필터</span>
-    </div>
-
     <!-- 차트 -->
     <div class="chart-panel mb-3">
         <div class="chart-title" id="chartTitle">상위 종목 금액 추이 (백만원)</div>
@@ -120,6 +111,14 @@
 
     <!-- 테이블 -->
     <div class="card-panel">
+        <!-- 탭 (테이블 전용) -->
+        <div class="type-tabs mb-3">
+            <button class="type-tab active-buy"  data-inv="frgn" data-dir="buy"  onclick="switchTab(this)">🟥 외국인 순매수</button>
+            <button class="type-tab"             data-inv="frgn" data-dir="sell" onclick="switchTab(this)">🟦 외국인 순매도</button>
+            <button class="type-tab"             data-inv="orgn" data-dir="buy"  onclick="switchTab(this)">🟥 기관 순매수</button>
+            <button class="type-tab"             data-inv="orgn" data-dir="sell" onclick="switchTab(this)">🟦 기관 순매도</button>
+            <span class="ms-3 small text-muted align-self-center">← 테이블 필터</span>
+        </div>
         <div class="ranking-wrap">
             <table class="rank-table" id="rankTable">
                 <thead id="rankHead"></thead>
