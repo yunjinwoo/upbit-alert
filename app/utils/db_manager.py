@@ -2094,7 +2094,7 @@ def get_investor_ranking(date_from: str, date_to: str, investor: str, direction:
     cursor.execute(f'''
         SELECT DISTINCT date FROM stock_investor_daily
         WHERE date BETWEEN ? AND ?
-        ORDER BY date ASC
+        ORDER BY date DESC
     ''', (date_from, date_to))
     dates = [r['date'] for r in cursor.fetchall()]
 
