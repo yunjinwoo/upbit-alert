@@ -29,30 +29,40 @@
         }
         .btn-search:hover { background: #2d2d4e; }
 
-        table.rank-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+        /* 배수 구간별 매트릭스 테이블 (투자자별 순매수/순매도 랭킹 페이지와 동일한 스타일) */
+        .ranking-wrap { overflow-x: auto; }
+        table.rank-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 0.8rem; }
         .rank-table th {
             background: #1a1a2e; color: #fff;
-            padding: 8px; text-align: center; white-space: nowrap; font-weight: 600;
+            padding: 6px 8px; text-align: center;
+            white-space: nowrap; font-weight: 600;
             position: sticky; top: 0; z-index: 1;
         }
-        .rank-table td { padding: 6px 8px; border-bottom: 1px solid #f1f5f9; }
+        .rank-table th.bucket-head { background: #2d3a5c; font-size: 0.76rem; }
+        .rank-table th.bucket-head span { display: block; font-size: 0.66rem; color: #94a3b8; font-weight: 400; }
+        .rank-table td { padding: 4px 7px; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
         .rank-table tr:hover td { background: #f8fafc; }
-        .stock-name { font-weight: 600; color: #1e293b; }
+        .bucket-col { border-left: 2px solid #e2e8f0; }
+        .stock-name { font-weight: 600; color: #1e293b; font-size: 0.79rem; white-space: nowrap; }
         .stock-code { font-size: 0.68rem; color: #94a3b8; font-family: monospace; }
-        .ratio-cell { text-align: right; font-weight: 700; font-family: monospace; }
+        .ratio-cell { text-align: right; font-weight: 700; font-family: monospace; white-space: nowrap; font-size: 0.79rem; }
         .ratio-hot  { color: #b91c1c; }
         .ratio-warm { color: #c2680d; }
-        .num-cell { text-align: right; color: #64748b; font-family: monospace; }
-        .rank-no { color: #94a3b8; text-align: center; width: 24px; }
-        .days-badge { font-size: 0.68rem; color: #94a3b8; }
+        .vol-cell { color: #64748b; text-align: right; white-space: nowrap; font-size: 0.72rem; }
+        .days-badge { color: #94a3b8; }
+        .days-badge-short { color: #c2680d; font-weight: 600; }
+        .rank-no { color: #94a3b8; font-size: 0.72rem; text-align: center; width: 20px; }
         .loading-row td { text-align: center; color: #94a3b8; padding: 30px; }
+        .empty-cell { color: #cbd5e1; font-size: 0.72rem; text-align: center; }
+        .top5-sep td { border-top: 2px solid #e2e8f0; }
+        .top10-sep td { border-top: 1px dashed #e2e8f0; }
     </style>
 </head>
 <body>
 
 {% include '_navbar.html' %}
 
-<div class="container-fluid dashboard-container px-4" style="max-width:1100px">
+<div class="container-fluid dashboard-container px-4" style="max-width:1500px">
 
     <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
         <h2 class="mb-0" style="font-size:1.2rem; font-weight:700; color:#1a1a2e">📈 종목별 거래량 배수</h2>
@@ -75,29 +85,33 @@
     <div class="mb-3" id="statusBanner" style="font-size:0.8rem; color:#64748b;">누적 현황 확인 중...</div>
 
     <div class="card-panel">
-        <table class="rank-table">
-            <thead>
-                <tr>
-                    <th style="width:28px">#</th>
-                    <th style="text-align:left">종목</th>
-                    <th>당일 거래량</th>
-                    <th>평균 거래량</th>
-                    <th>배수</th>
-                </tr>
-            </thead>
-            <tbody id="rankBody">
-                <tr class="loading-row"><td colspan="5">로딩 중...</td></tr>
-            </tbody>
-        </table>
+        <div class="ranking-wrap">
+            <table class="rank-table" id="rankTable">
+                <thead id="rankHead"></thead>
+                <tbody id="rankBody">
+                    <tr class="loading-row"><td colspan="99">로딩 중...</td></tr>
+                </tbody>
+            </table>
+        </div>
         <div class="mt-2 text-muted" style="font-size:0.72rem">
             * 배수 = 당일 거래량 ÷ 최근 N일 평균 거래량. 데이터가 N일치보다 적게 쌓인 종목은 표시된 일수만큼만 반영됨.
             &nbsp;|&nbsp; 시총 데이터가 있는 날짜 기준으로만 계산됨.
+            &nbsp;|&nbsp; 각 구간은 배수 기준 내림차순으로 최대 20종목까지 표시됩니다.
         </div>
     </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
+    // 배수 구간 (내림차순 확인 — 상한 미만 ~ 하한 이상)
+    const BUCKETS = [
+        { label: '4배 이상',    min: 4,   max: Infinity },
+        { label: '2.5~4배',    min: 2.5, max: 4 },
+        { label: '1~2.5배',    min: 1,   max: 2.5 },
+        { label: '0~1배',      min: 0,   max: 1 },
+    ];
+    const ROWS_PER_BUCKET = 20;
+
     function fmtNum(v) {
         const n = Number(v);
         return isNaN(n) ? '—' : Math.round(n).toLocaleString();
@@ -114,9 +128,9 @@
         const market   = document.getElementById('marketSelect').value;
         const avgDays  = document.getElementById('avgDaysSelect').value;
         const body = document.getElementById('rankBody');
-        body.innerHTML = '<tr class="loading-row"><td colspan="5">로딩 중...</td></tr>';
+        body.innerHTML = '<tr class="loading-row"><td colspan="99">로딩 중...</td></tr>';
         try {
-            const params = new URLSearchParams({ market, avg_days: avgDays, top_n: 50 });
+            const params = new URLSearchParams({ market, avg_days: avgDays, top_n: 1000 });
             if (date) params.set('date', date);
             const res  = await fetch(`api/volume-ratio?${params.toString()}`);
             const json = await res.json();
@@ -124,7 +138,7 @@
             if (json.date && !date) document.getElementById('dateInput').value = json.date;
             renderTable(json.data);
         } catch (e) {
-            body.innerHTML = `<tr class="loading-row"><td colspan="5" class="text-danger">오류: ${e.message}</td></tr>`;
+            body.innerHTML = `<tr class="loading-row"><td colspan="99" class="text-danger">오류: ${e.message}</td></tr>`;
         }
         loadStatus();
     }
@@ -150,23 +164,67 @@
     }
 
     function renderTable(rows) {
+        const table = document.getElementById('rankTable');
+        const head = document.getElementById('rankHead');
         const body = document.getElementById('rankBody');
-        if (!rows || !rows.length) {
-            body.innerHTML = '<tr class="loading-row"><td colspan="5">데이터 없음 — 아직 거래량 수집이 20일치 쌓이지 않았을 수 있습니다.</td></tr>';
+
+        // 구간별로 종목 분류 (배수 내림차순은 이미 API에서 정렬돼 옴)
+        const grouped = BUCKETS.map(b => ({
+            ...b,
+            items: (rows || []).filter(r => r.ratio >= b.min && r.ratio < b.max).slice(0, ROWS_PER_BUCKET),
+        }));
+
+        // 4개 구간이 모두 동일한 너비를 갖도록 colgroup으로 컬럼 폭 고정
+        let colHtml = '<col style="width:4%">';
+        grouped.forEach(() => { colHtml += '<col style="width:12%"><col style="width:12%">'; });
+        const existingColgroup = table.querySelector('colgroup');
+        if (existingColgroup) existingColgroup.remove();
+        table.insertAdjacentHTML('afterbegin', `<colgroup>${colHtml}</colgroup>`);
+
+        let hRow = '<tr><th style="width:18px">#</th>';
+        grouped.forEach(b => {
+            hRow += `<th class="bucket-head" colspan="2">${b.label}<span>${b.items.length}종목</span></th>`;
+        });
+        hRow += '</tr><tr><th></th>';
+        grouped.forEach(() => {
+            hRow += '<th class="bucket-head" style="font-size:0.7rem;font-weight:400">종목</th>' +
+                    '<th class="bucket-head" style="font-size:0.7rem;font-weight:400">배수</th>';
+        });
+        hRow += '</tr>';
+        head.innerHTML = hRow;
+
+        const maxRows = Math.max(0, ...grouped.map(b => b.items.length));
+        if (maxRows === 0) {
+            body.innerHTML = '<tr class="loading-row"><td colspan="99">데이터 없음 — 아직 거래량 수집이 충분히 쌓이지 않았을 수 있습니다.</td></tr>';
             return;
         }
-        body.innerHTML = rows.map((r, i) => `
-            <tr>
-                <td class="rank-no">${i + 1}</td>
-                <td>
-                    <div class="stock-name">${r.name}</div>
-                    <div class="stock-code">${r.code}</div>
-                </td>
-                <td class="num-cell">${fmtNum(r.today_volume)}</td>
-                <td class="num-cell">${fmtNum(r.avg_volume)} <span class="days-badge">(${r.days_used}일)</span></td>
-                <td class="ratio-cell ${ratioClass(r.ratio)}">${r.ratio.toFixed(2)}x</td>
-            </tr>
-        `).join('');
+
+        let out = '';
+        for (let i = 0; i < maxRows; i++) {
+            let sepCls = '';
+            if (i === 5)  sepCls = 'top5-sep';
+            if (i === 10) sepCls = 'top10-sep';
+            out += `<tr class="${sepCls}"><td class="rank-no">${i + 1}</td>`;
+            grouped.forEach((b, bi) => {
+                const item = b.items[i];
+                const bc = bi > 0 ? ' bucket-col' : '';
+                if (!item) {
+                    out += `<td class="empty-cell${bc}" colspan="2">—</td>`;
+                } else {
+                    const avgDays = parseInt(document.getElementById('avgDaysSelect').value) || 20;
+                    const daysCls = item.days_used < avgDays ? 'days-badge-short' : 'days-badge';
+                    out += `<td class="${bc}">` +
+                                `<div class="stock-name">${item.name}</div>` +
+                                `<div class="stock-code">${item.code}</div>` +
+                            `</td>` +
+                            `<td class="ratio-cell ${ratioClass(item.ratio)}">${item.ratio.toFixed(2)}x` +
+                                `<div class="vol-cell">${fmtNum(item.today_volume)} <span class="${daysCls}">(${item.days_used}일)</span></div>` +
+                            `</td>`;
+                }
+            });
+            out += '</tr>';
+        }
+        body.innerHTML = out;
     }
 
     load();
