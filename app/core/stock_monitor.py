@@ -175,6 +175,48 @@ def fetch_sector_stocks(iscd):
         return []
 
 
+def fetch_multi_stock_price(codes):
+    """여러 종목의 현재가를 한 번에 조회 (관심종목 멀티종목 시세조회 FHKST11300006).
+    KIS API는 1회 호출당 최대 30종목까지만 지원하므로, 30개 초과 시 내부적으로 나눠서 호출 후 합친다.
+    실시간 조회 전용 — DB 미저장.
+    """
+    global ACCESS_TOKEN
+    if ACCESS_TOKEN is None:
+        get_access_token()
+    if ACCESS_TOKEN is None:
+        logger.error("❌ KIS API 토큰이 없어 현재가를 가져올 수 없습니다.")
+        return []
+
+    url = f"{Config.KIS_URL_BASE}/uapi/domestic-stock/v1/quotations/intstock-multprice"
+    headers = {
+        "content-type": "application/json",
+        "authorization": f"Bearer {ACCESS_TOKEN}",
+        "appkey": Config.KIS_APP_KEY,
+        "appsecret": Config.KIS_APP_SECRET,
+        "tr_id": "FHKST11300006",
+        "custtype": "P",
+    }
+
+    CHUNK = 30
+    results = []
+    for i in range(0, len(codes), CHUNK):
+        chunk = codes[i:i + CHUNK]
+        params = {}
+        for idx, code in enumerate(chunk, start=1):
+            params[f"FID_COND_MRKT_DIV_CODE_{idx}"] = "J"
+            params[f"FID_INPUT_ISCD_{idx}"] = code
+        try:
+            res = requests.get(url, headers=headers, params=params)
+            data = res.json()
+            if data.get("rt_cd") != "0":
+                logger.error(f"❌ 멀티종목 현재가 조회 오류: {data.get('msg1')}")
+                continue
+            results.extend(data.get("output", []))
+        except Exception as e:
+            logger.error(f"❌ 멀티종목 현재가 조회 에러: {e}")
+    return results
+
+
 def fetch_market_cap_ranking(mrkt_div_code="J", input_iscd="0000", div_cls_code="0", max_retries=2, max_pages=3):
     """시가총액 순위 종목 조회 (일별 1회 수집).
     KIS API는 1회 호출당 최대 30건만 반환하므로, 연속조회(tr_cont)로 최대 max_pages회

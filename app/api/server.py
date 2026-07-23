@@ -31,7 +31,7 @@ from app.utils.db_manager import (
 )
 from app.core.stock_monitor import (
     fetch_market_cap_ranking, fetch_investor_trend, fetch_sector_index_daily, fetch_stock_investor_daily,
-    fetch_ranking_preview, fetch_sector_stocks,
+    fetch_ranking_preview, fetch_sector_stocks, fetch_multi_stock_price,
     run_job_hts_top_view, run_job_investor_trend, run_job_sector_index,
     run_job_market_cap_and_signal_score, run_job_remote_sync, run_job_top_interest,
     SECTOR_NAMES,
@@ -123,6 +123,45 @@ def get_sector_stocks_api():
                 return jsonify({'status': 'success', 'count': len(cached), 'data': cached, 'source': 'cache'})
         except Exception:
             pass
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+_STOCK_PRICE_CACHE = {}          # {codes_key: {'ts': float, 'data': [...]}}
+_STOCK_PRICE_CACHE_TTL = 3       # 초 — 이 시간 내 재요청은 KIS를 다시 부르지 않고 캐시를 반환
+
+@app.route('/api/stock-price', methods=['GET'])
+def get_stock_price_api():
+    """종목코드 여러 개(콤마 구분)를 전달하면 현재가를 반환합니다.
+    관심종목(멀티종목) 시세조회(FHKST11300006) 사용 — 1회 호출당 최대 30종목, 초과 시 내부적으로 나눠 호출.
+    같은 종목 조합에 대해 짧은 시간(TTL) 내 재요청은 KIS를 다시 호출하지 않고 캐시된 값을 반환해
+    동시 다발적 폴링이 KIS 호출량을 그대로 늘리지 않도록 함.
+    예: /api/stock-price?codes=005930,000660,035420
+    """
+    SIGN = {'1': '상한', '2': '상승', '3': '보합', '4': '하한', '5': '하락'}
+    codes_param = request.args.get('codes', '')
+    codes = [c.strip() for c in codes_param.split(',') if c.strip()]
+    if not codes:
+        return jsonify({'status': 'error', 'message': 'codes 파라미터가 필요합니다 (예: ?codes=005930,000660)'}), 400
+
+    cache_key = ','.join(sorted(codes))
+    cached = _STOCK_PRICE_CACHE.get(cache_key)
+    now = _time.time()
+    if cached and (now - cached['ts']) < _STOCK_PRICE_CACHE_TTL:
+        return jsonify({'status': 'success', 'count': len(cached['data']), 'data': cached['data'], 'cached': True})
+
+    try:
+        records = fetch_multi_stock_price(codes)
+        result = [{
+            'code':        r.get('inter_shrn_iscd', ''),
+            'name':        r.get('inter_kor_isnm', ''),
+            'price':       r.get('inter2_prpr', ''),
+            'change':      r.get('inter2_prdy_vrss', ''),
+            'change_sign': SIGN.get(r.get('prdy_vrss_sign', '3'), '보합'),
+            'change_rate': r.get('prdy_ctrt', ''),
+            'volume':      r.get('acml_vol', ''),
+        } for r in records]
+        _STOCK_PRICE_CACHE[cache_key] = {'ts': now, 'data': result}
+        return jsonify({'status': 'success', 'count': len(result), 'data': result, 'cached': False})
+    except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/api/sector-index', methods=['GET'])
