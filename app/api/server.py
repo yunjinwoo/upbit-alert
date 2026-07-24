@@ -28,7 +28,7 @@ from app.utils.db_manager import (
     get_signal_score_history,
     get_signal_score_range,
     get_job_run_log,
-    get_stock_memos, add_stock_memo, delete_stock_memo_entry, search_stock_memos
+    get_stock_memos, add_stock_memo, delete_stock_memo_entry, search_stock_memos, get_all_stock_memos
 )
 from app.core.stock_monitor import (
     fetch_market_cap_ranking, fetch_investor_trend, fetch_sector_index_daily, fetch_stock_investor_daily,
@@ -203,6 +203,18 @@ def search_stock_memo_api():
     """종목 메모 검색 (종목코드/종목명 부분일치). q 없으면 최근 수정순 전체 목록."""
     q = request.args.get('q', '').strip()
     data = search_stock_memos(query=q or None, limit=100)
+    return jsonify({'status': 'success', 'count': len(data), 'data': data})
+
+@app.route('/stock-memo')
+def stock_memo_view():
+    """종목 메모 전체보기 페이지"""
+    return render_template('stock_memo.html', active_page='stock_memo')
+
+@app.route('/api/stock-memo/all', methods=['GET'])
+def get_all_stock_memo_api():
+    """전체 메모 이력 조회 (종목당 여러 건 전부, 최신순). q로 코드/종목명/메모내용 검색 가능."""
+    q = request.args.get('q', '').strip()
+    data = get_all_stock_memos(query=q or None, limit=500)
     return jsonify({'status': 'success', 'count': len(data), 'data': data})
 
 @app.route('/api/sector-index', methods=['GET'])

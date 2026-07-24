@@ -2089,6 +2089,22 @@ def search_stock_memos(query: str = None, limit: int = 50) -> list:
     return [dict(r) for r in rows]
 
 
+def get_all_stock_memos(query: str = None, limit: int = 500) -> list:
+    """전체 메모 이력 조회 (종목당 여러 건이어도 전부 반환, 최신순) — 메모 전체보기 페이지용."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    like = f'%{query}%' if query else '%'
+    cursor.execute('''
+        SELECT * FROM stock_memo
+        WHERE code LIKE ? OR name LIKE ? OR memo LIKE ?
+        ORDER BY created_at DESC, id DESC LIMIT ?
+    ''', (like, like, like, limit))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 def get_recent_investor_dates(limit: int = 10) -> list:
     """stock_investor_daily에 존재하는 최근 N영업일 날짜 목록(내림차순).
     주말/공휴일은 애초에 데이터가 없으므로 달력일이 아닌 실제 거래일 기준으로 안전하게 계산됨.
