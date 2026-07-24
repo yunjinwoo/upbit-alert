@@ -17,16 +17,21 @@
         .dashboard-container { margin-top: 24px; margin-bottom: 60px; }
         .card-panel { background: white; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); padding: 16px 18px; }
 
-        .memo-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-        .memo-table th { background: #1a1a2e; color: #fff; padding: 8px; text-align: left; white-space: nowrap; font-weight: 600; }
-        .memo-table td { padding: 8px; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
-        .memo-table tr:hover td { background: #f8fafc; }
-        .memo-code { font-family: monospace; color: #94a3b8; font-size: 0.75rem; }
-        .memo-text { white-space: pre-wrap; word-break: break-word; }
-        .memo-meta { color: #94a3b8; font-size: 0.72rem; white-space: nowrap; }
-        .memo-del-btn { background: none; border: none; color: #ef4444; font-size: 0.78rem; padding: 0; white-space: nowrap; }
-        .memo-del-btn:hover { text-decoration: underline; }
-        .loading-row td { text-align: center; color: #94a3b8; padding: 30px; }
+        .memo-columns { display: flex; gap: 14px; overflow-x: auto; padding-bottom: 8px; align-items: flex-start; }
+        .memo-grade-col { flex: 0 0 280px; width: 280px; }
+        .memo-grade-col .grade-col-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        .memo-grade-col .grade-col-header h6 { margin: 0; font-size: 0.9rem; font-weight: 700; color: #1a1a2e; }
+        .memo-grade-col .grade-count { font-size: 0.72rem; color: #94a3b8; background: #f1f5f9; border-radius: 10px; padding: 1px 8px; }
+        .memo-col-list { max-height: calc(100vh - 320px); min-height: 120px; overflow-y: auto; }
+        .memo-card { border: 1px solid #f1f5f9; border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; font-size: 0.8rem; }
+        .memo-card .memo-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+        .memo-card .memo-card-code { font-family: monospace; font-size: 0.72rem; color: #94a3b8; }
+        .memo-card .memo-card-name { font-weight: 600; color: #1e293b; }
+        .memo-card .memo-card-text { white-space: pre-wrap; word-break: break-word; margin-top: 4px; }
+        .memo-card .memo-card-meta { display: flex; justify-content: space-between; margin-top: 6px; font-size: 0.68rem; color: #94a3b8; }
+        .memo-card .memo-del-btn { background: none; border: none; color: #ef4444; font-size: 0.7rem; padding: 0; }
+        .memo-card .memo-del-btn:hover { text-decoration: underline; }
+        .empty-col { color: #cbd5e1; font-size: 0.78rem; text-align: center; padding: 20px 0; }
     </style>
 </head>
 <body>
@@ -34,10 +39,10 @@
 {% include '_navbar.html' %}
 {% include '_stock_memo.html' %}
 
-<div class="container-fluid dashboard-container px-4" style="max-width:1100px">
+<div class="container-fluid dashboard-container px-4">
 
     <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
-        <h2 class="mb-0" style="font-size:1.2rem; font-weight:700; color:#1a1a2e">📝 종목 메모 전체보기</h2>
+        <h2 class="mb-0" style="font-size:1.2rem; font-weight:700; color:#1a1a2e">📝 종목 메모 전체보기 (등급별)</h2>
         <div class="d-flex gap-2">
             <input type="text" id="allSearchInput" class="form-control form-control-sm" style="width:220px"
                    placeholder="종목코드 · 종목명 · 메모 내용 검색">
@@ -57,6 +62,10 @@
                 <label class="form-label small mb-1">종목명</label>
                 <input type="text" id="quickName" class="form-control form-control-sm" style="width:140px" placeholder="삼성전자">
             </div>
+            <div class="col-auto">
+                <label class="form-label small mb-1">등급</label>
+                <select id="quickGrade" class="form-select form-select-sm" style="width:auto"></select>
+            </div>
             <div class="col">
                 <label class="form-label small mb-1">메모</label>
                 <input type="text" id="quickMemo" class="form-control form-control-sm" placeholder="메모 내용 (URL을 넣으면 자동으로 링크가 됩니다)">
@@ -67,30 +76,15 @@
         </div>
     </div>
 
-    <div class="card-panel">
-        <div class="table-responsive">
-            <table class="memo-table" id="allMemoTable">
-                <thead>
-                    <tr>
-                        <th style="width:90px">종목코드</th>
-                        <th style="width:110px">종목명</th>
-                        <th>메모</th>
-                        <th style="width:130px">작성일시</th>
-                        <th style="width:50px"></th>
-                    </tr>
-                </thead>
-                <tbody id="allMemoBody">
-                    <tr class="loading-row"><td colspan="5">로딩 중...</td></tr>
-                </tbody>
-            </table>
-        </div>
-        <div class="mt-2 small text-muted" id="allMemoCount"></div>
+    <div class="memo-columns" id="memoColumns">
+        <div class="text-muted small p-3">로딩 중...</div>
     </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
     let _allSearchTimer = null;
+    let _gradeList = ['관심', '매수검토', '보유중', '매도검토', '기타'];
 
     function escHtml(s) {
         return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -102,32 +96,60 @@
         );
     }
 
+    async function loadGrades() {
+        try {
+            const res = await fetch('api/stock-memo/grades');
+            const json = await res.json();
+            if (json.data && json.data.length) _gradeList = json.data;
+        } catch (e) { /* 기본값 유지 */ }
+        document.getElementById('quickGrade').innerHTML =
+            _gradeList.map(g => `<option value="${g}">${g}</option>`).join('');
+    }
+
     async function loadAllMemos() {
         const q = document.getElementById('allSearchInput').value.trim();
-        const body = document.getElementById('allMemoBody');
-        body.innerHTML = '<tr class="loading-row"><td colspan="5">로딩 중...</td></tr>';
+        const box = document.getElementById('memoColumns');
         try {
             const url = q ? `api/stock-memo/all?q=${encodeURIComponent(q)}` : 'api/stock-memo/all';
             const res = await fetch(url);
             const json = await res.json();
             if (json.status !== 'success') throw new Error(json.message);
             const rows = json.data || [];
-            document.getElementById('allMemoCount').textContent = `총 ${rows.length}건`;
-            if (!rows.length) {
-                body.innerHTML = '<tr class="loading-row"><td colspan="5">작성된 메모가 없습니다.</td></tr>';
-                return;
-            }
-            body.innerHTML = rows.map(r => `
-                <tr>
-                    <td><a href="https://finance.naver.com/item/main.naver?code=${r.code}" target="_blank" class="memo-code">${r.code}</a></td>
-                    <td>${escHtml(r.name)}</td>
-                    <td class="memo-text">${linkifyHtml(r.memo)}</td>
-                    <td class="memo-meta">${r.created_at}</td>
-                    <td><button class="memo-del-btn" onclick="deleteAllMemoEntry(${r.id})">삭제</button></td>
-                </tr>
+
+            // 등급별로 묶기 (_gradeList 순서 유지, 목록에 없는 등급은 뒤에 추가)
+            const grouped = {};
+            _gradeList.forEach(g => grouped[g] = []);
+            rows.forEach(r => {
+                const g = r.grade || '기타';
+                if (!grouped[g]) grouped[g] = [];
+                grouped[g].push(r);
+            });
+
+            box.innerHTML = Object.entries(grouped).map(([grade, items]) => `
+                <div class="memo-grade-col card-panel">
+                    <div class="grade-col-header">
+                        <h6>${escHtml(grade)}</h6>
+                        <span class="grade-count">${items.length}건</span>
+                    </div>
+                    <div class="memo-col-list">
+                        ${items.length ? items.map(r => `
+                            <div class="memo-card">
+                                <div class="memo-card-head">
+                                    <span>
+                                        <a href="https://finance.naver.com/item/main.naver?code=${r.code}" target="_blank" class="memo-card-name">${escHtml(r.name)}</a>
+                                        <span class="memo-card-code">(${r.code})</span>
+                                    </span>
+                                    <button class="memo-del-btn" onclick="deleteAllMemoEntry(${r.id})">삭제</button>
+                                </div>
+                                <div class="memo-card-text">${linkifyHtml(r.memo)}</div>
+                                <div class="memo-card-meta"><span>${r.created_at}</span></div>
+                            </div>
+                        `).join('') : '<div class="empty-col">메모 없음</div>'}
+                    </div>
+                </div>
             `).join('');
         } catch (e) {
-            body.innerHTML = `<tr class="loading-row"><td colspan="5" class="text-danger">오류: ${e.message}</td></tr>`;
+            box.innerHTML = `<div class="text-danger small p-3">오류: ${e.message}</div>`;
         }
     }
 
@@ -146,13 +168,14 @@
     async function quickAddMemo() {
         const code = document.getElementById('quickCode').value.trim();
         const name = document.getElementById('quickName').value.trim();
+        const grade = document.getElementById('quickGrade').value;
         const memo = document.getElementById('quickMemo').value.trim();
         if (!code || !memo) { alert('종목코드와 메모 내용은 필수입니다.'); return; }
         try {
             const res = await fetch('api/stock-memo', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ code, name, memo })
+                body: JSON.stringify({ code, name, memo, grade })
             });
             const json = await res.json();
             if (json.status !== 'success') throw new Error(json.message || '추가 실패');
@@ -170,7 +193,10 @@
         _allSearchTimer = setTimeout(loadAllMemos, 300);
     });
 
-    loadAllMemos();
+    (async function init() {
+        await loadGrades();
+        await loadAllMemos();
+    })();
 </script>
 </body>
 </html>

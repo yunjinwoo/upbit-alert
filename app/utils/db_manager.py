@@ -291,6 +291,8 @@ def init_db():
         'ALTER TABLE signal_score_daily ADD COLUMN top_interest_bonus_score INTEGER DEFAULT 0',
         # net_buy는 이름과 달리 실제로는 KIS API의 invt_new_psdg(투자 신 심리도) 필드였음 — 이름 정정
         'ALTER TABLE sector_index_daily RENAME COLUMN net_buy TO psychology_index',
+        # 종목 메모 등급(태그)별로 컬럼을 나눠보기 위한 컬럼 추가
+        'ALTER TABLE stock_memo ADD COLUMN grade TEXT DEFAULT "기타"',
     ]
     for sql in migrations:
         try:
@@ -2045,18 +2047,33 @@ def get_stock_memos(code: str, limit: int = 100) -> list:
     return [dict(r) for r in rows]
 
 
-def add_stock_memo(code: str, name: str, memo: str) -> int:
+def add_stock_memo(code: str, name: str, memo: str, grade: str = '기타') -> int:
     """종목 메모 새로 추가 (항상 새 로그 항목으로 INSERT). 반환: 생성된 row id."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     cursor.execute('''
-        INSERT INTO stock_memo (code, name, memo, created_at) VALUES (?, ?, ?, ?)
-    ''', (code, name, memo, timestamp))
+        INSERT INTO stock_memo (code, name, memo, grade, created_at) VALUES (?, ?, ?, ?, ?)
+    ''', (code, name, memo, grade or '기타', timestamp))
     new_id = cursor.lastrowid
     conn.commit()
     conn.close()
     return new_id
+
+
+def get_stock_memo_grades() -> list:
+    """현재 사용 중인 메모 등급 목록 (전체보기 페이지의 컬럼 구성용). 기본 등급 5개 + DB에 실제 존재하는 등급을 합쳐 중복 제거."""
+    DEFAULT_GRADES = ['관심', '매수검토', '보유중', '매도검토', '기타']
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT grade FROM stock_memo WHERE grade IS NOT NULL AND grade != ''")
+    existing = [r[0] for r in cursor.fetchall()]
+    conn.close()
+    grades = list(DEFAULT_GRADES)
+    for g in existing:
+        if g not in grades:
+            grades.append(g)
+    return grades
 
 
 def delete_stock_memo_entry(memo_id: int) -> None:

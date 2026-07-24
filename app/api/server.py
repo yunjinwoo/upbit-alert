@@ -28,7 +28,8 @@ from app.utils.db_manager import (
     get_signal_score_history,
     get_signal_score_range,
     get_job_run_log,
-    get_stock_memos, add_stock_memo, delete_stock_memo_entry, search_stock_memos, get_all_stock_memos
+    get_stock_memos, add_stock_memo, delete_stock_memo_entry, search_stock_memos, get_all_stock_memos,
+    get_stock_memo_grades
 )
 from app.core.stock_monitor import (
     fetch_market_cap_ranking, fetch_investor_trend, fetch_sector_index_daily, fetch_stock_investor_daily,
@@ -180,16 +181,17 @@ def get_stock_memo_api():
 
 @app.route('/api/stock-memo', methods=['POST'])
 def save_stock_memo_api():
-    """종목 메모 새로 추가. body: {code, name, memo} — 종목당 여러 개 누적 저장됨."""
+    """종목 메모 새로 추가. body: {code, name, memo, grade} — 종목당 여러 개 누적 저장됨."""
     body = request.get_json(silent=True) or {}
     code = (body.get('code') or '').strip()
     name = (body.get('name') or '').strip()
     memo = (body.get('memo') or '').strip()
+    grade = (body.get('grade') or '기타').strip()
     if not code:
         return jsonify({'status': 'error', 'message': 'code가 필요합니다'}), 400
     if not memo:
         return jsonify({'status': 'error', 'message': 'memo가 비어있습니다'}), 400
-    new_id = add_stock_memo(code, name, memo)
+    new_id = add_stock_memo(code, name, memo, grade)
     return jsonify({'status': 'success', 'id': new_id})
 
 @app.route('/api/stock-memo/<int:memo_id>', methods=['DELETE'])
@@ -197,6 +199,11 @@ def delete_stock_memo_entry_api(memo_id):
     """메모 항목 1건 삭제 (id 기준)"""
     delete_stock_memo_entry(memo_id)
     return jsonify({'status': 'success'})
+
+@app.route('/api/stock-memo/grades', methods=['GET'])
+def get_stock_memo_grades_api():
+    """메모 등급(태그) 목록 조회 — 기본 등급 + DB에 실제 존재하는 등급"""
+    return jsonify({'status': 'success', 'data': get_stock_memo_grades()})
 
 @app.route('/api/stock-memo/search', methods=['GET'])
 def search_stock_memo_api():

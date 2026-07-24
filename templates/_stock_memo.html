@@ -7,6 +7,7 @@
     #memoHistoryList .memo-history-item:last-child { border-bottom: none; }
     #memoHistoryList .memo-history-text { white-space: pre-wrap; word-break: break-word; }
     #memoHistoryList .memo-history-meta { font-size: 0.7rem; color: #94a3b8; }
+    .memo-grade-badge { font-size: 0.68rem; padding: 1px 6px; border-radius: 10px; background: #e8f0fe; color: #1a1a2e; margin-right: 4px; }
     #memoHistoryList .memo-del-btn { background: none; border: none; color: #ef4444; font-size: 0.75rem; padding: 0; }
     #memoHistoryList .memo-del-btn:hover { text-decoration: underline; }
     #memoSearchResults { max-height: 220px; overflow-y: auto; }
@@ -27,7 +28,8 @@
           <div class="p-2 small text-muted">불러오는 중...</div>
         </div>
         <textarea id="memoTextarea" class="form-control form-control-sm mb-2" rows="3" placeholder="새 메모 추가..."></textarea>
-        <div class="d-flex justify-content-end mb-2">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <select id="memoGradeSelect" class="form-select form-select-sm" style="width:auto"></select>
           <button class="btn btn-primary btn-sm" onclick="saveStockMemo()">메모 추가</button>
         </div>
         <hr>
@@ -44,6 +46,20 @@
     let _memoCode = null;
     let _memoName = null;
     let _memoSearchTimer = null;
+    let _memoGrades = [];
+
+    async function ensureGradesLoaded() {
+        if (_memoGrades.length) return;
+        try {
+            const res = await fetch('api/stock-memo/grades');
+            const json = await res.json();
+            _memoGrades = json.data && json.data.length ? json.data : ['관심', '매수검토', '보유중', '매도검토', '기타'];
+        } catch (e) {
+            _memoGrades = ['관심', '매수검토', '보유중', '매도검토', '기타'];
+        }
+        document.getElementById('memoGradeSelect').innerHTML =
+            _memoGrades.map(g => `<option value="${g}">${g}</option>`).join('');
+    }
 
     function esc(s) {
         return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -69,6 +85,7 @@
         document.getElementById('memoModalTitle').textContent = `📝 ${name} (${code}) 메모`;
         document.getElementById('memoTextarea').value = '';
         getMemoModal().show();
+        await ensureGradesLoaded();
         await loadMemoHistory();
         document.getElementById('memoSearchInput').value = '';
         loadMemoList('');
@@ -88,7 +105,7 @@
             box.innerHTML = rows.map(r => `
                 <div class="memo-history-item">
                     <div class="d-flex justify-content-between align-items-start gap-2">
-                        <div class="memo-history-text">${linkify(r.memo)}</div>
+                        <div class="memo-history-text"><span class="memo-grade-badge">${esc(r.grade || '기타')}</span>${linkify(r.memo)}</div>
                         <button class="memo-del-btn" onclick="deleteStockMemoEntry(${r.id})">삭제</button>
                     </div>
                     <div class="memo-history-meta">${r.created_at}</div>
@@ -102,12 +119,13 @@
     window.saveStockMemo = async function() {
         if (!_memoCode) return;
         const memo = document.getElementById('memoTextarea').value.trim();
+        const grade = document.getElementById('memoGradeSelect').value;
         if (!memo) { alert('메모 내용을 입력해주세요.'); return; }
         try {
             const res = await fetch('api/stock-memo', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ code: _memoCode, name: _memoName, memo })
+                body: JSON.stringify({ code: _memoCode, name: _memoName, memo, grade })
             });
             const json = await res.json();
             if (json.status !== 'success') throw new Error(json.message || '저장 실패');
