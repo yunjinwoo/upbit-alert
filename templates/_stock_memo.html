@@ -10,6 +10,8 @@
     .memo-grade-badge { font-size: 0.68rem; padding: 1px 6px; border-radius: 10px; background: #e8f0fe; color: #1a1a2e; margin-right: 4px; }
     #memoHistoryList .memo-del-btn { background: none; border: none; color: #ef4444; font-size: 0.75rem; padding: 0; }
     #memoHistoryList .memo-del-btn:hover { text-decoration: underline; }
+    #memoHistoryList .memo-bump-btn { background: none; border: none; color: #f59e0b; font-size: 0.75rem; padding: 0; margin-right: 8px; }
+    #memoHistoryList .memo-bump-btn:hover { text-decoration: underline; }
     #memoSearchResults { max-height: 220px; overflow-y: auto; }
     #memoSearchResults .memo-result-item { cursor: pointer; padding: 6px 8px; border-radius: 6px; font-size: 0.82rem; }
     #memoSearchResults .memo-result-item:hover { background: #f1f5f9; }
@@ -106,9 +108,12 @@
                 <div class="memo-history-item">
                     <div class="d-flex justify-content-between align-items-start gap-2">
                         <div class="memo-history-text"><span class="memo-grade-badge">${esc(r.grade || '기타')}</span>${linkify(r.memo)}</div>
-                        <button class="memo-del-btn" onclick="deleteStockMemoEntry(${r.id})">삭제</button>
+                        <span class="text-nowrap">
+                            <button class="memo-bump-btn" onclick="bumpStockMemoEntry(${r.id})" title="맨 위로 올리기">⬆</button>
+                            <button class="memo-del-btn" onclick="deleteStockMemoEntry(${r.id})">삭제</button>
+                        </span>
                     </div>
-                    <div class="memo-history-meta">${r.created_at}</div>
+                    <div class="memo-history-meta" title="작성: ${r.created_at}">${r.updated_at || r.created_at}</div>
                 </div>
             `).join('');
         } catch (e) {
@@ -134,6 +139,17 @@
             loadMemoList(document.getElementById('memoSearchInput').value);
         } catch (e) {
             alert('메모 저장 실패: ' + e.message);
+        }
+    };
+
+    window.bumpStockMemoEntry = async function(id) {
+        try {
+            const res = await fetch(`api/stock-memo/${id}/bump`, { method: 'PATCH' });
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message || '올리기 실패');
+            await loadMemoHistory();
+        } catch (e) {
+            alert('올리기 실패: ' + e.message);
         }
     };
 

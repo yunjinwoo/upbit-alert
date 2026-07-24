@@ -293,12 +293,20 @@ def init_db():
         'ALTER TABLE sector_index_daily RENAME COLUMN net_buy TO psychology_index',
         # 종목 메모 등급(태그)별로 컬럼을 나눠보기 위한 컬럼 추가
         'ALTER TABLE stock_memo ADD COLUMN grade TEXT DEFAULT "기타"',
+        # 메모 정렬 기준을 작성일이 아닌 "마지막으로 손댄 시각"으로 바꾸기 위한 컬럼
+        # (중요한 메모를 위로 올리는 용도) — 기존 행은 created_at 값으로 채워 넣음
+        'ALTER TABLE stock_memo ADD COLUMN updated_at TEXT',
     ]
     for sql in migrations:
         try:
             cursor.execute(sql)
         except Exception:
             pass
+
+    try:
+        cursor.execute("UPDATE stock_memo SET updated_at = created_at WHERE updated_at IS NULL")
+    except Exception:
+        pass
 
     conn.commit()
     conn.close()
@@ -2040,7 +2048,7 @@ def get_stock_memos(code: str, limit: int = 100) -> list:
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute('''
-        SELECT * FROM stock_memo WHERE code = ? ORDER BY created_at DESC, id DESC LIMIT ?
+        SELECT * FROM stock_memo WHERE code = ? ORDER BY updated_at DESC, id DESC LIMIT ?
     ''', (code, limit))
     rows = cursor.fetchall()
     conn.close()
@@ -2053,12 +2061,22 @@ def add_stock_memo(code: str, name: str, memo: str, grade: str = '기타') -> in
     cursor = conn.cursor()
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     cursor.execute('''
-        INSERT INTO stock_memo (code, name, memo, grade, created_at) VALUES (?, ?, ?, ?, ?)
-    ''', (code, name, memo, grade or '기타', timestamp))
+        INSERT INTO stock_memo (code, name, memo, grade, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+    ''', (code, name, memo, grade or '기타', timestamp, timestamp))
     new_id = cursor.lastrowid
     conn.commit()
     conn.close()
     return new_id
+
+
+def bump_stock_memo(memo_id: int) -> None:
+    """메모를 '중요' 표시하듯 맨 위로 올림 — updated_at을 현재 시각으로 갱신."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('UPDATE stock_memo SET updated_at = ? WHERE id = ?', (timestamp, memo_id))
+    conn.commit()
+    conn.close()
 
 
 def get_stock_memo_grades() -> list:
@@ -2124,7 +2142,7 @@ def get_all_stock_memos(query: str = None, limit: int = 500) -> list:
     cursor.execute('''
         SELECT * FROM stock_memo
         WHERE code LIKE ? OR name LIKE ? OR memo LIKE ?
-        ORDER BY created_at DESC, id DESC LIMIT ?
+        ORDER BY updated_at DESC, id DESC LIMIT ?
     ''', (like, like, like, limit))
     rows = cursor.fetchall()
     conn.close()

@@ -38,6 +38,8 @@
         .stock-suggest-box .suggest-item .suggest-code { color: #94a3b8; font-size: 0.72rem; font-family: monospace; margin-left: 4px; }
         .memo-card .memo-del-btn { background: none; border: none; color: #ef4444; font-size: 0.7rem; padding: 0; }
         .memo-card .memo-del-btn:hover { text-decoration: underline; }
+        .memo-card .memo-bump-btn { background: none; border: none; color: #f59e0b; font-size: 0.7rem; padding: 0; margin-right: 8px; }
+        .memo-card .memo-bump-btn:hover { text-decoration: underline; }
         .empty-col { color: #cbd5e1; font-size: 0.78rem; text-align: center; padding: 20px 0; }
     </style>
 </head>
@@ -147,11 +149,14 @@
                                         <a href="https://finance.naver.com/item/main.naver?code=${r.code}" target="_blank" class="memo-card-name">${escHtml(r.name)}</a>
                                         <span class="memo-card-code">(${r.code})</span>
                                     </span>
-                                    <button class="memo-del-btn" onclick="deleteAllMemoEntry(${r.id})">삭제</button>
+                                    <span>
+                                        <button class="memo-bump-btn" onclick="bumpMemo(${r.id})" title="맨 위로 올리기">⬆ 중요</button>
+                                        <button class="memo-del-btn" onclick="deleteAllMemoEntry(${r.id})">삭제</button>
+                                    </span>
                                 </div>
                                 <div class="memo-card-text">${linkifyHtml(r.memo)}</div>
                                 <div class="memo-card-meta">
-                                    <span>${r.created_at}</span>
+                                    <span title="작성: ${r.created_at}">${r.updated_at || r.created_at}</span>
                                     <select class="memo-grade-move" onchange="moveMemoGrade(${r.id}, this.value)">
                                         ${_gradeList.map(g => `<option value="${g}"${g === (r.grade || '기타') ? ' selected' : ''}>${g}</option>`).join('')}
                                     </select>
@@ -175,6 +180,17 @@
             loadAllMemos();
         } catch (e) {
             alert('삭제 실패: ' + e.message);
+        }
+    };
+
+    window.bumpMemo = async function(id) {
+        try {
+            const res = await fetch(`api/stock-memo/${id}/bump`, { method: 'PATCH' });
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message || '올리기 실패');
+            loadAllMemos();
+        } catch (e) {
+            alert('올리기 실패: ' + e.message);
         }
     };
 
