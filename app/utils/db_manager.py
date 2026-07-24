@@ -2131,6 +2131,26 @@ def get_all_stock_memos(query: str = None, limit: int = 500) -> list:
     return [dict(r) for r in rows]
 
 
+def search_stock_codes(query: str, limit: int = 15) -> list:
+    """종목코드/종목명 자동완성용 검색 — stock_market_cap_daily에 수집된 종목 중 부분일치.
+    같은 종목이 날짜별로 여러 행 있으므로 code 기준으로 중복 제거하고 최신 종목명만 반환.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    like = f'%{query}%'
+    cursor.execute('''
+        SELECT code, name, MAX(date) AS latest_date FROM stock_market_cap_daily
+        WHERE code LIKE ? OR name LIKE ?
+        GROUP BY code
+        ORDER BY latest_date DESC
+        LIMIT ?
+    ''', (like, like, limit))
+    rows = cursor.fetchall()
+    conn.close()
+    return [{'code': r['code'], 'name': r['name']} for r in rows]
+
+
 def get_recent_investor_dates(limit: int = 10) -> list:
     """stock_investor_daily에 존재하는 최근 N영업일 날짜 목록(내림차순).
     주말/공휴일은 애초에 데이터가 없으므로 달력일이 아닌 실제 거래일 기준으로 안전하게 계산됨.

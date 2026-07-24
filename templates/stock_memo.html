@@ -18,7 +18,7 @@
         .card-panel { background: white; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); padding: 16px 18px; }
 
         .memo-columns { display: flex; gap: 14px; overflow-x: auto; padding-bottom: 8px; align-items: flex-start; }
-        .memo-grade-col { flex: 0 0 280px; width: 280px; }
+        .memo-grade-col { flex: 1 1 240px; min-width: 240px; }
         .memo-grade-col .grade-col-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
         .memo-grade-col .grade-col-header h6 { margin: 0; font-size: 0.9rem; font-weight: 700; color: #1a1a2e; }
         .memo-grade-col .grade-count { font-size: 0.72rem; color: #94a3b8; background: #f1f5f9; border-radius: 10px; padding: 1px 8px; }
@@ -30,6 +30,12 @@
         .memo-card .memo-card-text { white-space: pre-wrap; word-break: break-word; margin-top: 4px; }
         .memo-card .memo-card-meta { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; font-size: 0.68rem; color: #94a3b8; }
         .memo-card .memo-grade-move { font-size: 0.68rem; padding: 1px 4px; border: 1px solid #e2e8f0; border-radius: 4px; background: #f8fafc; color: #475569; }
+
+        .stock-suggest-box { position: absolute; top: 100%; left: 0; z-index: 20; width: 260px; max-height: 220px; overflow-y: auto;
+            background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.08); display: none; }
+        .stock-suggest-box .suggest-item { padding: 6px 10px; font-size: 0.82rem; cursor: pointer; }
+        .stock-suggest-box .suggest-item:hover { background: #f1f5f9; }
+        .stock-suggest-box .suggest-item .suggest-code { color: #94a3b8; font-size: 0.72rem; font-family: monospace; margin-left: 4px; }
         .memo-card .memo-del-btn { background: none; border: none; color: #ef4444; font-size: 0.7rem; padding: 0; }
         .memo-card .memo-del-btn:hover { text-decoration: underline; }
         .empty-col { color: #cbd5e1; font-size: 0.78rem; text-align: center; padding: 20px 0; }
@@ -57,18 +63,19 @@
         <div class="row g-2 align-items-end">
             <div class="col-auto">
                 <label class="form-label small mb-1">종목코드</label>
-                <input type="text" id="quickCode" class="form-control form-control-sm" style="width:110px" placeholder="005930">
+                <input type="text" id="quickCode" class="form-control form-control-sm" style="width:110px" placeholder="005930" autocomplete="off">
             </div>
-            <div class="col-auto">
-                <label class="form-label small mb-1">종목명</label>
-                <input type="text" id="quickName" class="form-control form-control-sm" style="width:140px" placeholder="삼성전자">
+            <div class="col-auto position-relative">
+                <label class="form-label small mb-1">종목명 (검색해서 선택 가능)</label>
+                <input type="text" id="quickName" class="form-control form-control-sm" style="width:160px" placeholder="삼성전자 (타이핑하면 검색)" autocomplete="off">
+                <div id="stockSuggest" class="stock-suggest-box"></div>
             </div>
             <div class="col-auto">
                 <label class="form-label small mb-1">등급</label>
                 <select id="quickGrade" class="form-select form-select-sm" style="width:auto"></select>
             </div>
             <div class="col">
-                <label class="form-label small mb-1">메모</label>
+                <label class="form-label small mb-1">메모 (Enter로 바로 추가)</label>
                 <input type="text" id="quickMemo" class="form-control form-control-sm" placeholder="메모 내용 (URL을 넣으면 자동으로 링크가 됩니다)">
             </div>
             <div class="col-auto">
@@ -212,6 +219,50 @@
     document.getElementById('allSearchInput').addEventListener('input', () => {
         clearTimeout(_allSearchTimer);
         _allSearchTimer = setTimeout(loadAllMemos, 300);
+    });
+
+    // 종목명 입력 시 자동완성 (시가총액 수집 데이터 기준 검색)
+    let _stockSuggestTimer = null;
+    const nameInput = document.getElementById('quickName');
+    const suggestBox = document.getElementById('stockSuggest');
+
+    nameInput.addEventListener('input', () => {
+        clearTimeout(_stockSuggestTimer);
+        const q = nameInput.value.trim();
+        if (!q) { suggestBox.style.display = 'none'; return; }
+        _stockSuggestTimer = setTimeout(async () => {
+            try {
+                const res = await fetch(`api/stock-search?q=${encodeURIComponent(q)}`);
+                const json = await res.json();
+                const rows = json.data || [];
+                if (!rows.length) { suggestBox.style.display = 'none'; return; }
+                suggestBox.innerHTML = rows.map(r => `
+                    <div class="suggest-item" onclick='selectStockSuggestion(${JSON.stringify(r.code)}, ${JSON.stringify(r.name)})'>
+                        ${escHtml(r.name)}<span class="suggest-code">${r.code}</span>
+                    </div>
+                `).join('');
+                suggestBox.style.display = 'block';
+            } catch (e) { suggestBox.style.display = 'none'; }
+        }, 250);
+    });
+
+    window.selectStockSuggestion = function(code, name) {
+        document.getElementById('quickCode').value = code;
+        document.getElementById('quickName').value = name;
+        suggestBox.style.display = 'none';
+        document.getElementById('quickMemo').focus();
+    };
+
+    document.addEventListener('click', (e) => {
+        if (!suggestBox.contains(e.target) && e.target !== nameInput) suggestBox.style.display = 'none';
+    });
+
+    // 메모 입력창에서 Enter로 바로 추가 (Shift+Enter는 줄바꿈 없이 그냥 무시 — 단일 input이므로)
+    document.getElementById('quickMemo').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            quickAddMemo();
+        }
     });
 
     (async function init() {
