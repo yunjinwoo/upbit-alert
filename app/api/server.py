@@ -29,7 +29,7 @@ from app.utils.db_manager import (
     get_signal_score_range,
     get_job_run_log,
     get_stock_memos, add_stock_memo, delete_stock_memo_entry, search_stock_memos, get_all_stock_memos,
-    get_stock_memo_grades
+    get_stock_memo_grades, update_stock_memo_grade
 )
 from app.core.stock_monitor import (
     fetch_market_cap_ranking, fetch_investor_trend, fetch_sector_index_daily, fetch_stock_investor_daily,
@@ -198,6 +198,16 @@ def save_stock_memo_api():
 def delete_stock_memo_entry_api(memo_id):
     """메모 항목 1건 삭제 (id 기준)"""
     delete_stock_memo_entry(memo_id)
+    return jsonify({'status': 'success'})
+
+@app.route('/api/stock-memo/<int:memo_id>/grade', methods=['PATCH'])
+def update_stock_memo_grade_api(memo_id):
+    """메모 항목의 등급만 변경 (다른 등급 컬럼으로 옮기기). body: {grade}"""
+    body = request.get_json(silent=True) or {}
+    grade = (body.get('grade') or '').strip()
+    if not grade:
+        return jsonify({'status': 'error', 'message': 'grade가 필요합니다'}), 400
+    update_stock_memo_grade(memo_id, grade)
     return jsonify({'status': 'success'})
 
 @app.route('/api/stock-memo/grades', methods=['GET'])

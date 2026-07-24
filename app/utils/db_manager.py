@@ -2085,6 +2085,15 @@ def delete_stock_memo_entry(memo_id: int) -> None:
     conn.close()
 
 
+def update_stock_memo_grade(memo_id: int, grade: str) -> None:
+    """메모 항목의 등급만 변경 (다른 등급 컬럼으로 옮기기)"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('UPDATE stock_memo SET grade = ? WHERE id = ?', (grade, memo_id))
+    conn.commit()
+    conn.close()
+
+
 def search_stock_memos(query: str = None, limit: int = 50) -> list:
     """종목별 가장 최근 메모 1건씩 검색 (종목코드/종목명 부분일치) — query 없으면 전체 종목 최신순.
     "다른 종목 메모 검색" 목록용 — 종목당 여러 메모가 있어도 최신 1건만 대표로 보여줌.
