@@ -87,6 +87,7 @@
 </div>
 
 {% include '_navbar.html' %}
+{% include '_stock_memo.html' %}
 
 <div class="container dashboard-container">
     <div class="header-title">
@@ -408,6 +409,7 @@
                             <a href="https://finance.naver.com/item/main.nhn?code=${item.code}" target="_blank" class="ticker-link">
                                 ${item.name}${isNew ? '<span class="badge-new ms-1">NEW</span>' : ''} <small class="text-muted">(${item.code})</small>
                             </a>
+                            <button class="memo-icon-btn" onclick='openStockMemo(${JSON.stringify(item.code)}, ${JSON.stringify(item.name || "")})' title="메모">📝</button>
                         </td>
                         <td class="text-end">${mCap}</td>
                         <td class="text-end">${weight}%</td>

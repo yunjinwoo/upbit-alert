@@ -1,0 +1,167 @@
+<!-- 종목 메모 모달 (전 페이지 공용) — 종목당 여러 개 메모를 남기고 이력을 볼 수 있음 -->
+<style>
+    .memo-icon-btn { background: none; border: none; padding: 0 2px; font-size: 0.85em; cursor: pointer; vertical-align: middle; opacity: 0.6; }
+    .memo-icon-btn:hover { opacity: 1; }
+    #memoHistoryList { max-height: 200px; overflow-y: auto; }
+    #memoHistoryList .memo-history-item { padding: 6px 8px; border-bottom: 1px solid #f1f5f9; font-size: 0.82rem; }
+    #memoHistoryList .memo-history-item:last-child { border-bottom: none; }
+    #memoHistoryList .memo-history-text { white-space: pre-wrap; word-break: break-word; }
+    #memoHistoryList .memo-history-meta { font-size: 0.7rem; color: #94a3b8; }
+    #memoHistoryList .memo-del-btn { background: none; border: none; color: #ef4444; font-size: 0.75rem; padding: 0; }
+    #memoHistoryList .memo-del-btn:hover { text-decoration: underline; }
+    #memoSearchResults { max-height: 220px; overflow-y: auto; }
+    #memoSearchResults .memo-result-item { cursor: pointer; padding: 6px 8px; border-radius: 6px; font-size: 0.82rem; }
+    #memoSearchResults .memo-result-item:hover { background: #f1f5f9; }
+    #memoSearchResults .memo-result-item .memo-preview { color: #94a3b8; font-size: 0.75rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+</style>
+
+<div class="modal fade" id="stockMemoModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h6 class="modal-title mb-0" id="memoModalTitle">📝 메모</h6>
+        <button type="button" class="btn-close btn-sm" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body pb-2">
+        <div id="memoHistoryList" class="border rounded mb-2">
+          <div class="p-2 small text-muted">불러오는 중...</div>
+        </div>
+        <textarea id="memoTextarea" class="form-control form-control-sm mb-2" rows="3" placeholder="새 메모 추가..."></textarea>
+        <div class="d-flex justify-content-end mb-2">
+          <button class="btn btn-primary btn-sm" onclick="saveStockMemo()">메모 추가</button>
+        </div>
+        <hr>
+        <label class="form-label small mb-1">다른 종목 메모 검색</label>
+        <input type="text" id="memoSearchInput" class="form-control form-control-sm mb-2" placeholder="종목코드 또는 종목명으로 검색 (빈칸이면 전체 목록)">
+        <div id="memoSearchResults" class="small text-muted">검색어를 입력하거나 전체 목록을 확인하세요.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+    let _memoCode = null;
+    let _memoName = null;
+    let _memoSearchTimer = null;
+
+    function esc(s) {
+        return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    // 메모 본문에서 URL을 찾아 새 탭으로 열리는 링크로 바꿔줌 (먼저 escape한 뒤 URL만 <a>로 치환)
+    function linkify(s) {
+        return esc(s).replace(/(https?:\/\/[^\s<]+)/g, url =>
+            `<a href="${url}" target="_blank" rel="noopener">${url}</a>`
+        );
+    }
+
+    function getMemoModal() {
+        // 매번 새 Modal 인스턴스를 만들면 이미 열려있는 상태에서 다시 show()할 때
+        // backdrop이 중복으로 쌓여서(배경이 점점 진해짐) 닫아도 하나가 안 없어지는 문제가 있었음.
+        // 인스턴스를 하나만 만들어 재사용해서 방지.
+        return bootstrap.Modal.getOrCreateInstance(document.getElementById('stockMemoModal'));
+    }
+
+    window.openStockMemo = async function(code, name) {
+        _memoCode = code;
+        _memoName = name;
+        document.getElementById('memoModalTitle').textContent = `📝 ${name} (${code}) 메모`;
+        document.getElementById('memoTextarea').value = '';
+        getMemoModal().show();
+        await loadMemoHistory();
+        document.getElementById('memoSearchInput').value = '';
+        loadMemoList('');
+    };
+
+    async function loadMemoHistory() {
+        const box = document.getElementById('memoHistoryList');
+        box.innerHTML = '<div class="p-2 small text-muted">불러오는 중...</div>';
+        try {
+            const res = await fetch(`api/stock-memo?code=${encodeURIComponent(_memoCode)}`);
+            const json = await res.json();
+            const rows = json.data || [];
+            if (!rows.length) {
+                box.innerHTML = '<div class="p-2 small text-muted">작성된 메모가 없습니다.</div>';
+                return;
+            }
+            box.innerHTML = rows.map(r => `
+                <div class="memo-history-item">
+                    <div class="d-flex justify-content-between align-items-start gap-2">
+                        <div class="memo-history-text">${linkify(r.memo)}</div>
+                        <button class="memo-del-btn" onclick="deleteStockMemoEntry(${r.id})">삭제</button>
+                    </div>
+                    <div class="memo-history-meta">${r.created_at}</div>
+                </div>
+            `).join('');
+        } catch (e) {
+            box.innerHTML = `<div class="p-2 small text-danger">불러오기 실패: ${e.message}</div>`;
+        }
+    }
+
+    window.saveStockMemo = async function() {
+        if (!_memoCode) return;
+        const memo = document.getElementById('memoTextarea').value.trim();
+        if (!memo) { alert('메모 내용을 입력해주세요.'); return; }
+        try {
+            const res = await fetch('api/stock-memo', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ code: _memoCode, name: _memoName, memo })
+            });
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message || '저장 실패');
+            document.getElementById('memoTextarea').value = '';
+            await loadMemoHistory();
+            loadMemoList(document.getElementById('memoSearchInput').value);
+        } catch (e) {
+            alert('메모 저장 실패: ' + e.message);
+        }
+    };
+
+    window.deleteStockMemoEntry = async function(id) {
+        if (!confirm('이 메모를 삭제할까요?')) return;
+        try {
+            const res = await fetch(`api/stock-memo/${id}`, { method: 'DELETE' });
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message || '삭제 실패');
+            await loadMemoHistory();
+            loadMemoList(document.getElementById('memoSearchInput').value);
+        } catch (e) {
+            alert('메모 삭제 실패: ' + e.message);
+        }
+    };
+
+    async function loadMemoList(query) {
+        const box = document.getElementById('memoSearchResults');
+        box.textContent = '검색 중...';
+        try {
+            const url = query ? `api/stock-memo/search?q=${encodeURIComponent(query)}` : 'api/stock-memo/search';
+            const res = await fetch(url);
+            const json = await res.json();
+            const rows = json.data || [];
+            if (!rows.length) {
+                box.innerHTML = '<div class="text-muted small">작성된 메모가 없습니다.</div>';
+                return;
+            }
+            box.innerHTML = rows.map(r => `
+                <div class="memo-result-item d-flex justify-content-between align-items-center" onclick='openStockMemo(${JSON.stringify(r.code)}, ${JSON.stringify(r.name || "")})'>
+                    <div><b>${r.name || ''}</b> <span class="text-muted">(${r.code})</span></div>
+                    <div class="memo-preview" style="max-width:140px">${esc(r.memo)}</div>
+                </div>
+            `).join('');
+        } catch (e) {
+            box.textContent = '검색 실패: ' + e.message;
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        const input = document.getElementById('memoSearchInput');
+        if (!input) return;
+        input.addEventListener('input', () => {
+            clearTimeout(_memoSearchTimer);
+            _memoSearchTimer = setTimeout(() => loadMemoList(input.value.trim()), 300);
+        });
+    });
+})();
+</script>

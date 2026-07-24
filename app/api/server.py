@@ -27,7 +27,8 @@ from app.utils.db_manager import (
     get_signal_score_batch,
     get_signal_score_history,
     get_signal_score_range,
-    get_job_run_log
+    get_job_run_log,
+    get_stock_memos, add_stock_memo, delete_stock_memo_entry, search_stock_memos
 )
 from app.core.stock_monitor import (
     fetch_market_cap_ranking, fetch_investor_trend, fetch_sector_index_daily, fetch_stock_investor_daily,
@@ -163,6 +164,46 @@ def get_stock_price_api():
         return jsonify({'status': 'success', 'count': len(result), 'data': result, 'cached': False})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+# ──────────────────────────────────────────────
+# 종목 메모 (전 페이지 공용 — 네이버 증권 링크 옆 📝 아이콘에서 사용)
+# ──────────────────────────────────────────────
+
+@app.route('/api/stock-memo', methods=['GET'])
+def get_stock_memo_api():
+    """종목의 전체 메모 이력 조회 (최신순). 예: /api/stock-memo?code=005930"""
+    code = request.args.get('code', '').strip()
+    if not code:
+        return jsonify({'status': 'error', 'message': 'code 파라미터가 필요합니다'}), 400
+    data = get_stock_memos(code)
+    return jsonify({'status': 'success', 'count': len(data), 'data': data})
+
+@app.route('/api/stock-memo', methods=['POST'])
+def save_stock_memo_api():
+    """종목 메모 새로 추가. body: {code, name, memo} — 종목당 여러 개 누적 저장됨."""
+    body = request.get_json(silent=True) or {}
+    code = (body.get('code') or '').strip()
+    name = (body.get('name') or '').strip()
+    memo = (body.get('memo') or '').strip()
+    if not code:
+        return jsonify({'status': 'error', 'message': 'code가 필요합니다'}), 400
+    if not memo:
+        return jsonify({'status': 'error', 'message': 'memo가 비어있습니다'}), 400
+    new_id = add_stock_memo(code, name, memo)
+    return jsonify({'status': 'success', 'id': new_id})
+
+@app.route('/api/stock-memo/<int:memo_id>', methods=['DELETE'])
+def delete_stock_memo_entry_api(memo_id):
+    """메모 항목 1건 삭제 (id 기준)"""
+    delete_stock_memo_entry(memo_id)
+    return jsonify({'status': 'success'})
+
+@app.route('/api/stock-memo/search', methods=['GET'])
+def search_stock_memo_api():
+    """종목 메모 검색 (종목코드/종목명 부분일치). q 없으면 최근 수정순 전체 목록."""
+    q = request.args.get('q', '').strip()
+    data = search_stock_memos(query=q or None, limit=100)
+    return jsonify({'status': 'success', 'count': len(data), 'data': data})
 
 @app.route('/api/sector-index', methods=['GET'])
 def get_sector_index_api():

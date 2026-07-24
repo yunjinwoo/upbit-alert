@@ -173,6 +173,38 @@ def init_db():
         )
     ''')
 
+    # 종목 메모 (전 페이지 공용 — 종목코드당 여러 개 입력 가능한 로그형)
+    # 구버전(종목당 1개, code가 PRIMARY KEY)이 남아있으면 새 스키마로 전환하고 기존 메모는
+    # 첫 로그 항목으로 그대로 이전한다.
+    cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='stock_memo'")
+    row = cursor.fetchone()
+    if row and 'code TEXT PRIMARY KEY' in row[0]:
+        cursor.execute("ALTER TABLE stock_memo RENAME TO stock_memo_old")
+        cursor.execute('''
+            CREATE TABLE stock_memo (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT,
+                name TEXT,
+                memo TEXT,
+                created_at TEXT
+            )
+        ''')
+        cursor.execute('''
+            INSERT INTO stock_memo (code, name, memo, created_at)
+            SELECT code, name, memo, updated_at FROM stock_memo_old WHERE memo IS NOT NULL AND memo != ''
+        ''')
+        cursor.execute("DROP TABLE stock_memo_old")
+    else:
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS stock_memo (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT,
+                name TEXT,
+                memo TEXT,
+                created_at TEXT
+            )
+        ''')
+
     # Signal Score 일별 결과 저장 테이블
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS signal_score_daily (
@@ -1998,6 +2030,63 @@ def sync_upsert_sector_stocks(rows: list) -> int:
     conn.commit()
     conn.close()
     return saved
+
+
+def get_stock_memos(code: str, limit: int = 100) -> list:
+    """종목의 전체 메모 이력 조회 (최신순). 종목당 여러 개 저장 가능."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT * FROM stock_memo WHERE code = ? ORDER BY created_at DESC, id DESC LIMIT ?
+    ''', (code, limit))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def add_stock_memo(code: str, name: str, memo: str) -> int:
+    """종목 메모 새로 추가 (항상 새 로그 항목으로 INSERT). 반환: 생성된 row id."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('''
+        INSERT INTO stock_memo (code, name, memo, created_at) VALUES (?, ?, ?, ?)
+    ''', (code, name, memo, timestamp))
+    new_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return new_id
+
+
+def delete_stock_memo_entry(memo_id: int) -> None:
+    """메모 항목 1건 삭제 (id 기준)"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM stock_memo WHERE id = ?', (memo_id,))
+    conn.commit()
+    conn.close()
+
+
+def search_stock_memos(query: str = None, limit: int = 50) -> list:
+    """종목별 가장 최근 메모 1건씩 검색 (종목코드/종목명 부분일치) — query 없으면 전체 종목 최신순.
+    "다른 종목 메모 검색" 목록용 — 종목당 여러 메모가 있어도 최신 1건만 대표로 보여줌.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    like = f'%{query}%' if query else '%'
+    cursor.execute('''
+        SELECT s1.* FROM stock_memo s1
+        INNER JOIN (
+            SELECT code, MAX(id) AS max_id FROM stock_memo GROUP BY code
+        ) s2 ON s1.code = s2.code AND s1.id = s2.max_id
+        WHERE s1.code LIKE ? OR s1.name LIKE ?
+        ORDER BY s1.created_at DESC LIMIT ?
+    ''', (like, like, limit))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 def get_recent_investor_dates(limit: int = 10) -> list:
