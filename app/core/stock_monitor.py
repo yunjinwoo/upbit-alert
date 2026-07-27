@@ -4,7 +4,7 @@ import time
 from datetime import datetime
 from dataclasses import asdict
 from app.config import Config
-from app.utils.db_manager import save_stock_alert_to_db, init_db, save_api_token, get_api_token, save_stock_raw_data, save_daily_market_cap, save_daily_investor_trend, save_stock_investor_daily, save_sector_index_daily, save_sector_stocks_daily, get_signal_score_batch, save_hts_top_view, save_job_run_log, get_market_cap_history, save_top_interest_daily
+from app.utils.db_manager import save_stock_alert_to_db, init_db, save_api_token, get_api_token, save_stock_raw_data, save_daily_market_cap, save_daily_investor_trend, save_stock_investor_daily, save_sector_index_daily, save_sector_stocks_daily, get_signal_score_batch, save_hts_top_view, save_job_run_log, get_market_cap_history, save_top_interest_daily, save_top_gainers_snapshot
 from app.core.kis_models import RequestHeader, RequestQueryParam, MarketCapQueryParam, FluctuationRankingResponse, MarketCapRankingResponse, StockInvestorDailyItem
 from app.core.upbit_monitor import send_slack_msg
 from app.utils.google_sheets import save_signal_score_to_sheet, save_signal_score_readme, save_investor_ranking_to_sheet
@@ -429,6 +429,140 @@ def fetch_ranking_preview(api_path: str, tr_id: str, params: dict, max_retries=2
     return {"error": "최종 실패 (재시도 초과)"}
 
 
+def fetch_fluctuation_ranking(input_iscd="0000", rank_sort_cls_code="0", max_count=100, max_retries=2):
+    """등락률 순위 조회 — KIS API는 1회 호출당 최대 30건만 반환하므로, 연속조회(tr_cont)로
+    최대 max_count건(최대 100건 지원)까지 이어붙여 수집한다.
+    fid_input_iscd="0000"(전체시장) 조회 시 fid_rank_sort_cls_code를 무시하고 정렬이 뒤섞여
+    내려오는 경우가 있어(업종 필터링 때와 동일 증상) 등락률 기준으로 직접 재정렬 후 순위를 다시 매긴다.
+    반환: {"output": [...]} 또는 {"error": "..."}
+    """
+    global ACCESS_TOKEN
+    if ACCESS_TOKEN is None:
+        get_access_token()
+    if ACCESS_TOKEN is None:
+        return {"error": "KIS API 토큰이 없습니다."}
+
+    url = f"{Config.KIS_URL_BASE}/uapi/domestic-stock/v1/ranking/fluctuation"
+    all_items = []
+    request_tr_cont = None  # 첫 페이지는 미지정, 이후 페이지는 "N"(연속조회)
+    max_pages = -(-max_count // 30)  # ceil(max_count / 30)
+
+    for page in range(1, max_pages + 1):
+        page_ok = False
+        has_more = False
+
+        for attempt in range(1, max_retries + 1):
+            header_obj = RequestHeader(
+                authorization=f"Bearer {ACCESS_TOKEN}",
+                appkey=Config.KIS_APP_KEY,
+                appsecret=Config.KIS_APP_SECRET,
+                tr_id="FHPST01700000",
+                custtype="P",
+                tr_cont=request_tr_cont,
+            )
+            params = {
+                'fid_rsfl_rate2': '', 'fid_cond_mrkt_div_code': 'J', 'fid_cond_scr_div_code': '20170',
+                'fid_input_iscd': input_iscd, 'fid_rank_sort_cls_code': rank_sort_cls_code,
+                'fid_input_cnt_1': '0', 'fid_prc_cls_code': '0',
+                'fid_input_price_1': '', 'fid_input_price_2': '',
+                'fid_vol_cnt': '', 'fid_trgt_cls_code': '0', 'fid_trgt_exls_cls_code': '0',
+                'fid_div_cls_code': '0', 'fid_rsfl_rate1': '',
+            }
+            try:
+                res = requests.get(url, headers=header_obj.to_dict(), params=params, timeout=10)
+                raw_json = res.json()
+
+                if res.status_code == 200:
+                    if raw_json.get('rt_cd') != '0':
+                        logger.error(f"❌ 등락률 순위 API 오류: {raw_json.get('msg1')}")
+                    else:
+                        all_items.extend(raw_json.get('output', []))
+                        has_more = res.headers.get('tr_cont', '') == 'M'
+                        page_ok = True
+                        break
+                elif res.status_code == 401:
+                    logger.info("🔑 토큰 만료! 재발급을 시도합니다.")
+                    get_access_token()
+                else:
+                    logger.error(f"❌ 등락률 순위 조회 실패! {res.status_code} - {res.text}")
+            except Exception as e:
+                logger.error(f"🔥 등락률 순위 조회 에러: {e}")
+
+            if attempt < max_retries:
+                time.sleep(1)
+
+        if not page_ok:
+            break
+        if not has_more or len(all_items) >= max_count:
+            break
+        request_tr_cont = "N"
+        time.sleep(1)
+
+    if not all_items:
+        return {"error": "수신 데이터 없음"}
+
+    # fid_input_iscd="0000"(전체시장) 조회 시 정렬이 뒤섞여 내려오는 버그는 등락률(prdy_ctrt) 기준
+    # 정렬(0:상승율순/1:하락율순)에서만 확인됨 — 다른 정렬 기준(시가대비/변동율)은 필드 매핑이
+    # 불확실해 잘못 재정렬하지 않도록 API가 내려준 순서를 그대로 둔다.
+    if rank_sort_cls_code in ('0', '1'):
+        all_items.sort(key=lambda r: float(r.get('prdy_ctrt', 0) or 0), reverse=(rank_sort_cls_code == '0'))
+    all_items = all_items[:max_count]
+    for i, r in enumerate(all_items, start=1):
+        r['data_rank'] = str(i)
+
+    return {"output": all_items}
+
+
+def fetch_fluctuation_ranking_combined(rank_sort_cls_code="0", max_retries=2):
+    """등락률 순위 "전체시장" 조회 — KIS의 fid_input_iscd="0000"은 30건 하드캡+연속조회 미지원이라
+    코스피(0001)+코스닥(1001)을 각각 조회해서 합치는 방식으로 최대 60건까지 수집한다.
+    (실측 결과 코스피/코스닥 결과는 서로 겹치지 않음 — 코넥스/ETN 등 소수 종목만 "0000" 전용이라 여기선 제외)
+    반환: {"output": [...]} 또는 {"error": "..."}
+    """
+    kospi = fetch_fluctuation_ranking(input_iscd="0001", rank_sort_cls_code=rank_sort_cls_code, max_count=30, max_retries=max_retries)
+    kosdaq = fetch_fluctuation_ranking(input_iscd="1001", rank_sort_cls_code=rank_sort_cls_code, max_count=30, max_retries=max_retries)
+
+    if 'error' in kospi and 'error' in kosdaq:
+        return {"error": f"코스피: {kospi['error']} / 코스닥: {kosdaq['error']}"}
+
+    seen = set()
+    merged = []
+    for result in (kospi, kosdaq):
+        if 'error' in result:
+            continue
+        for item in result['output']:
+            code = item.get('stck_shrn_iscd')
+            if code in seen:
+                continue
+            seen.add(code)
+            merged.append(item)
+
+    # 등락률순(0/1)은 합친 뒤 다시 정렬해야 두 시장을 뒤섞은 전체 순위가 됨.
+    # 시가대비/변동율(2~4)은 필드 매핑이 불확실해 각 시장 내부 순서를 그대로 이어붙이기만 한다.
+    if rank_sort_cls_code in ('0', '1'):
+        merged.sort(key=lambda r: float(r.get('prdy_ctrt', 0) or 0), reverse=(rank_sort_cls_code == '0'))
+    for i, r in enumerate(merged, start=1):
+        r['data_rank'] = str(i)
+
+    return {"output": merged}
+
+
+def fetch_top_gainers(hour: int, max_retries=2):
+    """상승률 순위(전체시장 = 코스피+코스닥 합산, 등락률 내림차순) 시간대별 스냅샷 수집 (일 4회: 9시10분/12시10분/15시10분/18시10분).
+    반환: 저장 성공 여부(bool)
+    """
+    result = fetch_fluctuation_ranking_combined(rank_sort_cls_code="0", max_retries=max_retries)
+    if 'error' in result:
+        logger.error(f"❌ 상승률 순위 스냅샷 수집 실패 ({hour}시): {result['error']}")
+        return False
+
+    items = result['output']
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    save_top_gainers_snapshot(items, today_str, hour)
+    logger.info(f"✅ 상승률 순위 스냅샷 저장 성공 ({hour}시, {len(items)}건)")
+    return True
+
+
 def fetch_hts_top_view(max_retries=2):
     """HTS조회상위20종목 수집 후 종목별 현재가 조회(이름/가격/등락률)로 보강해서 저장 (시간별 1회).
     hts-top-view 응답엔 종목코드만 있어서, 종목당 1회씩 현재가 API를 추가 호출한다(최대 20회).
@@ -793,6 +927,21 @@ def run_job_top_interest(trigger_type: str = 'auto') -> bool:
     return ok
 
 
+def run_job_top_gainers(hour: int, trigger_type: str = 'auto') -> bool:
+    """상승률 순위 스냅샷 수집 실행 + 실행이력 기록 (일 4회: 9시10분/12시10분/15시10분/18시10분)."""
+    start = datetime.now()
+    error_message = None
+    try:
+        ok = fetch_top_gainers(hour)
+    except Exception as e:
+        ok = False
+        error_message = str(e)
+    _log_job_run('top_gainers', f'상승률 순위 스냅샷 수집 ({hour}시)',
+                 '/uapi/domestic-stock/v1/ranking/fluctuation', start, ok,
+                 error_message=error_message, trigger_type=trigger_type)
+    return ok
+
+
 def run_job_investor_trend(trigger_type: str = 'auto') -> bool:
     """투자자별 프로그램 매매동향 수집(코스피/코스닥) 실행 + 실행이력 기록."""
     start = datetime.now()
@@ -907,6 +1056,7 @@ def run_stock_monitor():
     last_sync_date = None  # 20시 원격 서버 동기화 여부 (하루 1회)
     last_hts_top_view_hour = None  # HTS조회상위20종목 매시간 수집 여부 (시간 단위로 추적)
     last_top_interest_date = None  # 관심종목등록 상위 일 1회 수집 여부
+    last_top_gainers_hour = None  # 상승률 순위 스냅샷 9:10/12:10/15:10/18:10 수집 여부 (시간 단위로 추적)
 
     while True:
         try:
@@ -922,6 +1072,16 @@ def run_stock_monitor():
                         last_hts_top_view_hour = run_key
                     else:
                         logger.warning("⚠️ HTS조회상위 수집 실패 — 다음 루프에서 재시도합니다.")
+
+            # 평일 9:10/12:10/15:10/18:10 — 상승률 순위 스냅샷 수집 (일 4회)
+            if now.weekday() < 5 and now.hour in (9, 12, 15, 18) and now.minute >= 10:
+                run_key = f"{today_str}-{now.hour}"
+                if last_top_gainers_hour != run_key:
+                    logger.info(f"⏰ [스케줄] {now.hour}시 10분 상승률 순위 스냅샷 수집 시작")
+                    if run_job_top_gainers(now.hour):
+                        last_top_gainers_hour = run_key
+                    else:
+                        logger.warning("⚠️ 상승률 순위 스냅샷 수집 실패 — 다음 루프에서 재시도합니다.")
 
             # 평일 16시 — 관심종목등록 상위 수집 (하루 1회, 장마감 직후)
             if now.weekday() < 5 and now.hour == 16 and last_top_interest_date != today_str:

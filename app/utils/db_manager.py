@@ -173,6 +173,38 @@ def init_db():
         )
     ''')
 
+    # 종목 메모 (전 페이지 공용 — 종목코드당 여러 개 입력 가능한 로그형)
+    # 구버전(종목당 1개, code가 PRIMARY KEY)이 남아있으면 새 스키마로 전환하고 기존 메모는
+    # 첫 로그 항목으로 그대로 이전한다.
+    cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='stock_memo'")
+    row = cursor.fetchone()
+    if row and 'code TEXT PRIMARY KEY' in row[0]:
+        cursor.execute("ALTER TABLE stock_memo RENAME TO stock_memo_old")
+        cursor.execute('''
+            CREATE TABLE stock_memo (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT,
+                name TEXT,
+                memo TEXT,
+                created_at TEXT
+            )
+        ''')
+        cursor.execute('''
+            INSERT INTO stock_memo (code, name, memo, created_at)
+            SELECT code, name, memo, updated_at FROM stock_memo_old WHERE memo IS NOT NULL AND memo != ''
+        ''')
+        cursor.execute("DROP TABLE stock_memo_old")
+    else:
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS stock_memo (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT,
+                name TEXT,
+                memo TEXT,
+                created_at TEXT
+            )
+        ''')
+
     # Signal Score 일별 결과 저장 테이블
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS signal_score_daily (
@@ -229,6 +261,24 @@ def init_db():
         )
     ''')
 
+    # 상승률 순위 시간대별 스냅샷 저장 테이블 (하루 4회: 9/12/15/18시)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS stock_top_gainers_hourly (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT,
+            hour INTEGER,
+            rank INTEGER,
+            code TEXT,
+            name TEXT,
+            price TEXT,
+            change_rate TEXT,
+            prdy_vrss TEXT,
+            volume TEXT,
+            timestamp TEXT,
+            UNIQUE(date, hour, code)
+        )
+    ''')
+
     # 스케줄링 작업 실행 이력 (동기화 관리 페이지 "처리 로그"용)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS job_run_log (
@@ -259,12 +309,22 @@ def init_db():
         'ALTER TABLE signal_score_daily ADD COLUMN top_interest_bonus_score INTEGER DEFAULT 0',
         # net_buy는 이름과 달리 실제로는 KIS API의 invt_new_psdg(투자 신 심리도) 필드였음 — 이름 정정
         'ALTER TABLE sector_index_daily RENAME COLUMN net_buy TO psychology_index',
+        # 종목 메모 등급(태그)별로 컬럼을 나눠보기 위한 컬럼 추가
+        'ALTER TABLE stock_memo ADD COLUMN grade TEXT DEFAULT "기타"',
+        # 메모 정렬 기준을 작성일이 아닌 "마지막으로 손댄 시각"으로 바꾸기 위한 컬럼
+        # (중요한 메모를 위로 올리는 용도) — 기존 행은 created_at 값으로 채워 넣음
+        'ALTER TABLE stock_memo ADD COLUMN updated_at TEXT',
     ]
     for sql in migrations:
         try:
             cursor.execute(sql)
         except Exception:
             pass
+
+    try:
+        cursor.execute("UPDATE stock_memo SET updated_at = created_at WHERE updated_at IS NULL")
+    except Exception:
+        pass
 
     conn.commit()
     conn.close()
@@ -675,6 +735,79 @@ def save_hts_top_view(items: list, date: str, hour: int):
 
     conn.commit()
     conn.close()
+
+
+def save_top_gainers_snapshot(items: list, date: str, hour: int):
+    """상승률 순위 시간대별 스냅샷 저장 (같은 date+hour 데이터는 덮어쓰기).
+    items: KIS 등락률 순위 API 원시 output 레코드 리스트
+    (data_rank, stck_shrn_iscd, hts_kor_isnm, stck_prpr, prdy_ctrt, prdy_vrss, acml_vol)
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    cursor.execute('DELETE FROM stock_top_gainers_hourly WHERE date = ? AND hour = ?', (date, hour))
+
+    insert_data = [
+        (date, hour, it.get('data_rank'), it.get('stck_shrn_iscd'), it.get('hts_kor_isnm'),
+         it.get('stck_prpr'), it.get('prdy_ctrt'), it.get('prdy_vrss'), it.get('acml_vol'), timestamp)
+        for it in items
+    ]
+    cursor.executemany('''
+        INSERT INTO stock_top_gainers_hourly (date, hour, rank, code, name, price, change_rate, prdy_vrss, volume, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', insert_data)
+
+    conn.commit()
+    conn.close()
+
+
+def get_top_gainers_snapshot_dates(limit: int = 60):
+    """상승률 순위 스냅샷이 저장된 (date, hour) 목록 (최신순)"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT DISTINCT date, hour FROM stock_top_gainers_hourly
+        ORDER BY date DESC, hour DESC LIMIT ?
+    ''', (limit,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_top_gainers_history(date: str = None, hour: int = None):
+    """상승률 순위 스냅샷 조회. date+hour 지정 시 해당 스냅샷, date만 지정 시 그날 전체 시간대,
+    미지정 시 가장 최근 저장된 스냅샷 1개."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    if date and hour is not None:
+        cursor.execute('''
+            SELECT * FROM stock_top_gainers_hourly
+            WHERE date = ? AND hour = ?
+            ORDER BY rank ASC
+        ''', (date, hour))
+    elif date:
+        cursor.execute('''
+            SELECT * FROM stock_top_gainers_hourly
+            WHERE date = ?
+            ORDER BY hour DESC, rank ASC
+        ''', (date,))
+    else:
+        cursor.execute('''
+            SELECT * FROM stock_top_gainers_hourly
+            WHERE (date, hour) = (
+                SELECT date, hour FROM stock_top_gainers_hourly
+                ORDER BY date DESC, hour DESC LIMIT 1
+            )
+            ORDER BY rank ASC
+        ''')
+
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
 
 
 def get_hts_top_view_history(date: str = None, limit_snapshots: int = 24):
@@ -1998,6 +2131,133 @@ def sync_upsert_sector_stocks(rows: list) -> int:
     conn.commit()
     conn.close()
     return saved
+
+
+def get_stock_memos(code: str, limit: int = 100) -> list:
+    """종목의 전체 메모 이력 조회 (최신순). 종목당 여러 개 저장 가능."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT * FROM stock_memo WHERE code = ? ORDER BY updated_at DESC, id DESC LIMIT ?
+    ''', (code, limit))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def add_stock_memo(code: str, name: str, memo: str, grade: str = '기타') -> int:
+    """종목 메모 새로 추가 (항상 새 로그 항목으로 INSERT). 반환: 생성된 row id."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('''
+        INSERT INTO stock_memo (code, name, memo, grade, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+    ''', (code, name, memo, grade or '기타', timestamp, timestamp))
+    new_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return new_id
+
+
+def bump_stock_memo(memo_id: int) -> None:
+    """메모를 '중요' 표시하듯 맨 위로 올림 — updated_at을 현재 시각으로 갱신."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('UPDATE stock_memo SET updated_at = ? WHERE id = ?', (timestamp, memo_id))
+    conn.commit()
+    conn.close()
+
+
+def get_stock_memo_grades() -> list:
+    """현재 사용 중인 메모 등급 목록 (전체보기 페이지의 컬럼 구성용). 기본 등급 5개 + DB에 실제 존재하는 등급을 합쳐 중복 제거."""
+    DEFAULT_GRADES = ['관심', '매수검토', '보유중', '매도검토', '기타']
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT grade FROM stock_memo WHERE grade IS NOT NULL AND grade != ''")
+    existing = [r[0] for r in cursor.fetchall()]
+    conn.close()
+    grades = list(DEFAULT_GRADES)
+    for g in existing:
+        if g not in grades:
+            grades.append(g)
+    return grades
+
+
+def delete_stock_memo_entry(memo_id: int) -> None:
+    """메모 항목 1건 삭제 (id 기준)"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM stock_memo WHERE id = ?', (memo_id,))
+    conn.commit()
+    conn.close()
+
+
+def update_stock_memo_grade(memo_id: int, grade: str) -> None:
+    """메모 항목의 등급만 변경 (다른 등급 컬럼으로 옮기기)"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('UPDATE stock_memo SET grade = ? WHERE id = ?', (grade, memo_id))
+    conn.commit()
+    conn.close()
+
+
+def search_stock_memos(query: str = None, limit: int = 50) -> list:
+    """종목별 가장 최근 메모 1건씩 검색 (종목코드/종목명 부분일치) — query 없으면 전체 종목 최신순.
+    "다른 종목 메모 검색" 목록용 — 종목당 여러 메모가 있어도 최신 1건만 대표로 보여줌.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    like = f'%{query}%' if query else '%'
+    cursor.execute('''
+        SELECT s1.* FROM stock_memo s1
+        INNER JOIN (
+            SELECT code, MAX(id) AS max_id FROM stock_memo GROUP BY code
+        ) s2 ON s1.code = s2.code AND s1.id = s2.max_id
+        WHERE s1.code LIKE ? OR s1.name LIKE ?
+        ORDER BY s1.created_at DESC LIMIT ?
+    ''', (like, like, limit))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_all_stock_memos(query: str = None, limit: int = 500) -> list:
+    """전체 메모 이력 조회 (종목당 여러 건이어도 전부 반환, 최신순) — 메모 전체보기 페이지용."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    like = f'%{query}%' if query else '%'
+    cursor.execute('''
+        SELECT * FROM stock_memo
+        WHERE code LIKE ? OR name LIKE ? OR memo LIKE ?
+        ORDER BY updated_at DESC, id DESC LIMIT ?
+    ''', (like, like, like, limit))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def search_stock_codes(query: str, limit: int = 15) -> list:
+    """종목코드/종목명 자동완성용 검색 — stock_market_cap_daily에 수집된 종목 중 부분일치.
+    같은 종목이 날짜별로 여러 행 있으므로 code 기준으로 중복 제거하고 최신 종목명만 반환.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    like = f'%{query}%'
+    cursor.execute('''
+        SELECT code, name, MAX(date) AS latest_date FROM stock_market_cap_daily
+        WHERE code LIKE ? OR name LIKE ?
+        GROUP BY code
+        ORDER BY latest_date DESC
+        LIMIT ?
+    ''', (like, like, limit))
+    rows = cursor.fetchall()
+    conn.close()
+    return [{'code': r['code'], 'name': r['name']} for r in rows]
 
 
 def get_recent_investor_dates(limit: int = 10) -> list:

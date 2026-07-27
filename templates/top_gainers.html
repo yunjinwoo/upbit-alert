@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>상승률 순위</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f4f7f6; font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; }
+        .dashboard-container { margin-top: 30px; margin-bottom: 50px; }
+        .header-title { margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+        .table-container { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
+        .up-rate { color: #d60000; font-weight: bold; }
+        .down-rate { color: #0049af; font-weight: bold; }
+        .ticker-link { text-decoration: none; color: #0049af; font-weight: bold; cursor: pointer; }
+        .ticker-link:hover { text-decoration: underline; }
+        .rank-badge { font-size: 0.72rem; padding: 0.28em 0.5em; }
+        .table-scroll { overflow-x: auto; }
+        #gainersTable { font-size: 0.8rem; }
+        #gainersTable th, #gainersTable td { white-space: nowrap; padding-top: 0.4rem; padding-bottom: 0.4rem; }
+        #gainersTable td:nth-child(2) { white-space: normal; }
+        .main-navbar { background-color: #1a1a2e; }
+        .main-navbar .navbar-brand { color: #fff; font-weight: bold; }
+        .main-navbar .nav-link { color: rgba(255,255,255,0.75) !important; font-size: 0.82rem; }
+        .main-navbar .nav-link:hover, .main-navbar .nav-link.active { color: #fff !important; }
+        .main-navbar .nav-link.active { border-bottom: 2px solid #4da6ff; }
+
+        .info-btn { position: fixed; right: 0; top: 50%; transform: translateY(-50%); z-index: 1050; background: #1a1a2e; color: #fff; border: none; border-radius: 8px 0 0 8px; padding: 16px 14px 24px 14px; min-width: 36px; writing-mode: vertical-rl; overflow: visible; font-size: 0.8rem; cursor: pointer; letter-spacing: 2px; }
+        .info-btn:hover { background: #4da6ff; }
+        .offcanvas-info .offcanvas-header { background: #2a2a4a; color: #fff; padding: 0 1rem; height: 56px; min-height: 56px; display: flex; align-items: center; }
+        .offcanvas-info .offcanvas-header .btn-close { filter: invert(1); }
+        .info-section { margin-bottom: 1.2rem; }
+        .info-section h6 { font-weight: bold; color: #1a1a2e; border-bottom: 2px solid #4da6ff; padding-bottom: 4px; margin-bottom: 8px; }
+        .info-tag { display: inline-block; background: #e8f0fe; color: #1a1a2e; border-radius: 4px; padding: 2px 8px; font-size: 0.8rem; margin: 2px; font-family: monospace; }
+        .info-tip { background: #fff8e1; border-left: 3px solid #ffc107; padding: 6px 10px; border-radius: 0 4px 4px 0; font-size: 0.85rem; margin-bottom: 4px; }
+        .info-warn { background: #fce4ec; border-left: 3px solid #e91e63; padding: 6px 10px; border-radius: 0 4px 4px 0; font-size: 0.85rem; margin-bottom: 4px; }
+    </style>
+</head>
+<body>
+
+<!-- 페이지 안내 슬라이드 패널 -->
+<button class="info-btn" data-bs-toggle="offcanvas" data-bs-target="#infoPanel" title="페이지 안내">ℹ 안내</button>
+<div class="offcanvas offcanvas-end offcanvas-info" tabindex="-1" id="infoPanel" style="width:35vw">
+    <div class="offcanvas-header">
+        <h5 class="offcanvas-title">📈 상승률 순위 페이지 안내</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body">
+        <div class="info-section">
+            <h6>📌 목적</h6>
+            <p class="small">전일 대비 등락률 기준 상승률(또는 하락률) 상위 종목을 실시간으로 조회합니다.</p>
+        </div>
+        <div class="info-section">
+            <h6>🔌 사용 API</h6>
+            <span class="info-tag">KIS FHPST01700000</span>
+            <p class="small mt-1">국내주식 등락률 순위 — 시장 구분(전체/코스피/코스닥) + 정렬(상승률순/하락률순/시가대비상승률순/시가대비하락률순/변동률순) 선택 가능</p>
+        </div>
+        <div class="info-section">
+            <h6>⏱ 수집 방식</h6>
+            <p class="small">실시간 탭: DB 저장 없이 조회할 때마다 KIS API를 즉시 호출 (새로고침 시 최신값)<br>
+            이력 탭: 평일 9:10/12:10/15:10/18:10 자동으로 전체시장 상승률순 스냅샷을 DB에 저장 (일 4회, 정시가 아닌 10분에 실행)</p>
+        </div>
+        <div class="info-section">
+            <h6>⚠️ 한계</h6>
+            <div class="info-warn">KIS API가 1회 호출당 30건으로 하드캡되어 있고 연속조회(다음 페이지)도 지원하지 않습니다. "전체"는 코스피+코스닥을 각각 조회해 합쳐서 최대 60건까지 제공하고, 코스피/코스닥 단독 선택 시엔 최대 30건입니다.</div>
+            <div class="info-warn">등락률(상승률순/하락률순) 기준 재정렬은 전체시장 조회 시 순서가 뒤섞이는 KIS API 버그를 보정한 것이며, 시가대비/변동률 기준은 API가 내려준 순서를 그대로 사용합니다.</div>
+            <div class="info-warn">이력 스냅샷은 전체시장·상승률순 기준으로만 저장되며, 시장/정렬 필터는 실시간 탭에서만 동작합니다.</div>
+        </div>
+    </div>
+</div>
+
+{% include '_navbar.html' %}
+{% include '_stock_memo.html' %}
+
+<div class="container dashboard-container">
+    <div class="header-title">
+        <h2>📈 상승률 순위</h2>
+        <span id="update-timer" class="badge bg-secondary">로딩 중...</span>
+    </div>
+
+    <ul class="nav nav-tabs mb-3" id="modeTabs">
+        <li class="nav-item"><a class="nav-link active" href="#" onclick="switchMode('live'); return false;" id="tabLive">실시간</a></li>
+        <li class="nav-item"><a class="nav-link" href="#" onclick="switchMode('history'); return false;" id="tabHistory">이력 (9:10/12:10/15:10/18:10 저장)</a></li>
+    </ul>
+
+    <div class="d-flex align-items-end gap-2 mb-3 flex-wrap">
+        <div class="live-field">
+            <label class="form-label mb-1 small">시장구분</label>
+            <select id="selMarket" class="form-select form-select-sm" style="width:120px">
+                <option value="all">전체</option>
+                <option value="kospi">코스피</option>
+                <option value="kosdaq">코스닥</option>
+            </select>
+        </div>
+        <div class="live-field">
+            <label class="form-label mb-1 small">정렬</label>
+            <select id="selSort" class="form-select form-select-sm" style="width:140px">
+                <option value="0">상승률순</option>
+                <option value="1">하락률순</option>
+                <option value="2">시가대비상승률순</option>
+                <option value="3">시가대비하락률순</option>
+                <option value="4">변동률순</option>
+            </select>
+        </div>
+        <div class="history-field" style="display:none">
+            <label class="form-label mb-1 small">날짜</label>
+            <input type="date" id="histDate" class="form-control form-control-sm" style="width:145px">
+        </div>
+        <div class="history-field" style="display:none">
+            <label class="form-label mb-1 small">시간대</label>
+            <select id="histHour" class="form-select form-select-sm" style="width:110px">
+                <option value="9">9시</option>
+                <option value="12">12시</option>
+                <option value="15">15시</option>
+                <option value="18">18시</option>
+            </select>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="loadCurrent()">조회</button>
+        <button class="btn btn-warning btn-sm text-dark history-field" style="display:none" onclick="fetchNow()">즉시 수집</button>
+    </div>
+
+    <div class="table-container">
+        <div id="emptyMsg" class="text-muted small" style="display:none">데이터가 없습니다.</div>
+        <div class="table-scroll">
+            <table id="gainersTable" class="table table-hover" style="width:100%">
+                <thead class="table-light">
+                    <tr>
+                        <th>순위</th>
+                        <th>종목명 (코드)</th>
+                        <th class="text-end">현재가</th>
+                        <th class="text-end">전일대비</th>
+                        <th class="text-end">등락률</th>
+                        <th class="text-end">누적거래량</th>
+                    </tr>
+                </thead>
+                <tbody id="tableBody"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
+
+<script>
+    let dataTable = null;
+    let currentMode = 'live';
+
+    function switchMode(mode) {
+        currentMode = mode;
+        document.getElementById('tabLive').classList.toggle('active', mode === 'live');
+        document.getElementById('tabHistory').classList.toggle('active', mode === 'history');
+        document.querySelectorAll('.live-field').forEach(el => el.style.display = mode === 'live' ? '' : 'none');
+        document.querySelectorAll('.history-field').forEach(el => el.style.display = mode === 'history' ? '' : 'none');
+        loadCurrent();
+    }
+
+    function loadCurrent() {
+        if (currentMode === 'live') loadLive(); else loadHistory();
+    }
+
+    // 실시간(row.stck_prpr 등)과 이력 스냅샷(row.price 등) 필드명이 달라서 공통 형태로 정규화
+    function normalizeRow(row, isHistory) {
+        return isHistory
+            ? { rank: row.rank, code: row.code, name: row.name, price: row.price, vrss: row.prdy_vrss, rate: row.change_rate, vol: row.volume }
+            : { rank: row.data_rank, code: row.stck_shrn_iscd, name: row.hts_kor_isnm, price: row.stck_prpr, vrss: row.prdy_vrss, rate: row.prdy_ctrt, vol: row.acml_vol };
+    }
+
+    function renderRows(rawRows, isHistory) {
+        const rows = rawRows.map(r => normalizeRow(r, isHistory));
+        if (dataTable) { dataTable.destroy(); dataTable = null; }
+
+        const emptyMsg = document.getElementById('emptyMsg');
+        if (!rows.length) {
+            emptyMsg.style.display = '';
+            document.getElementById('tableBody').innerHTML = '';
+            return;
+        }
+        emptyMsg.style.display = 'none';
+
+        document.getElementById('tableBody').innerHTML = rows.map(row => {
+            const rate = parseFloat(row.rate || 0);
+            const rateClass = rate > 0 ? 'up-rate' : (rate < 0 ? 'down-rate' : '');
+            const rateSign = rate > 0 ? '+' : '';
+            const price = row.price ? parseInt(row.price).toLocaleString() : '-';
+            const vrss = row.vrss ? parseInt(row.vrss).toLocaleString() : '-';
+            const vrssSign = rate > 0 ? '+' : (rate < 0 ? '-' : '');
+            const vol = row.vol ? parseInt(row.vol).toLocaleString() : '-';
+            const name = row.name || '(이름 없음)';
+            const code = row.code || '';
+
+            return `
+                <tr>
+                    <td><span class="badge rank-badge bg-primary">${row.rank}위</span></td>
+                    <td>
+                        <a href="https://finance.naver.com/item/main.nhn?code=${code}" target="_blank" class="ticker-link">
+                            ${name} <small class="text-muted">(${code})</small>
+                        </a>
+                        <button class="memo-icon-btn" onclick='openStockMemo(${JSON.stringify(code)}, ${JSON.stringify(name)})' title="메모">📝</button>
+                    </td>
+                    <td class="text-end">${price}원</td>
+                    <td class="text-end"><span class="${rateClass}">${vrssSign}${vrss}</span></td>
+                    <td class="text-end"><span class="${rateClass}">${rateSign}${rate}%</span></td>
+                    <td class="text-end">${vol}</td>
+                </tr>`;
+        }).join('');
+
+        dataTable = $('#gainersTable').DataTable({
+            order: [], pageLength: 100, scrollX: true,
+            language: { search: "결과 내 검색:", lengthMenu: "_MENU_ 개씩 보기", info: "총 _TOTAL_ 건 중 _START_~_END_ 표시" }
+        });
+    }
+
+    async function loadLive() {
+        const market = document.getElementById('selMarket').value;
+        const sort = document.getElementById('selSort').value;
+        document.getElementById('update-timer').textContent = '조회 중...';
+
+        try {
+            const res = await fetch(`api/top-gainers?market=${market}&sort=${sort}`);
+            const result = await res.json();
+            if (result.status !== 'success') {
+                document.getElementById('update-timer').textContent = '조회 실패: ' + result.message;
+                return;
+            }
+            renderRows(result.data || [], false);
+            document.getElementById('update-timer').textContent = `${result.count}건 · ${new Date().toLocaleTimeString()}`;
+        } catch (e) {
+            console.error(e);
+            document.getElementById('update-timer').textContent = '조회 중 오류 발생';
+        }
+    }
+
+    async function loadHistory() {
+        const date = document.getElementById('histDate').value;
+        const hour = document.getElementById('histHour').value;
+        if (!date) { alert('날짜를 선택하세요.'); return; }
+        document.getElementById('update-timer').textContent = '조회 중...';
+
+        try {
+            const res = await fetch(`api/top-gainers/history?date=${date}&hour=${hour}`);
+            const result = await res.json();
+            if (result.status !== 'success') {
+                document.getElementById('update-timer').textContent = '조회 실패: ' + result.message;
+                return;
+            }
+            renderRows(result.data || [], true);
+            document.getElementById('update-timer').textContent = `${date} ${hour}시 · ${result.count}건 · ${new Date().toLocaleTimeString()}`;
+        } catch (e) {
+            console.error(e);
+            document.getElementById('update-timer').textContent = '조회 중 오류 발생';
+        }
+    }
+
+    async function fetchNow() {
+        if (!confirm('KIS API를 호출하여 상승률 순위 스냅샷을 지금 수집하시겠습니까?\n(현재 시간대 데이터는 덮어씌워집니다)')) return;
+
+        const btn = document.querySelector('button[onclick="fetchNow()"]');
+        btn.innerText = '수집 중...';
+        btn.disabled = true;
+
+        try {
+            const res = await fetch('api/top-gainers/fetch', { method: 'POST' });
+            const result = await res.json();
+            btn.innerText = '즉시 수집';
+            btn.disabled = false;
+
+            if (result.status === 'success') {
+                alert(result.message);
+                loadHistory();
+            } else {
+                alert('수집 실패: ' + result.message);
+            }
+        } catch (e) {
+            console.error(e);
+            alert('서버 오류가 발생했습니다.');
+            btn.innerText = '즉시 수집';
+            btn.disabled = false;
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        document.getElementById('histDate').value = new Date().toISOString().slice(0, 10);
+        const nowHour = new Date().getHours();
+        const slot = [9, 12, 15, 18].reduce((a, b) => (nowHour >= b ? b : a), 9);
+        document.getElementById('histHour').value = String(slot);
+        loadLive();
+    });
+</script>
+<script>
+    document.getElementById('infoPanel').addEventListener('show.bs.offcanvas', () => document.querySelector('.info-btn').style.display = 'none');
+    document.getElementById('infoPanel').addEventListener('hidden.bs.offcanvas', () => document.querySelector('.info-btn').style.display = '');
+</script>
+</body>
+</html>

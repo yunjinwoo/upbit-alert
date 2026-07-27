@@ -73,6 +73,7 @@
 </div>
 
 {% include '_navbar.html' %}
+{% include '_stock_memo.html' %}
 
 <div class="container dashboard-container">
     <div class="header-title">
@@ -205,7 +206,7 @@
             document.getElementById('snapshotBody').innerHTML = data.map((row, i) => `
                 <tr${row.grade === 'A' ? ' class="table-danger"' : ''}>
                     <td data-order="${i + 1}">${i + 1}</td>
-                    <td><a href="https://finance.naver.com/item/main.nhn?code=${row.code}" target="_blank" class="ticker-link">${row.code}</a></td>
+                    <td><a href="https://finance.naver.com/item/main.nhn?code=${row.code}" target="_blank" class="ticker-link">${row.code}</a> <button class="memo-icon-btn" onclick='openStockMemo(${JSON.stringify(row.code)}, ${JSON.stringify(row.name || "")})' title="메모">📝</button></td>
                     <td>${row.name ?? ''}</td>
                     <td data-order="${row.total_score}"><b>${row.total_score}</b></td>
                     <td><span class="badge ${GRADE_BADGE[row.grade] || 'bg-secondary'}">${row.grade}</span></td>
@@ -275,7 +276,7 @@
             }).join('');
             return `
                 <tr>
-                    <td><a href="https://finance.naver.com/item/main.nhn?code=${code}" target="_blank" class="ticker-link">${code}</a></td>
+                    <td><a href="https://finance.naver.com/item/main.nhn?code=${code}" target="_blank" class="ticker-link">${code}</a> <button class="memo-icon-btn" onclick='openStockMemo(${JSON.stringify(code)}, ${JSON.stringify(latest.name || "")})' title="메모">📝</button></td>
                     <td>${latest.name ?? ''}</td>
                     ${dateCells}
                     <td class="text-end" data-order="${latest.total_score}"><b>${latest.total_score}</b></td>
