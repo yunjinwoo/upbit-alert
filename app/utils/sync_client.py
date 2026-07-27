@@ -9,6 +9,7 @@ from app.utils.db_manager import (
     get_sector_stocks_cached,
     get_hts_top_view_export,
     get_top_interest_export,
+    get_top_gainers_export,
 )
 
 logger = get_logger()
@@ -84,4 +85,50 @@ def push_all_tables_to_server(server_url: str = None, limit: int = None) -> dict
             logger.error(f"[동기화] 세션 종료 실패: {e}")
 
     logger.info(f"[동기화] 전체 전송 완료 — 테이블 {len(synced_tables)}건 호출, 총 {total_rows}행 저장")
+    return {"status": "ok", "tables": synced_tables, "rows": total_rows}
+
+
+def push_top_gainers_to_server(server_url: str = None, limit_days: int = 1) -> dict:
+    """상승률 순위(stock_top_gainers_hourly) 전용 동기화 — 평일 18:20 자동 스케줄 전용.
+    전체 전송(push_all_tables_to_server)과 별도로, 그날 마지막 스냅샷(18:10)이 저장된 직후
+    이 테이블만 따로 원격 서버로 보낸다. 세션 시작/종료 프로토콜은 전체 전송과 동일하게 재사용.
+    반환: {status, tables, rows} 또는 {status: 'error', message}
+    """
+    server_url = (server_url or Config.SYNC_SERVER_URL).rstrip('/')
+
+    try:
+        start_res = requests.post(f"{server_url}/api/sync/start", timeout=10)
+        start_res.raise_for_status()
+        token = start_res.json().get('token')
+        if not token:
+            raise ValueError("토큰 발급 실패 (응답에 token 없음)")
+    except Exception as e:
+        logger.error(f"[동기화-상승률순위] 세션 시작 실패: {e}")
+        return {"status": "error", "message": str(e)}
+
+    total_rows = 0
+    synced_tables = []
+    try:
+        rows = get_top_gainers_export(limit_days=limit_days)
+        if rows:
+            res = requests.post(
+                f"{server_url}/api/sync/push",
+                json={"table": "stock_top_gainers_hourly", "rows": rows},
+                headers={"X-Sync-Token": token},
+                timeout=30,
+            )
+            res.raise_for_status()
+            saved = res.json().get('saved', 0)
+            total_rows += saved
+            synced_tables.append('stock_top_gainers_hourly')
+            logger.info(f"[동기화-상승률순위] stock_top_gainers_hourly {saved}건 전송 완료")
+    except Exception as e:
+        logger.error(f"[동기화-상승률순위] 전송 중 에러: {e}")
+    finally:
+        try:
+            requests.post(f"{server_url}/api/sync/end", headers={"X-Sync-Token": token}, timeout=10)
+        except Exception as e:
+            logger.error(f"[동기화-상승률순위] 세션 종료 실패: {e}")
+
+    logger.info(f"[동기화-상승률순위] 전송 완료 — 총 {total_rows}행 저장")
     return {"status": "ok", "tables": synced_tables, "rows": total_rows}

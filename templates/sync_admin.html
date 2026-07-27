@@ -71,6 +71,7 @@
             <div class="step-row"><span class="step-icon" id="si-sec_stocks">⏳</span><span class="step-label">업종 소속 종목 — 전체(코스피/코스닥 + 세부업종)</span><span class="step-count" id="sc-sec_stocks">-</span></div>
             <div class="step-row"><span class="step-icon" id="si-hts">⏳</span><span class="step-label">HTS조회상위20종목 (stock_hts_top_view_hourly)</span><span class="step-count" id="sc-hts">-</span></div>
             <div class="step-row"><span class="step-icon" id="si-topint">⏳</span><span class="step-label">관심종목등록 상위 (stock_top_interest_daily)</span><span class="step-count" id="sc-topint">-</span></div>
+            <div class="step-row"><span class="step-icon" id="si-topgain">⏳</span><span class="step-label">상승률 순위 (stock_top_gainers_hourly)</span><span class="step-count" id="sc-topgain">-</span></div>
         </div>
         <div id="bulkLog" class="sync-log" style="display:none"></div>
     </div>
@@ -122,6 +123,7 @@
             <button class="btn btn-warning btn-sm text-dark" data-job="market_cap_signal_score" onclick="runJobManual(this)">▶ 시가총액+Signal Score 실행</button>
             <button class="btn btn-warning btn-sm text-dark" data-job="remote_sync" onclick="runJobManual(this)">▶ 원격동기화 실행</button>
             <button class="btn btn-warning btn-sm text-dark" data-job="top_interest" onclick="runJobManual(this)">▶ 관심종목등록 상위 실행</button>
+            <button class="btn btn-warning btn-sm text-dark" data-job="top_gainers_sync" onclick="runJobManual(this)">▶ 상승률순위 동기화 실행</button>
         </div>
         <div class="text-muted small mb-2">⚠️ 수동실행은 미리보기가 아니라 즉시 실행입니다 — 실제로 KIS API를 호출하고 DB에 저장됩니다(Signal Score는 A등급 시 Slack도 발송됩니다).</div>
 
@@ -212,6 +214,11 @@
                 <tr>
                     <td><a href="api/sync/export/top-interest?limit=7" target="_blank">/api/sync/export/top-interest</a></td>
                     <td>관심종목등록 상위 일별 원시 데이터</td>
+                    <td>limit (기본 7일)</td>
+                </tr>
+                <tr>
+                    <td><a href="api/sync/export/top-gainers?limit=7" target="_blank">/api/sync/export/top-gainers</a></td>
+                    <td>상승률 순위 시간별 원시 데이터 (평일 18:20 별도 자동 동기화)</td>
                     <td>limit (기본 7일)</td>
                 </tr>
             </tbody>
@@ -449,6 +456,7 @@
             }, table: 'sector_stocks_daily' },
             { id: 'hts',    fetch: () => fetch(`api/sync/export/hts-top-view?limit=${limit}`).then(r=>r.json()),   table: 'stock_hts_top_view_hourly' },
             { id: 'topint', fetch: () => fetch(`api/sync/export/top-interest?limit=${limit}`).then(r=>r.json()),   table: 'stock_top_interest_daily' },
+            { id: 'topgain',fetch: () => fetch(`api/sync/export/top-gainers?limit=${limit}`).then(r=>r.json()),    table: 'stock_top_gainers_hourly' },
         ];
 
         try {
