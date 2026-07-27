@@ -30,7 +30,7 @@ from app.utils.db_manager import (
     get_job_run_log,
     get_stock_memos, add_stock_memo, delete_stock_memo_entry, search_stock_memos, get_all_stock_memos,
     get_stock_memo_grades, update_stock_memo_grade, search_stock_codes, bump_stock_memo,
-    get_top_gainers_history, get_top_gainers_snapshot_dates,
+    get_top_gainers_history, get_top_gainers_snapshot_dates, get_top_gainers_range,
 )
 from app.core.stock_monitor import (
     fetch_market_cap_ranking, fetch_investor_trend, fetch_sector_index_daily, fetch_stock_investor_daily,
@@ -1239,6 +1239,16 @@ def top_gainers_history_dates_api():
     """상승률 순위 스냅샷이 저장된 (date, hour) 목록 (최신순)"""
     limit = int(request.args.get('limit', 60))
     data = get_top_gainers_snapshot_dates(limit=limit)
+    return jsonify({'status': 'success', 'count': len(data), 'data': data})
+
+@app.route('/api/top-gainers/history/range', methods=['GET'])
+def top_gainers_history_range_api():
+    """상승률 순위 구간(date_from~date_to) 추이 조회 — 날짜별 종목 매트릭스용 (그날 최고 순위 1건으로 집계)"""
+    date_from = request.args.get('date_from')
+    date_to = request.args.get('date_to')
+    if not date_from or not date_to:
+        return jsonify({'status': 'error', 'message': 'date_from, date_to 파라미터가 필요합니다.'}), 400
+    data = get_top_gainers_range(date_from=date_from, date_to=date_to)
     return jsonify({'status': 'success', 'count': len(data), 'data': data})
 
 @app.route('/api/history/git-log', methods=['GET'])

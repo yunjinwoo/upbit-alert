@@ -63,6 +63,7 @@
             <h6>🗂 두 가지 보기</h6>
             <div class="info-tip"><b>일별 스냅샷</b>: 날짜 하나를 골라 그날 계산된 전체 종목 점수/등급을 표로 확인</div>
             <div class="info-tip"><b>날짜별 추이</b>: 시작일~종료일 구간에서 종목별로 날짜에 따라 총점/등급이 어떻게 바뀌었는지 매트릭스로 확인</div>
+            <div class="info-tip">두 보기 모두 등급으로 필터링 가능 — 예: A만 골라서 "오늘 A등급 명단"이나 "구간 내 A등급 종목들의 점수 추이"만 따로 확인</div>
         </div>
         <div class="info-section">
             <h6>⚠️ 한계</h6>
@@ -131,6 +132,16 @@
             <div>
                 <label class="form-label mb-1 small">종료일</label>
                 <input type="date" id="rangeTo" class="form-control form-control-sm" style="width:145px">
+            </div>
+            <div>
+                <label class="form-label mb-1 small">등급 (최신일 기준)</label>
+                <select id="trendGrade" class="form-select form-select-sm" style="width:110px" onchange="renderTrend()">
+                    <option value="">전체</option>
+                    <option value="A">A</option>
+                    <option value="B">B</option>
+                    <option value="C">C</option>
+                    <option value="제외">제외</option>
+                </select>
             </div>
             <div>
                 <label class="form-label mb-1 small">종목명</label>
@@ -259,7 +270,19 @@
         [...trendRaw].sort((a, b) => b.date.localeCompare(a.date)).forEach(item => {
             if (!(item.code in latestSeenMap)) latestSeenMap[item.code] = item;
         });
-        const codes = Object.keys(latestSeenMap).sort((a, b) => latestSeenMap[b].total_score - latestSeenMap[a].total_score);
+        const gradeFilter = document.getElementById('trendGrade').value;
+        const codes = Object.keys(latestSeenMap)
+            .filter(code => !gradeFilter || latestSeenMap[code].grade === gradeFilter)
+            .sort((a, b) => latestSeenMap[b].total_score - latestSeenMap[a].total_score);
+
+        if (!codes.length) {
+            document.getElementById('trendEmpty').style.display = '';
+            document.getElementById('trendEmpty').textContent = '선택한 등급에 해당하는 종목이 없습니다.';
+            document.getElementById('trendHead').innerHTML = '';
+            document.getElementById('trendBody').innerHTML = '';
+            return;
+        }
+        document.getElementById('trendEmpty').textContent = '선택 구간에 데이터가 없습니다.';
 
         document.getElementById('trendHead').innerHTML = `
             <th>코드</th><th>종목명</th>
