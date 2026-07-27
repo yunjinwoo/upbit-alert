@@ -8,7 +8,7 @@ from app.utils.db_manager import save_stock_alert_to_db, init_db, save_api_token
 from app.core.kis_models import RequestHeader, RequestQueryParam, MarketCapQueryParam, FluctuationRankingResponse, MarketCapRankingResponse, StockInvestorDailyItem
 from app.core.upbit_monitor import send_slack_msg
 from app.utils.google_sheets import save_signal_score_to_sheet, save_signal_score_readme, save_investor_ranking_to_sheet
-from app.utils.sync_client import push_all_tables_to_server
+from app.utils.sync_client import push_all_tables_to_server, push_top_gainers_to_server
 from app.utils.logger import get_logger
 
 logger = get_logger()
@@ -1041,6 +1041,22 @@ def run_job_remote_sync(trigger_type: str = 'auto') -> bool:
     return ok
 
 
+def run_job_top_gainers_sync(trigger_type: str = 'auto') -> bool:
+    """상승률 순위 전용 원격 동기화 실행 + 실행이력 기록 (평일 18:20, 마지막 스냅샷 직후 1회)."""
+    start = datetime.now()
+    error_message = None
+    ok = True
+    try:
+        result = push_top_gainers_to_server()
+        logger.info(f"[동기화-상승률순위] 전송 결과: {result}")
+    except Exception as e:
+        ok = False
+        error_message = str(e)
+    _log_job_run('top_gainers_sync', '상승률 순위 전용 원격 동기화', '내부 API (자체 서버 /api/sync/push)',
+                 start, ok, error_message=error_message, trigger_type=trigger_type)
+    return ok
+
+
 def run_stock_monitor():
     logger.info("🚀 한국 주식 실시간 감시 시작!")
     init_db()
@@ -1057,6 +1073,7 @@ def run_stock_monitor():
     last_hts_top_view_hour = None  # HTS조회상위20종목 매시간 수집 여부 (시간 단위로 추적)
     last_top_interest_date = None  # 관심종목등록 상위 일 1회 수집 여부
     last_top_gainers_hour = None  # 상승률 순위 스냅샷 9:10/12:10/15:10/18:10 수집 여부 (시간 단위로 추적)
+    last_top_gainers_sync_date = None  # 상승률 순위 전용 동기화(18:20) 여부 (하루 1회)
 
     while True:
         try:
@@ -1082,6 +1099,14 @@ def run_stock_monitor():
                         last_top_gainers_hour = run_key
                     else:
                         logger.warning("⚠️ 상승률 순위 스냅샷 수집 실패 — 다음 루프에서 재시도합니다.")
+
+            # 평일 18:20 — 상승률 순위 전용 원격 동기화 (하루 1회, 마지막 18:10 스냅샷 직후)
+            if now.weekday() < 5 and now.hour == 18 and now.minute >= 20 and last_top_gainers_sync_date != today_str:
+                logger.info("⏰ [스케줄] 18시 20분 상승률 순위 전용 동기화 시작")
+                if run_job_top_gainers_sync():
+                    last_top_gainers_sync_date = today_str
+                else:
+                    logger.warning("⚠️ 상승률 순위 전용 동기화 실패 — 다음 루프에서 재시도합니다.")
 
             # 평일 16시 — 관심종목등록 상위 수집 (하루 1회, 장마감 직후)
             if now.weekday() < 5 and now.hour == 16 and last_top_interest_date != today_str:

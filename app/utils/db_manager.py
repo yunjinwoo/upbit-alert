@@ -856,6 +856,46 @@ def get_top_gainers_range(date_from: str, date_to: str):
     return result
 
 
+def get_top_gainers_export(limit_days: int = 7) -> list:
+    """동기화 전송용 — 최근 N일치 상승률 순위 원본 스냅샷 전체 반환 (해당 기간 내 모든 시간대 포함)."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cutoff = (datetime.now() - timedelta(days=limit_days)).strftime('%Y-%m-%d')
+    cursor.execute('''
+        SELECT date, hour, rank, code, name, price, change_rate, prdy_vrss, volume, timestamp
+        FROM stock_top_gainers_hourly
+        WHERE date >= ?
+        ORDER BY date DESC, hour DESC, rank ASC
+    ''', (cutoff,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def sync_upsert_top_gainers(rows: list) -> int:
+    """stock_top_gainers_hourly upsert (date+hour+code 기준) — 원격 동기화 수신용"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    saved = 0
+    for r in rows:
+        cursor.execute('''
+            INSERT INTO stock_top_gainers_hourly
+                (date, hour, rank, code, name, price, change_rate, prdy_vrss, volume, timestamp)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(date, hour, code) DO UPDATE SET
+                rank=excluded.rank, name=excluded.name, price=excluded.price,
+                change_rate=excluded.change_rate, prdy_vrss=excluded.prdy_vrss,
+                volume=excluded.volume, timestamp=excluded.timestamp
+        ''', (r.get('date'), r.get('hour'), r.get('rank'), r.get('code'), r.get('name'),
+              r.get('price'), r.get('change_rate'), r.get('prdy_vrss'), r.get('volume'),
+              r.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))))
+        saved += 1
+    conn.commit()
+    conn.close()
+    return saved
+
+
 def get_hts_top_view_history(date: str = None, limit_snapshots: int = 24):
     """HTS조회상위20종목 이력 조회. date 지정 시 해당 날짜 전체, 미지정 시 최근 limit_snapshots개 (date,hour) 스냅샷."""
     conn = sqlite3.connect(DB_PATH)

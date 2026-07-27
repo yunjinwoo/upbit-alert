@@ -31,6 +31,7 @@ from app.utils.db_manager import (
     get_stock_memos, add_stock_memo, delete_stock_memo_entry, search_stock_memos, get_all_stock_memos,
     get_stock_memo_grades, update_stock_memo_grade, search_stock_codes, bump_stock_memo,
     get_top_gainers_history, get_top_gainers_snapshot_dates, get_top_gainers_range,
+    get_top_gainers_export, sync_upsert_top_gainers,
 )
 from app.core.stock_monitor import (
     fetch_market_cap_ranking, fetch_investor_trend, fetch_sector_index_daily, fetch_stock_investor_daily,
@@ -38,7 +39,7 @@ from app.core.stock_monitor import (
     fetch_fluctuation_ranking, fetch_fluctuation_ranking_combined,
     run_job_hts_top_view, run_job_investor_trend, run_job_sector_index,
     run_job_market_cap_and_signal_score, run_job_remote_sync, run_job_top_interest,
-    run_job_top_gainers,
+    run_job_top_gainers, run_job_top_gainers_sync,
     SECTOR_NAMES,
 )
 from app.config import Config
@@ -742,6 +743,7 @@ SYNC_TABLE_MAP = {
     'sector_stocks_daily':         sync_upsert_sector_stocks,
     'stock_hts_top_view_hourly':   sync_upsert_hts_top_view,
     'stock_top_interest_daily':    sync_upsert_top_interest,
+    'stock_top_gainers_hourly':    sync_upsert_top_gainers,
 }
 
 def _get_client_ip():
@@ -859,6 +861,7 @@ JOB_RUNNERS = {
     'market_cap_signal_score': lambda: run_job_market_cap_and_signal_score(trigger_type='manual'),
     'remote_sync': lambda: run_job_remote_sync(trigger_type='manual'),
     'top_interest': lambda: run_job_top_interest(trigger_type='manual'),
+    'top_gainers_sync': lambda: run_job_top_gainers_sync(trigger_type='manual'),
 }
 
 @app.route('/api/job-log', methods=['GET'])
@@ -917,6 +920,12 @@ def sync_export_hts_top_view():
 def sync_export_top_interest():
     limit = int(request.args.get('limit', 7))
     data = get_top_interest_export(limit_days=limit)
+    return jsonify({"status": "success", "count": len(data), "data": data})
+
+@app.route('/api/sync/export/top-gainers', methods=['GET'])
+def sync_export_top_gainers():
+    limit = int(request.args.get('limit', 7))
+    data = get_top_gainers_export(limit_days=limit)
     return jsonify({"status": "success", "count": len(data), "data": data})
 
 # sector_index 캐시 폴백
