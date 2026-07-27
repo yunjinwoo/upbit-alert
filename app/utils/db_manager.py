@@ -261,6 +261,24 @@ def init_db():
         )
     ''')
 
+    # 상승률 순위 시간대별 스냅샷 저장 테이블 (하루 4회: 9/12/15/18시)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS stock_top_gainers_hourly (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT,
+            hour INTEGER,
+            rank INTEGER,
+            code TEXT,
+            name TEXT,
+            price TEXT,
+            change_rate TEXT,
+            prdy_vrss TEXT,
+            volume TEXT,
+            timestamp TEXT,
+            UNIQUE(date, hour, code)
+        )
+    ''')
+
     # 스케줄링 작업 실행 이력 (동기화 관리 페이지 "처리 로그"용)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS job_run_log (
@@ -717,6 +735,79 @@ def save_hts_top_view(items: list, date: str, hour: int):
 
     conn.commit()
     conn.close()
+
+
+def save_top_gainers_snapshot(items: list, date: str, hour: int):
+    """상승률 순위 시간대별 스냅샷 저장 (같은 date+hour 데이터는 덮어쓰기).
+    items: KIS 등락률 순위 API 원시 output 레코드 리스트
+    (data_rank, stck_shrn_iscd, hts_kor_isnm, stck_prpr, prdy_ctrt, prdy_vrss, acml_vol)
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    cursor.execute('DELETE FROM stock_top_gainers_hourly WHERE date = ? AND hour = ?', (date, hour))
+
+    insert_data = [
+        (date, hour, it.get('data_rank'), it.get('stck_shrn_iscd'), it.get('hts_kor_isnm'),
+         it.get('stck_prpr'), it.get('prdy_ctrt'), it.get('prdy_vrss'), it.get('acml_vol'), timestamp)
+        for it in items
+    ]
+    cursor.executemany('''
+        INSERT INTO stock_top_gainers_hourly (date, hour, rank, code, name, price, change_rate, prdy_vrss, volume, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', insert_data)
+
+    conn.commit()
+    conn.close()
+
+
+def get_top_gainers_snapshot_dates(limit: int = 60):
+    """상승률 순위 스냅샷이 저장된 (date, hour) 목록 (최신순)"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT DISTINCT date, hour FROM stock_top_gainers_hourly
+        ORDER BY date DESC, hour DESC LIMIT ?
+    ''', (limit,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_top_gainers_history(date: str = None, hour: int = None):
+    """상승률 순위 스냅샷 조회. date+hour 지정 시 해당 스냅샷, date만 지정 시 그날 전체 시간대,
+    미지정 시 가장 최근 저장된 스냅샷 1개."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    if date and hour is not None:
+        cursor.execute('''
+            SELECT * FROM stock_top_gainers_hourly
+            WHERE date = ? AND hour = ?
+            ORDER BY rank ASC
+        ''', (date, hour))
+    elif date:
+        cursor.execute('''
+            SELECT * FROM stock_top_gainers_hourly
+            WHERE date = ?
+            ORDER BY hour DESC, rank ASC
+        ''', (date,))
+    else:
+        cursor.execute('''
+            SELECT * FROM stock_top_gainers_hourly
+            WHERE (date, hour) = (
+                SELECT date, hour FROM stock_top_gainers_hourly
+                ORDER BY date DESC, hour DESC LIMIT 1
+            )
+            ORDER BY rank ASC
+        ''')
+
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
 
 
 def get_hts_top_view_history(date: str = None, limit_snapshots: int = 24):
