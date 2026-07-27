@@ -29,13 +29,16 @@ from app.utils.db_manager import (
     get_signal_score_range,
     get_job_run_log,
     get_stock_memos, add_stock_memo, delete_stock_memo_entry, search_stock_memos, get_all_stock_memos,
-    get_stock_memo_grades, update_stock_memo_grade, search_stock_codes, bump_stock_memo
+    get_stock_memo_grades, update_stock_memo_grade, search_stock_codes, bump_stock_memo,
+    get_top_gainers_history, get_top_gainers_snapshot_dates,
 )
 from app.core.stock_monitor import (
     fetch_market_cap_ranking, fetch_investor_trend, fetch_sector_index_daily, fetch_stock_investor_daily,
     fetch_ranking_preview, fetch_sector_stocks, fetch_multi_stock_price,
+    fetch_fluctuation_ranking, fetch_fluctuation_ranking_combined,
     run_job_hts_top_view, run_job_investor_trend, run_job_sector_index,
     run_job_market_cap_and_signal_score, run_job_remote_sync, run_job_top_interest,
+    run_job_top_gainers,
     SECTOR_NAMES,
 )
 from app.config import Config
@@ -1177,6 +1180,66 @@ def ranking_preview_api():
         'status': 'success', 'type': rtype, 'name': cfg['name'],
         'count': len(result['output']), 'data': result['output']
     })
+
+# ──────────────────────────────────────────────
+# 상승률(등락률) 순위 — 실시간 조회 전용, DB 저장 없음
+# ──────────────────────────────────────────────
+TOP_GAINERS_MARKETS = {'all': '0000', 'kospi': '0001', 'kosdaq': '1001'}
+
+@app.route('/top-gainers')
+def top_gainers_view():
+    """상승률/하락률 상위 종목 페이지 (실시간 조회, DB 미저장)"""
+    return render_template('top_gainers.html', active_page='top_gainers')
+
+TOP_GAINERS_SORTS = {'0', '1', '2', '3', '4'}  # 0:상승율순 1:하락율순 2:시가대비상승율 3:시가대비하락율 4:변동율
+
+@app.route('/api/top-gainers', methods=['GET'])
+def top_gainers_api():
+    market = request.args.get('market', 'all')
+    sort = request.args.get('sort', '0')
+    if sort not in TOP_GAINERS_SORTS:
+        sort = '0'
+
+    # "전체"는 KIS fid_input_iscd="0000"이 30건 하드캡+연속조회 미지원이라
+    # 코스피+코스닥을 각각 조회해서 합치는 방식으로 최대 60건까지 확보한다.
+    if market == 'all':
+        result = fetch_fluctuation_ranking_combined(rank_sort_cls_code=sort)
+    else:
+        iscd = TOP_GAINERS_MARKETS.get(market, '0001')
+        result = fetch_fluctuation_ranking(input_iscd=iscd, rank_sort_cls_code=sort, max_count=30)
+    if 'error' in result:
+        return jsonify({'status': 'error', 'message': result['error']}), 500
+
+    output = result['output']
+    return jsonify({
+        'status': 'success', 'market': market, 'sort': sort,
+        'count': len(output), 'data': output
+    })
+
+@app.route('/api/top-gainers/fetch', methods=['POST'])
+def top_gainers_fetch_api():
+    """상승률 순위 스냅샷 즉시 수집 (자동 스케줄: 평일 9:10/12:10/15:10/18:10)"""
+    hour = _dt.now().hour
+    ok = run_job_top_gainers(hour, trigger_type='manual')
+    if ok:
+        return jsonify({'status': 'success', 'message': f'{hour}시 스냅샷 수집 완료'})
+    return jsonify({'status': 'error', 'message': '수집 실패 (로그 확인)'}), 500
+
+@app.route('/api/top-gainers/history', methods=['GET'])
+def top_gainers_history_api():
+    """저장된 상승률 순위 스냅샷 조회 (date+hour 지정 시 해당 건, 미지정 시 최신 스냅샷)"""
+    date = request.args.get('date')
+    hour = request.args.get('hour')
+    hour = int(hour) if hour not in (None, '') else None
+    data = get_top_gainers_history(date=date, hour=hour)
+    return jsonify({'status': 'success', 'count': len(data), 'data': data})
+
+@app.route('/api/top-gainers/history/dates', methods=['GET'])
+def top_gainers_history_dates_api():
+    """상승률 순위 스냅샷이 저장된 (date, hour) 목록 (최신순)"""
+    limit = int(request.args.get('limit', 60))
+    data = get_top_gainers_snapshot_dates(limit=limit)
+    return jsonify({'status': 'success', 'count': len(data), 'data': data})
 
 @app.route('/api/history/git-log', methods=['GET'])
 def git_log_api():
