@@ -16,10 +16,16 @@
         .ticker-link { text-decoration: none; color: #0049af; font-weight: bold; cursor: pointer; }
         .ticker-link:hover { text-decoration: underline; }
         .rank-badge { font-size: 0.72rem; padding: 0.28em 0.5em; }
+        .interest-icon { display: inline-block; margin-left: 3px; font-size: 0.75rem; cursor: help; }
         .table-scroll { overflow-x: auto; }
         #gainersTable { font-size: 0.8rem; }
         #gainersTable th, #gainersTable td { white-space: nowrap; padding-top: 0.4rem; padding-bottom: 0.4rem; }
         #gainersTable td:nth-child(2) { white-space: normal; }
+        #gainersRangeTable { font-size: 0.8rem; }
+        #gainersRangeTable th, #gainersRangeTable td { white-space: nowrap; padding-top: 0.4rem; padding-bottom: 0.4rem; }
+        #gainersRangeTable td:nth-child(1) { white-space: normal; }
+        #gainersRangeTable th:nth-child(1), #gainersRangeTable td:nth-child(1) { position: sticky; left: 0; background: #fff; z-index: 2; box-shadow: 2px 0 4px rgba(0,0,0,0.06); }
+        #gainersRangeTable thead th:nth-child(1) { background: #f8f9fa; z-index: 3; }
         .main-navbar { background-color: #1a1a2e; }
         .main-navbar .navbar-brand { color: #fff; font-weight: bold; }
         .main-navbar .nav-link { color: rgba(255,255,255,0.75) !important; font-size: 0.82rem; }
@@ -59,7 +65,12 @@
         <div class="info-section">
             <h6>⏱ 수집 방식</h6>
             <p class="small">실시간 탭: DB 저장 없이 조회할 때마다 KIS API를 즉시 호출 (새로고침 시 최신값)<br>
-            이력 탭: 평일 9:10/12:10/15:10/18:10 자동으로 전체시장 상승률순 스냅샷을 DB에 저장 (일 4회, 정시가 아닌 10분에 실행)</p>
+            이력 탭: 평일 9:10/12:10/15:10/18:10 자동으로 전체시장 상승률순 스냅샷을 DB에 저장 (일 4회, 정시가 아닌 10분에 실행)<br>
+            구간 추이 탭: 저장된 스냅샷을 날짜 범위로 모아 종목별 등장 이력을 매트릭스로 확인 (하루 4번 중 그날 최고 순위 1건으로 집계)</p>
+        </div>
+        <div class="info-section">
+            <h6>🔎 구간 추이의 관심도 표시</h6>
+            <p class="small">같은 날짜에 <b>👀 HTS조회상위20종목</b> 또는 <b>⭐ 관심종목등록 상위</b>에도 함께 포착된 종목은 순위 배지 옆에 아이콘이 붙습니다. 상승률만으로는 못 거르는 "실제로 관심이 몰린" 종목을 구분하는 용도이며, 오른쪽 요약 열(👀HTS일수/⭐관심등록일수)로 구간 전체 빈도도 볼 수 있습니다.</p>
         </div>
         <div class="info-section">
             <h6>⚠️ 한계</h6>
@@ -82,6 +93,7 @@
     <ul class="nav nav-tabs mb-3" id="modeTabs">
         <li class="nav-item"><a class="nav-link active" href="#" onclick="switchMode('live'); return false;" id="tabLive">실시간</a></li>
         <li class="nav-item"><a class="nav-link" href="#" onclick="switchMode('history'); return false;" id="tabHistory">이력 (9:10/12:10/15:10/18:10 저장)</a></li>
+        <li class="nav-item"><a class="nav-link" href="#" onclick="switchMode('range'); return false;" id="tabRange">구간 추이</a></li>
     </ul>
 
     <div class="d-flex align-items-end gap-2 mb-3 flex-wrap">
@@ -116,11 +128,23 @@
                 <option value="18">18시</option>
             </select>
         </div>
+        <div class="range-field" style="display:none">
+            <label class="form-label mb-1 small">시작일</label>
+            <input type="date" id="rangeFrom" class="form-control form-control-sm" style="width:145px">
+        </div>
+        <div class="range-field" style="display:none">
+            <label class="form-label mb-1 small">종료일</label>
+            <input type="date" id="rangeTo" class="form-control form-control-sm" style="width:145px">
+        </div>
+        <div class="range-field" style="display:none">
+            <label class="form-label mb-1 small">종목명</label>
+            <input type="text" id="rangeNameSearch" class="form-control form-control-sm" placeholder="예: 삼성" style="width:110px" oninput="filterRangeByName()">
+        </div>
         <button class="btn btn-primary btn-sm" onclick="loadCurrent()">조회</button>
         <button class="btn btn-warning btn-sm text-dark history-field" style="display:none" onclick="fetchNow()">즉시 수집</button>
     </div>
 
-    <div class="table-container">
+    <div class="table-container" id="gainersTableContainer">
         <div id="emptyMsg" class="text-muted small" style="display:none">데이터가 없습니다.</div>
         <div class="table-scroll">
             <table id="gainersTable" class="table table-hover" style="width:100%">
@@ -135,6 +159,16 @@
                     </tr>
                 </thead>
                 <tbody id="tableBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="table-container" id="gainersRangeContainer" style="display:none">
+        <div id="rangeEmptyMsg" class="text-muted small" style="display:none">선택 구간에 데이터가 없습니다.</div>
+        <div class="table-scroll">
+            <table id="gainersRangeTable" class="table table-hover" style="width:100%">
+                <thead class="table-light"><tr id="rangeTableHead"></tr></thead>
+                <tbody id="rangeTableBody"></tbody>
             </table>
         </div>
     </div>
@@ -153,13 +187,19 @@
         currentMode = mode;
         document.getElementById('tabLive').classList.toggle('active', mode === 'live');
         document.getElementById('tabHistory').classList.toggle('active', mode === 'history');
+        document.getElementById('tabRange').classList.toggle('active', mode === 'range');
         document.querySelectorAll('.live-field').forEach(el => el.style.display = mode === 'live' ? '' : 'none');
         document.querySelectorAll('.history-field').forEach(el => el.style.display = mode === 'history' ? '' : 'none');
+        document.querySelectorAll('.range-field').forEach(el => el.style.display = mode === 'range' ? '' : 'none');
+        document.getElementById('gainersTableContainer').style.display = mode === 'range' ? 'none' : '';
+        document.getElementById('gainersRangeContainer').style.display = mode === 'range' ? '' : 'none';
         loadCurrent();
     }
 
     function loadCurrent() {
-        if (currentMode === 'live') loadLive(); else loadHistory();
+        if (currentMode === 'live') loadLive();
+        else if (currentMode === 'history') loadHistory();
+        else loadRange();
     }
 
     // 실시간(row.stck_prpr 등)과 이력 스냅샷(row.price 등) 필드명이 달라서 공통 형태로 정규화
@@ -255,6 +295,127 @@
         }
     }
 
+    // ── 구간 추이 (날짜 x 종목 매트릭스, 하루 4번 스냅샷 중 그날 최고 순위 1건으로 집계) ──
+    let rangeTable = null;
+    let rangeRaw = [];
+
+    function filterRangeByName() {
+        if (rangeTable) rangeTable.search(document.getElementById('rangeNameSearch').value).draw();
+    }
+
+    function rangeRankBadgeClass(rank) {
+        if (rank <= 3) return 'bg-danger';
+        if (rank <= 10) return 'bg-primary';
+        return 'bg-secondary';
+    }
+
+    function renderRangeMatrix() {
+        if (rangeTable) { rangeTable.destroy(); rangeTable = null; }
+
+        const byDate = {};
+        rangeRaw.forEach(item => {
+            byDate[item.date] = byDate[item.date] || {};
+            byDate[item.date][item.code] = item;
+        });
+        const dates = Object.keys(byDate).sort();
+
+        if (!dates.length) {
+            document.getElementById('rangeEmptyMsg').style.display = '';
+            document.getElementById('rangeTableHead').innerHTML = '';
+            document.getElementById('rangeTableBody').innerHTML = '';
+            return;
+        }
+        document.getElementById('rangeEmptyMsg').style.display = 'none';
+
+        // 코드별 최신 등장 정보(이름/가격/등락률) — 날짜 desc 정렬이므로 첫 등장이 최신
+        const latestSeenMap = {};
+        [...rangeRaw].sort((a, b) => b.date.localeCompare(a.date)).forEach(item => {
+            if (!(item.code in latestSeenMap)) latestSeenMap[item.code] = item;
+        });
+        const codes = Object.keys(latestSeenMap).sort((a, b) => {
+            const aBest = Math.min(...dates.map(d => (byDate[d][a] ? byDate[d][a].rank : 999)));
+            const bBest = Math.min(...dates.map(d => (byDate[d][b] ? byDate[d][b].rank : 999)));
+            return aBest - bBest;
+        });
+
+        document.getElementById('rangeTableHead').innerHTML = `
+            <th>종목명 (코드)</th>
+            ${dates.map(d => `<th class="text-center">${d.slice(5)}</th>`).join('')}
+            <th class="text-end">최신 현재가</th>
+            <th class="text-end">최신 등락률</th>
+            <th class="text-end">등장횟수</th>
+            <th class="text-end">👀HTS일수</th>
+            <th class="text-end">⭐관심등록일수</th>
+        `;
+
+        document.getElementById('rangeTableBody').innerHTML = codes.map(code => {
+            const latest = latestSeenMap[code];
+            const appearances = dates.filter(d => byDate[d][code]).length;
+            const htsDays = dates.filter(d => byDate[d][code] && byDate[d][code].hts).length;
+            const interestDays = dates.filter(d => byDate[d][code] && byDate[d][code].top_interest).length;
+            const priceNum = latest.price ? parseInt(latest.price) : null;
+            const price = priceNum !== null ? priceNum.toLocaleString() : '-';
+            const rate = latest.change_rate !== null && latest.change_rate !== undefined ? parseFloat(latest.change_rate) : null;
+            const rateClass = rate > 0 ? 'up-rate' : (rate < 0 ? 'down-rate' : '');
+            const rateSign = rate > 0 ? '+' : '';
+            const displayName = latest.name || '(이름 없음)';
+
+            const dateCells = dates.map(d => {
+                const item = byDate[d][code];
+                const order = item ? item.rank : 999;
+                if (!item) return `<td class="text-center" data-order="${order}"><span class="text-muted">-</span></td>`;
+                const rankBadge = `<span class="badge rank-badge ${rangeRankBadgeClass(item.rank)}">${item.rank}위</span>`;
+                const htsIcon = item.hts ? `<span class="interest-icon" title="HTS조회상위20종목에도 등장">👀</span>` : '';
+                const interestIcon = item.top_interest ? `<span class="interest-icon" title="관심종목등록 상위에도 등장">⭐</span>` : '';
+                return `<td class="text-center" data-order="${order}">${rankBadge}${htsIcon}${interestIcon}</td>`;
+            }).join('');
+
+            return `
+                <tr>
+                    <td>
+                        <a href="https://finance.naver.com/item/main.nhn?code=${code}" target="_blank" class="ticker-link">
+                            ${displayName} <small class="text-muted">(${code})</small>
+                        </a>
+                        <button class="memo-icon-btn" onclick='openStockMemo(${JSON.stringify(code)}, ${JSON.stringify(latest.name || "")})' title="메모">📝</button>
+                    </td>
+                    ${dateCells}
+                    <td class="text-end">${price}${price !== '-' ? '원' : ''}</td>
+                    <td class="text-end">${rate !== null ? `<span class="${rateClass}">${rateSign}${rate}%</span>` : '-'}</td>
+                    <td class="text-end">${appearances}회</td>
+                    <td class="text-end">${htsDays}일</td>
+                    <td class="text-end">${interestDays}일</td>
+                </tr>`;
+        }).join('');
+
+        rangeTable = $('#gainersRangeTable').DataTable({
+            order: [], pageLength: 100, scrollX: true,
+            language: { search: "결과 내 검색:", lengthMenu: "_MENU_ 개씩 보기", info: "총 _TOTAL_ 건 중 _START_~_END_ 표시" }
+        });
+        filterRangeByName();
+    }
+
+    async function loadRange() {
+        const dateFrom = document.getElementById('rangeFrom').value;
+        const dateTo = document.getElementById('rangeTo').value;
+        if (!dateFrom || !dateTo) { alert('시작일/종료일을 선택하세요.'); return; }
+        document.getElementById('update-timer').textContent = '조회 중...';
+
+        try {
+            const res = await fetch(`api/top-gainers/history/range?date_from=${dateFrom}&date_to=${dateTo}`);
+            const result = await res.json();
+            if (result.status !== 'success') {
+                document.getElementById('update-timer').textContent = '조회 실패: ' + result.message;
+                return;
+            }
+            rangeRaw = result.data || [];
+            renderRangeMatrix();
+            document.getElementById('update-timer').textContent = `구간: ${dateFrom} ~ ${dateTo} · 종목 ${new Set(rangeRaw.map(r => r.code)).size}개 · ${new Date().toLocaleTimeString()}`;
+        } catch (e) {
+            console.error(e);
+            document.getElementById('update-timer').textContent = '조회 중 오류 발생';
+        }
+    }
+
     async function fetchNow() {
         if (!confirm('KIS API를 호출하여 상승률 순위 스냅샷을 지금 수집하시겠습니까?\n(현재 시간대 데이터는 덮어씌워집니다)')) return;
 
@@ -287,6 +448,13 @@
         const nowHour = new Date().getHours();
         const slot = [9, 12, 15, 18].reduce((a, b) => (nowHour >= b ? b : a), 9);
         document.getElementById('histHour').value = String(slot);
+
+        const today = new Date();
+        const weekAgo = new Date(today);
+        weekAgo.setDate(weekAgo.getDate() - 6);
+        document.getElementById('rangeFrom').value = weekAgo.toISOString().slice(0, 10);
+        document.getElementById('rangeTo').value = today.toISOString().slice(0, 10);
+
         loadLive();
     });
 </script>

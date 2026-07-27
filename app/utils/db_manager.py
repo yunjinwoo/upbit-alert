@@ -810,6 +810,52 @@ def get_top_gainers_history(date: str = None, hour: int = None):
     return [dict(row) for row in rows]
 
 
+def get_top_gainers_range(date_from: str, date_to: str):
+    """상승률 순위 구간(date_from~date_to) 추이 조회 — 날짜별 종목 매트릭스용.
+    하루 4번(9:10/12:10/15:10/18:10) 스냅샷 중 그날 가장 높은 순위(가장 작은 rank) 1건으로 집계한다.
+    같은 날짜에 HTS조회상위20종목/관심종목등록 상위에도 있었는지(hts/top_interest 불린)를 함께 표시해
+    "여러 순위에서 동시에 포착됐는지" 관심도를 볼 수 있게 한다.
+    반환: [{date, code, name, rank, price, change_rate, volume, hts, top_interest}, ...] (날짜 오름차순, 날짜 내 순위 오름차순)
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT * FROM stock_top_gainers_hourly
+        WHERE date BETWEEN ? AND ?
+        ORDER BY date ASC, rank ASC
+    ''', (date_from, date_to))
+    rows = cursor.fetchall()
+
+    cursor.execute('''
+        SELECT DISTINCT date, code FROM stock_hts_top_view_hourly
+        WHERE date BETWEEN ? AND ?
+    ''', (date_from, date_to))
+    hts_set = {(r['date'], r['code']) for r in cursor.fetchall()}
+
+    cursor.execute('''
+        SELECT DISTINCT date, code FROM stock_top_interest_daily
+        WHERE date BETWEEN ? AND ?
+    ''', (date_from, date_to))
+    interest_set = {(r['date'], r['code']) for r in cursor.fetchall()}
+
+    conn.close()
+
+    # 날짜별로 이미 rank 오름차순이므로, (date, code) 조합에서 첫 등장이 그날의 최고 순위
+    best = {}
+    for r in rows:
+        key = (r['date'], r['code'])
+        if key not in best:
+            item = dict(r)
+            item['hts'] = key in hts_set
+            item['top_interest'] = key in interest_set
+            best[key] = item
+
+    result = list(best.values())
+    result.sort(key=lambda r: (r['date'], r['rank']))
+    return result
+
+
 def get_hts_top_view_history(date: str = None, limit_snapshots: int = 24):
     """HTS조회상위20종목 이력 조회. date 지정 시 해당 날짜 전체, 미지정 시 최근 limit_snapshots개 (date,hour) 스냅샷."""
     conn = sqlite3.connect(DB_PATH)
