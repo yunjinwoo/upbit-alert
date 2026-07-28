@@ -32,6 +32,7 @@ from app.utils.db_manager import (
     get_stock_memo_grades, update_stock_memo_grade, search_stock_codes, bump_stock_memo,
     get_top_gainers_history, get_top_gainers_snapshot_dates, get_top_gainers_range,
     get_top_gainers_export, sync_upsert_top_gainers,
+    get_quick_links, add_quick_link, delete_quick_link,
 )
 from app.core.stock_monitor import (
     fetch_market_cap_ranking, fetch_investor_trend, fetch_sector_index_daily, fetch_stock_investor_daily,
@@ -70,6 +71,35 @@ def raw_data_view():
 def date_column_convert_view():
     """웹페이지에서 복사한 표 데이터 맨 앞에 날짜 열을 붙여 구글시트 붙여넣기용으로 변환하는 페이지."""
     return render_template('date_column_convert.html', active_page='date_column_convert')
+
+@app.route('/api/quick-links', methods=['GET'])
+def get_quick_links_api():
+    """바로가기 링크 목록 조회"""
+    data = get_quick_links()
+    return jsonify({'status': 'success', 'count': len(data), 'data': data})
+
+@app.route('/api/quick-links', methods=['POST'])
+def add_quick_link_api():
+    """바로가기 링크 추가"""
+    body = request.get_json(silent=True) or {}
+    url = (body.get('url') or '').strip()
+    label = (body.get('label') or '').strip()
+    if not url:
+        return jsonify({'status': 'error', 'message': 'url이 필요합니다.'}), 400
+    if not url.startswith(('http://', 'https://')):
+        url = 'https://' + url
+    if not label:
+        label = url
+    new_id = add_quick_link(label, url)
+    return jsonify({'status': 'success', 'id': new_id, 'label': label, 'url': url})
+
+@app.route('/api/quick-links/<int:link_id>', methods=['DELETE'])
+def delete_quick_link_api(link_id):
+    """바로가기 링크 삭제"""
+    deleted = delete_quick_link(link_id)
+    if not deleted:
+        return jsonify({'status': 'error', 'message': '해당 링크를 찾을 수 없습니다.'}), 404
+    return jsonify({'status': 'success', 'deleted': deleted})
 
 @app.route('/market-cap')
 def market_cap_view():
