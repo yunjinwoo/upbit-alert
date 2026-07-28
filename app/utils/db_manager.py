@@ -279,6 +279,16 @@ def init_db():
         )
     ''')
 
+    # 바로가기 링크 (날짜열 변환 페이지 — 데이터 복사해오는 원본 웹페이지 즐겨찾기용)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS quick_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            label TEXT,
+            url TEXT,
+            timestamp TEXT
+        )
+    ''')
+
     # 스케줄링 작업 실행 이력 (동기화 관리 페이지 "처리 로그"용)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS job_run_log (
@@ -2477,3 +2487,41 @@ def get_stock_investor_raw(limit_dates: int = 30) -> list:
     rows = cursor.fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# ──────────────────────────────────────────────
+# 바로가기 링크 (날짜열 변환 페이지 — 데이터 복사해오는 원본 웹페이지 즐겨찾기)
+# ──────────────────────────────────────────────
+
+def get_quick_links() -> list:
+    """저장된 바로가기 링크 전체 조회 (등록순)"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM quick_links ORDER BY id ASC')
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def add_quick_link(label: str, url: str) -> int:
+    """바로가기 링크 추가. 반환: 새로 생성된 id"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('INSERT INTO quick_links (label, url, timestamp) VALUES (?, ?, ?)', (label, url, timestamp))
+    conn.commit()
+    new_id = cursor.lastrowid
+    conn.close()
+    return new_id
+
+
+def delete_quick_link(link_id: int) -> int:
+    """바로가기 링크 삭제. 반환: 삭제된 행 수(0 또는 1)"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM quick_links WHERE id = ?', (link_id,))
+    conn.commit()
+    deleted = cursor.rowcount
+    conn.close()
+    return deleted
