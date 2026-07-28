@@ -49,11 +49,11 @@
             <div class="d-flex align-items-end gap-2 flex-wrap">
                 <div>
                     <label class="form-label mb-1 small">이름 (선택)</label>
-                    <input type="text" id="qlLabel" class="form-control form-control-sm" style="width:160px" placeholder="예: 등락률 순위">
+                    <input type="text" id="qlLabel" class="form-control form-control-sm" style="width:160px" placeholder="예: 등락률 순위" onpaste="handleQuickLinkPaste(event)">
                 </div>
                 <div>
-                    <label class="form-label mb-1 small">주소</label>
-                    <input type="text" id="qlUrl" class="form-control form-control-sm" style="width:340px" placeholder="https://...">
+                    <label class="form-label mb-1 small">주소 <span class="text-muted">(링크나 "이름 주소" 붙여넣으면 자동 분리)</span></label>
+                    <input type="text" id="qlUrl" class="form-control form-control-sm" style="width:340px" placeholder="https://..." onpaste="handleQuickLinkPaste(event)">
                 </div>
                 <button class="btn btn-primary btn-sm" onclick="addQuickLink()">추가</button>
             </div>
@@ -239,6 +239,35 @@
 
     function escapeHtml(s) {
         return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    // "주소" 입력칸에 붙여넣을 때 이름+주소를 한 번에 채운다.
+    // 1) 웹페이지에서 복사한 링크(하이퍼링크)면 원본 HTML의 <a> 텍스트/href를 그대로 사용
+    // 2) "이름 https://..." 처럼 텍스트 안에 URL이 섞여 있으면 URL 앞부분을 이름으로 분리
+    // 3) 그 외(URL만 있는 경우 등)엔 기본 붙여넣기 동작을 그대로 둠
+    function handleQuickLinkPaste(event) {
+        const html = event.clipboardData && event.clipboardData.getData('text/html');
+        if (html) {
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            const a = doc.querySelector('a[href]');
+            if (a && a.href) {
+                event.preventDefault();
+                document.getElementById('qlUrl').value = a.href;
+                const label = a.textContent.replace(/\s+/g, ' ').trim();
+                if (label) document.getElementById('qlLabel').value = label;
+                return;
+            }
+        }
+
+        const text = (event.clipboardData && event.clipboardData.getData('text/plain') || '').trim();
+        const urlMatch = text.match(/https?:\/\/\S+/);
+        if (urlMatch && text.length > urlMatch[0].length) {
+            event.preventDefault();
+            const label = text.slice(0, urlMatch.index).trim().replace(/[\t:\-–—]+$/, '').trim();
+            document.getElementById('qlUrl').value = urlMatch[0];
+            if (label) document.getElementById('qlLabel').value = label;
+        }
+        // else: URL만 붙여넣은 경우 등은 기본 동작(그대로 입력) 유지
     }
 
     function renderQuickLinks(links) {
