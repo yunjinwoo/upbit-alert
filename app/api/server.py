@@ -84,14 +84,17 @@ def add_quick_link_api():
     body = request.get_json(silent=True) or {}
     url = (body.get('url') or '').strip()
     label = (body.get('label') or '').strip()
+    side = body.get('side') or 'left'
+    if side not in ('left', 'right'):
+        side = 'left'
     if not url:
         return jsonify({'status': 'error', 'message': 'url이 필요합니다.'}), 400
     if not url.startswith(('http://', 'https://')):
         url = 'https://' + url
     if not label:
         label = url
-    new_id = add_quick_link(label, url)
-    return jsonify({'status': 'success', 'id': new_id, 'label': label, 'url': url})
+    new_id = add_quick_link(label, url, side)
+    return jsonify({'status': 'success', 'id': new_id, 'label': label, 'url': url, 'side': side})
 
 @app.route('/api/quick-links/<int:link_id>', methods=['DELETE'])
 def delete_quick_link_api(link_id):
