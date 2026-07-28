@@ -66,6 +66,11 @@ def raw_data_view():
     """주식 원본 데이터 확인 페이지를 보여줍니다."""
     return render_template('raw_data.html', active_page='raw_data')
 
+@app.route('/date-column-convert')
+def date_column_convert_view():
+    """웹페이지에서 복사한 표 데이터 맨 앞에 날짜 열을 붙여 구글시트 붙여넣기용으로 변환하는 페이지."""
+    return render_template('date_column_convert.html', active_page='date_column_convert')
+
 @app.route('/market-cap')
 def market_cap_view():
     """일별 시가총액 추이 페이지를 보여줍니다."""
