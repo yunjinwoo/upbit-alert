@@ -324,6 +324,8 @@ def init_db():
         # 메모 정렬 기준을 작성일이 아닌 "마지막으로 손댄 시각"으로 바꾸기 위한 컬럼
         # (중요한 메모를 위로 올리는 용도) — 기존 행은 created_at 값으로 채워 넣음
         'ALTER TABLE stock_memo ADD COLUMN updated_at TEXT',
+        # 바로가기 링크를 좌/우 영역으로 나눠 보여주기 위한 컬럼 (기존 행은 기본값 left)
+        'ALTER TABLE quick_links ADD COLUMN side TEXT DEFAULT "left"',
     ]
     for sql in migrations:
         try:
@@ -2504,12 +2506,12 @@ def get_quick_links() -> list:
     return [dict(r) for r in rows]
 
 
-def add_quick_link(label: str, url: str) -> int:
-    """바로가기 링크 추가. 반환: 새로 생성된 id"""
+def add_quick_link(label: str, url: str, side: str = 'left') -> int:
+    """바로가기 링크 추가. side: 'left' 또는 'right' (화면에서 좌/우 영역 구분용). 반환: 새로 생성된 id"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    cursor.execute('INSERT INTO quick_links (label, url, timestamp) VALUES (?, ?, ?)', (label, url, timestamp))
+    cursor.execute('INSERT INTO quick_links (label, url, side, timestamp) VALUES (?, ?, ?, ?)', (label, url, side, timestamp))
     conn.commit()
     new_id = cursor.lastrowid
     conn.close()

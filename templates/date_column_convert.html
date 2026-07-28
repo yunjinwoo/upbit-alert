@@ -40,9 +40,11 @@
 
     <div class="card-panel py-3">
         <div class="d-flex align-items-center flex-wrap gap-2">
-            <div id="quickLinksList" class="d-flex flex-wrap gap-2">
+            <div id="quickLinksLeft" class="d-flex flex-wrap gap-2">
                 <span class="text-muted small">등록된 바로가기가 없습니다.</span>
             </div>
+            <div class="vr mx-1" style="align-self:stretch"></div>
+            <div id="quickLinksRight" class="d-flex flex-wrap gap-2"></div>
             <button class="btn btn-outline-primary btn-sm ms-auto" onclick="toggleQuickLinkForm()">+ 추가</button>
         </div>
         <div id="quickLinkForm" class="mt-3" style="display:none">
@@ -54,6 +56,19 @@
                 <div>
                     <label class="form-label mb-1 small">주소 <span class="text-muted">(링크나 "이름 주소" 붙여넣으면 자동 분리)</span></label>
                     <input type="text" id="qlUrl" class="form-control form-control-sm" style="width:340px" placeholder="https://..." onpaste="handleQuickLinkPaste(event)">
+                </div>
+                <div>
+                    <label class="form-label mb-1 small">위치</label>
+                    <div class="d-flex gap-2">
+                        <div class="form-check">
+                            <input type="radio" name="qlSide" id="qlSideLeft" class="form-check-input" value="left" checked>
+                            <label class="form-check-label small" for="qlSideLeft">왼쪽</label>
+                        </div>
+                        <div class="form-check">
+                            <input type="radio" name="qlSide" id="qlSideRight" class="form-check-input" value="right">
+                            <label class="form-check-label small" for="qlSideRight">오른쪽</label>
+                        </div>
+                    </div>
                 </div>
                 <button class="btn btn-primary btn-sm" onclick="addQuickLink()">추가</button>
             </div>
@@ -270,10 +285,10 @@
         // else: URL만 붙여넣은 경우 등은 기본 동작(그대로 입력) 유지
     }
 
-    function renderQuickLinks(links) {
-        const el = document.getElementById('quickLinksList');
+    function renderQuickLinkGroup(elId, links) {
+        const el = document.getElementById(elId);
         if (!links.length) {
-            el.innerHTML = '<span class="text-muted small">등록된 바로가기가 없습니다.</span>';
+            el.innerHTML = elId === 'quickLinksLeft' ? '<span class="text-muted small">등록된 바로가기가 없습니다.</span>' : '';
             return;
         }
         el.innerHTML = links.map(l => `
@@ -282,6 +297,11 @@
                 <button class="quick-link-del" onclick="deleteQuickLink(${l.id})" title="삭제">✕</button>
             </span>
         `).join('');
+    }
+
+    function renderQuickLinks(links) {
+        renderQuickLinkGroup('quickLinksLeft', links.filter(l => (l.side || 'left') !== 'right'));
+        renderQuickLinkGroup('quickLinksRight', links.filter(l => l.side === 'right'));
     }
 
     async function loadQuickLinks() {
@@ -299,13 +319,14 @@
         const labelInput = document.getElementById('qlLabel');
         const url = urlInput.value.trim();
         const label = labelInput.value.trim();
+        const side = document.querySelector('input[name="qlSide"]:checked').value;
         if (!url) { alert('주소를 입력하세요.'); return; }
 
         try {
             const res = await fetch('api/quick-links', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url, label }),
+                body: JSON.stringify({ url, label, side }),
             });
             const result = await res.json();
             if (result.status !== 'success') { alert('추가 실패: ' + result.message); return; }
