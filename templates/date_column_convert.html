@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>날짜열 변환</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f4f7f6; font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; }
+        .dashboard-container { margin-top: 30px; margin-bottom: 50px; }
+        .card-panel { background: white; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); padding: 20px 24px; margin-bottom: 20px; }
+        .card-panel h5 { font-weight: 700; color: #1a1a2e; border-bottom: 2px solid #4da6ff; padding-bottom: 6px; margin-bottom: 16px; }
+        textarea.paste-box { font-family: 'Consolas', 'D2Coding', monospace; font-size: 0.82rem; white-space: pre; }
+        .main-navbar { background-color: #1a1a2e; }
+        .main-navbar .navbar-brand { color: #fff; font-weight: bold; }
+        .main-navbar .nav-link { color: rgba(255,255,255,0.75) !important; font-size: 0.82rem; }
+        .main-navbar .nav-link:hover, .main-navbar .nav-link.active { color: #fff !important; }
+        .main-navbar .nav-link.active { border-bottom: 2px solid #4da6ff; }
+    </style>
+</head>
+<body>
+
+{% include '_navbar.html' %}
+
+<div class="container dashboard-container">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h2>🗓 날짜열 변환</h2>
+    </div>
+
+    <div class="card-panel">
+        <p class="small text-muted mb-0">웹페이지에서 표를 복사해 붙여넣으면, 각 줄 맨 앞에 날짜 열을 하나 추가해서 구글시트에 바로 붙여넣을 수 있는 형태로 만들어줍니다.
+        빈 줄이나 탭만 있는 깨진 줄은 자동으로 제거되고, 값 하나만 툭 떨어져 다른 줄로 넘어간 경우(그래프 값이 뒤에 떨어지거나, 테마명이 앞에 떨어지는 경우 모두)엔 어느 쪽 패턴인지 자동 판별해서 원래 줄에 이어붙입니다.</p>
+        <p class="small text-muted mb-0 mt-2">🔗 원본 페이지의 링크(종목/테마/업종 클릭 시 이동하는 주소)는 <b>Ctrl+V로 직접 붙여넣을 때만</b> 함께 추출되어 <code>=HYPERLINK(...)</code> 수식으로 값에 심어집니다 — 구글시트에 붙여넣으면 그대로 클릭 가능한 링크가 됩니다. (타이핑하거나 다른 곳에서 복사해온 텍스트는 링크 정보가 없어 일반 텍스트로 처리됩니다)</p>
+    </div>
+
+    <div class="row g-3">
+        <div class="col-md-6">
+            <div class="card-panel h-100">
+                <h5>1️⃣ 원본 붙여넣기</h5>
+                <div class="mb-3 d-flex align-items-end gap-2 flex-wrap">
+                    <div>
+                        <label class="form-label mb-1 small">날짜</label>
+                        <input type="date" id="dateInput" class="form-control form-control-sm" style="width:150px">
+                    </div>
+                    <div>
+                        <label class="form-label mb-1 small">떨어진 줄 병합 방식</label>
+                        <select id="mergeMode" class="form-select form-select-sm" style="width:220px">
+                            <option value="auto">자동 감지 (추천)</option>
+                            <option value="suffix">값이 뒤에 떨어짐 (그래프값 등)</option>
+                            <option value="prefix">값이 앞에 떨어짐 (테마명 등)</option>
+                            <option value="none">병합 안 함</option>
+                        </select>
+                    </div>
+                    <div class="form-check mb-1">
+                        <input type="checkbox" id="keepLinks" class="form-check-input" checked>
+                        <label class="form-check-label small" for="keepLinks">🔗 링크 유지</label>
+                    </div>
+                    <button class="btn btn-primary btn-sm" onclick="convert()">변환 →</button>
+                    <button class="btn btn-outline-secondary btn-sm" onclick="clearAll()">초기화</button>
+                </div>
+                <textarea id="inputBox" class="form-control paste-box" rows="18" placeholder="웹페이지에서 복사한 표를 여기에 붙여넣으세요 (Ctrl+V)" onpaste="capturePasteHtml(event)"></textarea>
+                <div id="linkStatus" class="small text-muted mt-1" style="display:none"></div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card-panel h-100">
+                <h5>2️⃣ 변환 결과 <span id="lineCount" class="badge bg-secondary ms-1" style="display:none"></span></h5>
+                <div class="mb-3">
+                    <button class="btn btn-success btn-sm" onclick="copyOutput()">📋 복사</button>
+                    <span id="copyMsg" class="text-success small ms-2" style="display:none">복사되었습니다!</span>
+                </div>
+                <textarea id="outputBox" class="form-control paste-box" rows="18" readonly placeholder="변환 결과가 여기 표시됩니다"></textarea>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    // 값이 하나뿐인 줄(테마명·그래프값 등)이 순수 숫자/퍼센트(예: "53%", "-1.10%")면 그래프값으로 보고
+    // 바로 윗줄 끝에 이어붙이고, 글자가 섞여 있으면(예: "마리화나(대마)") 이름으로 보고 다음 줄 앞에 붙인다.
+    const PERCENT_RE = /^[+\-]?\d+(\.\d+)?%$/;
+
+    // Ctrl+V로 직접 붙여넣을 때만 클립보드의 text/html이 함께 들어옴 — 여기서 원본 HTML을 따로 보관해뒀다가
+    // 변환 시 <a href> 목록을 추출해 링크 맵을 만든다. 타이핑하거나 다른 곳에서 복사해온 텍스트는 해당 없음.
+    let lastPastedHtml = null;
+
+    function capturePasteHtml(event) {
+        const html = event.clipboardData && event.clipboardData.getData('text/html');
+        lastPastedHtml = html || null; // 새로 붙여넣을 때마다 이전 링크 정보는 덮어씀
+    }
+
+    // 붙여넣은 HTML에서 <a href> 텍스트→주소 맵을 만든다. 텍스트가 같은 링크가 여러 번 나오면 마지막 것을 사용.
+    function buildLinkMap(html) {
+        const map = {};
+        if (!html) return map;
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        doc.querySelectorAll('a[href]').forEach(a => {
+            const text = a.textContent.replace(/\s+/g, ' ').trim();
+            if (text) map[text] = a.href;
+        });
+        return map;
+    }
+
+    // 필드 값에 링크 맵의 앵커 텍스트가 포함돼 있으면(예: "상승 파이온엑스"에 "파이온엑스"가 포함)
+    // 원문 전체를 표시 텍스트로 쓰는 =HYPERLINK(...) 수식으로 바꾼다. 여러 후보가 매치되면 가장 긴 텍스트 우선.
+    function linkifyField(value, linkMap) {
+        const candidates = Object.keys(linkMap)
+            .filter(text => value.includes(text))
+            .sort((a, b) => b.length - a.length);
+        if (!candidates.length) return value;
+        const href = linkMap[candidates[0]];
+        const esc = s => s.replace(/"/g, '""');
+        return `=HYPERLINK("${esc(href)}","${esc(value)}")`;
+    }
+
+    // 빈 줄 제거 + 값이 하나뿐인 "떨어진 줄"을 원래 줄에 병합.
+    // mode: 'auto'(내용으로 자동 판별) | 'suffix'(항상 윗줄에 붙임) | 'prefix'(항상 다음 줄에 붙임) | 'none'(병합 안 함)
+    function normalizeAndMerge(lines, mode, linkMap) {
+        const merged = [];
+        let pendingPrefix = null;
+        for (const line of lines) {
+            const fields = line.split('\t').map(f => f.trim()).filter(f => f.length > 0);
+            if (fields.length === 0) continue; // 빈 줄/탭만 있는 줄은 건너뜀
+
+            if (fields.length === 1 && mode !== 'none') {
+                const value = fields[0];
+                const asSuffix = mode === 'suffix' || (mode === 'auto' && PERCENT_RE.test(value));
+                if (mode === 'prefix' || (mode === 'auto' && !asSuffix)) {
+                    pendingPrefix = value; // 다음 줄(본문) 앞에 붙일 예정으로 보류
+                    continue;
+                }
+                if (asSuffix && merged.length > 0) {
+                    merged[merged.length - 1].push(value); // 바로 윗줄 끝에 이어붙임
+                    continue;
+                }
+            }
+
+            merged.push(pendingPrefix !== null ? [pendingPrefix, ...fields] : fields.slice());
+            pendingPrefix = null;
+        }
+
+        if (linkMap && Object.keys(linkMap).length) {
+            merged.forEach(row => {
+                for (let i = 0; i < row.length; i++) row[i] = linkifyField(row[i], linkMap);
+            });
+        }
+
+        return merged.map(row => row.join('\t'));
+    }
+
+    function convert() {
+        const date = document.getElementById('dateInput').value;
+        if (!date) { alert('날짜를 선택하세요.'); return; }
+
+        const mode = document.getElementById('mergeMode').value;
+        const keepLinks = document.getElementById('keepLinks').checked;
+        const linkMap = keepLinks ? buildLinkMap(lastPastedHtml) : {};
+
+        const raw = document.getElementById('inputBox').value;
+        const lines = raw.split(/\r?\n/);
+        const merged = normalizeAndMerge(lines, mode, linkMap);
+        const outputLines = merged.map(line => `${date}\t${line}`);
+
+        document.getElementById('outputBox').value = outputLines.join('\n');
+        const countBadge = document.getElementById('lineCount');
+        countBadge.textContent = `${outputLines.length}행`;
+        countBadge.style.display = outputLines.length ? '' : 'none';
+
+        const linkStatus = document.getElementById('linkStatus');
+        const linkCount = Object.keys(linkMap).length;
+        if (keepLinks && linkCount) {
+            linkStatus.textContent = `🔗 링크 ${linkCount}개 발견 — 해당 값은 =HYPERLINK(...) 수식으로 변환됩니다.`;
+            linkStatus.style.display = '';
+        } else if (keepLinks) {
+            linkStatus.textContent = 'ℹ️ 붙여넣은 내용에서 링크를 찾지 못했습니다 (Ctrl+V로 직접 붙여넣었는지 확인하세요).';
+            linkStatus.style.display = '';
+        } else {
+            linkStatus.style.display = 'none';
+        }
+    }
+
+    function clearAll() {
+        document.getElementById('inputBox').value = '';
+        document.getElementById('outputBox').value = '';
+        document.getElementById('lineCount').style.display = 'none';
+        document.getElementById('linkStatus').style.display = 'none';
+        lastPastedHtml = null;
+    }
+
+    async function copyOutput() {
+        const output = document.getElementById('outputBox');
+        if (!output.value) { alert('먼저 변환을 실행하세요.'); return; }
+        try {
+            await navigator.clipboard.writeText(output.value);
+        } catch (e) {
+            output.select();
+            document.execCommand('copy');
+        }
+        const msg = document.getElementById('copyMsg');
+        msg.style.display = '';
+        setTimeout(() => { msg.style.display = 'none'; }, 1500);
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        document.getElementById('dateInput').value = new Date().toISOString().slice(0, 10);
+    });
+</script>
+</body>
+</html>
