@@ -41,6 +41,8 @@
         .memo-card .memo-bump-btn { background: none; border: none; color: #f59e0b; font-size: 0.7rem; padding: 0; margin-right: 8px; }
         .memo-card .memo-bump-btn:hover { text-decoration: underline; }
         .empty-col { color: #cbd5e1; font-size: 0.78rem; text-align: center; padding: 20px 0; }
+        .memo-card .memo-chart-btn { background: none; border: none; padding: 0 2px; font-size: 0.78rem; cursor: pointer; opacity: 0.6; }
+        .memo-card .memo-chart-btn:hover { opacity: 1; }
     </style>
 </head>
 <body>
@@ -86,6 +88,17 @@
         </div>
     </div>
 
+    <!-- 차트 -->
+    <div class="card-panel mb-3">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h6 class="mb-0" style="font-size:0.9rem">📈 차트 <span id="chartStockLabel" class="text-muted small fw-normal"></span></h6>
+            <a id="pageChartTvLink" href="#" target="_blank" rel="noopener" class="small text-muted" style="display:none">🔗 TradingView에서 보기</a>
+        </div>
+        <div id="pageChartWidget" style="height:360px">
+            <div class="text-muted small p-3">메모 카드의 📈 아이콘을 클릭하면 차트가 표시됩니다.</div>
+        </div>
+    </div>
+
     <div class="memo-columns" id="memoColumns">
         <div class="text-muted small p-3">로딩 중...</div>
     </div>
@@ -105,6 +118,41 @@
             `<a href="${url}" target="_blank" rel="noopener">${url}</a>`
         );
     }
+
+    // 메모 카드의 📈 아이콘 클릭 시 해당 종목 차트 표시. ensureTradingViewScript는
+    // _stock_memo.html(공용 메모 모달)에서 로드해 window에 노출해둔 걸 재사용 — tv.js 중복 로드 방지.
+    // 같은 종목을 다시 클릭하면 위젯을 재생성하지 않고 그대로 둬서 지표/줌 등을 유지한다.
+    let _pageChartWidget = null;
+    let _pageChartCode = null;
+
+    window.selectMemoChart = function(code, name) {
+        document.getElementById('chartStockLabel').textContent = `${name} (${code})`;
+        const tvLink = document.getElementById('pageChartTvLink');
+        tvLink.href = `https://www.tradingview.com/chart/?symbol=KRX%3A${code}`;
+        tvLink.style.display = '';
+        if (_pageChartCode === code && _pageChartWidget) return; // 같은 종목이면 그대로 유지
+        ensureTradingViewScript(() => {
+            const widgetDiv = document.getElementById('pageChartWidget');
+            if (_pageChartWidget && typeof _pageChartWidget.remove === 'function') {
+                _pageChartWidget.remove();
+            }
+            widgetDiv.innerHTML = '';
+            _pageChartWidget = new TradingView.widget({
+                container_id: 'pageChartWidget',
+                autosize: true,
+                symbol: `KRX:${code}`,
+                interval: 'D',
+                timezone: 'Asia/Seoul',
+                theme: 'light',
+                style: '1',
+                locale: 'kr',
+                hide_top_toolbar: false,
+                hide_legend: true,
+                allow_symbol_change: false,
+            });
+            _pageChartCode = code;
+        });
+    };
 
     async function loadGrades() {
         try {
@@ -148,6 +196,7 @@
                                     <span>
                                         <a href="https://finance.naver.com/item/main.naver?code=${r.code}" target="_blank" class="memo-card-name">${escHtml(r.name)}</a>
                                         <span class="memo-card-code">(${r.code})</span>
+                                        <button class="memo-chart-btn" onclick='selectMemoChart(${JSON.stringify(r.code)}, ${JSON.stringify(r.name || "")})' title="차트 보기">📈</button>
                                     </span>
                                     <span>
                                         <button class="memo-bump-btn" onclick="bumpMemo(${r.id})" title="맨 위로 올리기">⬆ 중요</button>
