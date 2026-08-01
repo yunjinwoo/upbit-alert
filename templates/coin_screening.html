@@ -45,7 +45,8 @@
         .change-neg { color: #1d4ed8; font-weight: 600; }
         .badge-on { background: #dcfce7; color: #15803d; font-size: 0.7rem; padding: 2px 7px; border-radius: 10px; }
         .badge-off { color: #cbd5e1; font-size: 0.7rem; }
-        .chart-link { color: #4da6ff; text-decoration: none; font-size: 0.78rem; }
+        .chart-link { color: #4da6ff; text-decoration: none; font-size: 0.78rem; margin-right: 8px; }
+        .chart-link:last-child { margin-right: 0; }
         .chart-link:hover { text-decoration: underline; }
         .loading-row td { text-align: center; color: #94a3b8; padding: 30px; }
         .empty-val { color: #cbd5e1; }
@@ -188,6 +189,7 @@
             const changeSign = r.change_rate > 0 ? '+' : '';
             const code = r.ticker.replace('KRW-', '');
             const tvUrl = `https://www.tradingview.com/chart/?symbol=KRW%3A${code}&interval=240`;
+            const upbitUrl = `https://upbit.com/exchange?code=CRIX.UPBIT.${r.ticker}`;
             return `
                 <tr>
                     <td>
@@ -200,7 +202,10 @@
                     <td style="text-align:center">${badge(r.near_ma200, `${r.ma200_dist_pct > 0 ? '+' : ''}${r.ma200_dist_pct}%`)}</td>
                     <td style="text-align:center">${badge(r.above_cloud, '구름위')}</td>
                     <td style="text-align:center">${badge(r.breakout_4h, `x${r.breakout_vol_ratio}`)}</td>
-                    <td style="text-align:center"><a class="chart-link" href="${tvUrl}" target="_blank" rel="noopener">📈 4H</a></td>
+                    <td style="text-align:center">
+                        <a class="chart-link" href="${tvUrl}" target="_blank" rel="noopener">📈 TV</a>
+                        <a class="chart-link" href="${upbitUrl}" target="_blank" rel="noopener">🪙 업비트</a>
+                    </td>
                 </tr>
             `;
         }).join('');
