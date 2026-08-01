@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>코인 스크리닝</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f4f7f6; font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; }
+        .main-navbar { background-color: #1a1a2e; }
+        .main-navbar .navbar-brand { color: #fff; font-weight: bold; }
+        .main-navbar .nav-link { color: rgba(255,255,255,0.75) !important; font-size: 0.82rem; }
+        .main-navbar .nav-link:hover,
+        .main-navbar .nav-link.active { color: #fff !important; }
+        .main-navbar .nav-link.active { border-bottom: 2px solid #4da6ff; }
+
+        .dashboard-container { margin-top: 24px; margin-bottom: 60px; }
+        .card-panel { background: white; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); padding: 16px 18px; }
+
+        .btn-search {
+            background: #1a1a2e; color: #fff; border: none; border-radius: 8px;
+            padding: 5px 16px; font-size: 0.83rem; cursor: pointer; font-weight: 600;
+        }
+        .btn-search:hover { background: #2d2d4e; }
+        .btn-search:disabled { opacity: 0.6; cursor: not-allowed; }
+
+        .filter-bar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
+        .filter-chip { display: flex; align-items: center; gap: 5px; font-size: 0.84rem; cursor: pointer; user-select: none; }
+        .filter-chip input { cursor: pointer; }
+        .filter-count { color: #94a3b8; font-size: 0.76rem; }
+
+        .screen-wrap { overflow-x: auto; }
+        table.screen-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+        .screen-table th {
+            background: #1a1a2e; color: #fff; padding: 7px 10px; text-align: right;
+            white-space: nowrap; font-weight: 600; cursor: pointer; user-select: none;
+            position: sticky; top: 0; z-index: 1;
+        }
+        .screen-table th:first-child, .screen-table td:first-child { text-align: left; }
+        .screen-table td { padding: 5px 10px; border-bottom: 1px solid #f1f5f9; text-align: right; white-space: nowrap; }
+        .screen-table tr:hover td { background: #f8fafc; }
+        .coin-name { font-weight: 600; color: #1e293b; }
+        .coin-ticker { font-size: 0.68rem; color: #94a3b8; font-family: monospace; }
+        .change-pos { color: #b91c1c; font-weight: 600; }
+        .change-neg { color: #1d4ed8; font-weight: 600; }
+        .badge-on { background: #dcfce7; color: #15803d; font-size: 0.7rem; padding: 2px 7px; border-radius: 10px; }
+        .badge-off { color: #cbd5e1; font-size: 0.7rem; }
+        .chart-link { color: #4da6ff; text-decoration: none; font-size: 0.78rem; }
+        .chart-link:hover { text-decoration: underline; }
+        .loading-row td { text-align: center; color: #94a3b8; padding: 30px; }
+        .empty-val { color: #cbd5e1; }
+    </style>
+</head>
+<body>
+
+{% include '_navbar.html' %}
+
+<div class="container-fluid dashboard-container px-4" style="max-width:1300px">
+
+    <div class="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-2">
+        <h2 class="mb-0" style="font-size:1.2rem; font-weight:700; color:#1a1a2e">🪙 코인 매매 후보 필터 (업비트, 4시간봉 기준)</h2>
+        <div class="d-flex align-items-center gap-2">
+            <span id="updatedAt" class="text-muted" style="font-size:0.78rem"></span>
+            <button class="btn-search" id="fetchBtn" onclick="fetchNow()">지금 수집</button>
+        </div>
+    </div>
+
+    <div class="card-panel">
+        <div class="filter-bar">
+            <label class="filter-chip">
+                <input type="checkbox" id="fBreakout" onchange="renderTable()"> 🚀 4시간봉 돌파
+            </label>
+            <label class="filter-chip">
+                <input type="checkbox" id="fCloud" onchange="renderTable()"> ☁️ 구름 위
+            </label>
+            <label class="filter-chip">
+                <input type="checkbox" id="fMa200" onchange="renderTable()"> 📍 200선 근접
+            </label>
+            <span class="filter-count" id="filterCount"></span>
+        </div>
+
+        <div class="screen-wrap">
+            <table class="screen-table" id="screenTable">
+                <thead>
+                    <tr>
+                        <th data-key="name" style="text-align:left">종목</th>
+                        <th data-key="price">현재가</th>
+                        <th data-key="change_rate">등락률(24h)</th>
+                        <th data-key="trade_value">거래대금(24h)</th>
+                        <th data-key="near_ma200" style="text-align:center">200선근접</th>
+                        <th data-key="above_cloud" style="text-align:center">구름위치</th>
+                        <th data-key="breakout_4h" style="text-align:center">돌파</th>
+                        <th style="text-align:center">차트</th>
+                    </tr>
+                </thead>
+                <tbody id="screenBody">
+                    <tr class="loading-row"><td colspan="8">로딩 중...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="mt-2 text-muted" style="font-size:0.72rem">
+            * 모든 지표는 4시간봉 기준(마지막 확정 캔들). 돌파 = 최근 20개 4시간봉 평균 대비 거래량 3배↑ + 캔들 등락률 2%↑이면서 직전 캔들은 아직 그렇지 않았던 "처음" 케이스.
+            &nbsp;|&nbsp; 200선근접 = 200이평선(4시간봉) 대비 ±3% 이내. &nbsp;|&nbsp; 구름위치 = 일목균형표(4시간봉) 구름대 상단 돌파 여부.
+            &nbsp;|&nbsp; 데이터가 비어 있으면 "지금 수집" 버튼으로 최초 수집을 실행하세요 (전 종목 조회라 다소 시간이 걸립니다).
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    let _rows = [];
+    let _sortKey = 'trade_value';
+    let _sortDir = -1; // -1: 내림차순, 1: 오름차순
+
+    function fmtNum(v) {
+        if (v === null || v === undefined) return '<span class="empty-val">—</span>';
+        const n = Number(v);
+        return isNaN(n) ? '<span class="empty-val">—</span>' : Math.round(n).toLocaleString();
+    }
+
+    function fmtPrice(v) {
+        if (v === null || v === undefined) return '<span class="empty-val">—</span>';
+        const n = Number(v);
+        if (isNaN(n)) return '<span class="empty-val">—</span>';
+        return n < 100 ? n.toFixed(2) : Math.round(n).toLocaleString();
+    }
+
+    function badge(flag, onLabel) {
+        if (flag === null || flag === undefined) return '<span class="empty-val">—</span>';
+        return flag ? `<span class="badge-on">${onLabel}</span>` : '<span class="badge-off">—</span>';
+    }
+
+    async function load() {
+        const body = document.getElementById('screenBody');
+        body.innerHTML = '<tr class="loading-row"><td colspan="8">로딩 중...</td></tr>';
+        try {
+            const res = await fetch('api/coin-screening');
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+            _rows = json.data || [];
+            if (_rows.length) {
+                const latest = _rows.reduce((a, b) => (a.updated_at > b.updated_at ? a : b));
+                document.getElementById('updatedAt').textContent = `최근 수집: ${latest.updated_at}`;
+            } else {
+                document.getElementById('updatedAt').textContent = '';
+            }
+            renderTable();
+        } catch (e) {
+            body.innerHTML = `<tr class="loading-row"><td colspan="8" class="text-danger">오류: ${e.message}</td></tr>`;
+        }
+    }
+
+    function renderTable() {
+        const body = document.getElementById('screenBody');
+        if (!_rows.length) {
+            body.innerHTML = '<tr class="loading-row"><td colspan="8">데이터가 없습니다. "지금 수집" 버튼을 눌러주세요.</td></tr>';
+            document.getElementById('filterCount').textContent = '';
+            return;
+        }
+
+        const fBreakout = document.getElementById('fBreakout').checked;
+        const fCloud = document.getElementById('fCloud').checked;
+        const fMa200 = document.getElementById('fMa200').checked;
+
+        let filtered = _rows.filter(r =>
+            (!fBreakout || r.breakout_4h) &&
+            (!fCloud || r.above_cloud) &&
+            (!fMa200 || r.near_ma200)
+        );
+
+        document.getElementById('filterCount').textContent = `${filtered.length} / ${_rows.length}개 종목`;
+
+        const sorted = [...filtered].sort((a, b) => {
+            const av = a[_sortKey], bv = b[_sortKey];
+            if (av === null || av === undefined) return 1;
+            if (bv === null || bv === undefined) return -1;
+            if (typeof av === 'string') return _sortDir * av.localeCompare(bv);
+            return _sortDir * (av - bv);
+        });
+
+        if (!sorted.length) {
+            body.innerHTML = '<tr class="loading-row"><td colspan="8">조건에 맞는 종목이 없습니다.</td></tr>';
+            return;
+        }
+
+        body.innerHTML = sorted.map(r => {
+            const changeCls = r.change_rate > 0 ? 'change-pos' : (r.change_rate < 0 ? 'change-neg' : '');
+            const changeSign = r.change_rate > 0 ? '+' : '';
+            const code = r.ticker.replace('KRW-', '');
+            const tvUrl = `https://www.tradingview.com/chart/?symbol=KRW%3A${code}&interval=240`;
+            return `
+                <tr>
+                    <td>
+                        <div class="coin-name">${r.name}</div>
+                        <div class="coin-ticker">${r.ticker}</div>
+                    </td>
+                    <td>${fmtPrice(r.price)}</td>
+                    <td class="${changeCls}">${changeSign}${r.change_rate}%</td>
+                    <td>${fmtNum(r.trade_value)}</td>
+                    <td style="text-align:center">${badge(r.near_ma200, `${r.ma200_dist_pct > 0 ? '+' : ''}${r.ma200_dist_pct}%`)}</td>
+                    <td style="text-align:center">${badge(r.above_cloud, '구름위')}</td>
+                    <td style="text-align:center">${badge(r.breakout_4h, `x${r.breakout_vol_ratio}`)}</td>
+                    <td style="text-align:center"><a class="chart-link" href="${tvUrl}" target="_blank" rel="noopener">📈 4H</a></td>
+                </tr>
+            `;
+        }).join('');
+    }
+
+    document.querySelectorAll('#screenTable th[data-key]').forEach(th => {
+        th.addEventListener('click', () => {
+            const key = th.dataset.key;
+            if (_sortKey === key) {
+                _sortDir *= -1;
+            } else {
+                _sortKey = key;
+                _sortDir = -1;
+            }
+            renderTable();
+        });
+    });
+
+    async function fetchNow() {
+        const btn = document.getElementById('fetchBtn');
+        btn.disabled = true;
+        btn.textContent = '수집 중... (전 종목, 1~2분 소요)';
+        try {
+            const res = await fetch('api/coin-screening/fetch', { method: 'POST' });
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+            await load();
+        } catch (e) {
+            alert('수집 실패: ' + e.message);
+        } finally {
+            btn.disabled = false;
+            btn.textContent = '지금 수집';
+        }
+    }
+
+    load();
+</script>
+</body>
+</html>

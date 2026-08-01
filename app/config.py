@@ -26,6 +26,11 @@ class Config:
     }
     UPBIT_SKIP_DURATION_ALERT = 3600 # seconds (1 hour)
 
+    # 코인 스크리닝(매매 후보 필터) — 전부 4시간봉 기준
+    COIN_BREAKOUT_VOL_LOOKBACK = 20     # 거래량 평균 계산에 사용할 4시간봉 개수
+    COIN_BREAKOUT_RATE_THRESHOLD = 2.0  # 돌파로 인정할 캔들 자체 등락률(%) 기준
+    COIN_MA200_NEAR_PCT = 3.0           # 200이평선 "근접"으로 볼 오차 범위(%)
+
     # KIS (Korean Investment & Securities) Settings
     KIS_APP_KEY = os.getenv("KIS_APP_KEY")
     KIS_APP_SECRET = os.getenv("KIS_APP_SECRET")
