@@ -99,6 +99,34 @@
         </div>
     </div>
 
+    <!-- 스케줄 등록 현황 -->
+    <div class="card-panel">
+        <h5>📋 스케줄 등록 현황 <span class="text-muted small fw-normal">(run_stock_monitor, 평일 기준)</span></h5>
+        <div class="table-responsive">
+            <table class="table table-sm table-hover align-middle mb-0">
+                <thead class="table-dark">
+                    <tr>
+                        <th>시간</th>
+                        <th>작업</th>
+                        <th>내용</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>8:30</td><td>시가총액 수집 백업</td><td>시가총액만(Signal Score/Slack 알림 없음), 15:40 정식 수집 실패 대비, 일 1회</td></tr>
+                    <tr><td>09~15시, 매시 10분 이후</td><td>HTS조회상위20종목 수집</td><td>시간당 1회</td></tr>
+                    <tr><td>9:10 / 12:10 / 15:10 / 18:10</td><td>상승률 순위 스냅샷 수집</td><td>일 4회</td></tr>
+                    <tr><td>18:20</td><td>상승률 순위 전용 원격 동기화</td><td>일 1회, 마지막 18:10 스냅샷 직후</td></tr>
+                    <tr><td>16시</td><td>관심종목등록 상위 수집</td><td>일 1회, 장마감 직후</td></tr>
+                    <tr><td>14시, 19시</td><td>투자자별 매매동향 + 업종 일자별지수 수집</td><td>시간당 1회씩 (14시=잠정치, 19시=확정치로 덮어씀)</td></tr>
+                    <tr><td>20시</td><td>원격 서버 전체 데이터 동기화</td><td>일 1회, "전체 전송"과 동일 로직</td></tr>
+                    <tr><td>15:40 이후</td><td>시가총액 수집 + 종목별 투자자 + Signal Score 계산</td><td>일 1회, A등급 Slack 알림 포함</td></tr>
+                    <tr><td>상시(장중, 08~20시)</td><td>등락률 순위 조회 → 거래량 급증 종목 포착</td><td>루프마다(2분 간격), 종목당 1시간 쿨다운, stock_alerts 저장</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <p class="text-muted small mt-2 mb-0">평일 08시 이전/20시 이후는 4분 간격 대기만, 주말은 4시간 간격 대기만 하고 위 스케줄은 전부 스킵됩니다.</p>
+    </div>
+
     <!-- 스케줄링 처리 로그 -->
     <div class="card-panel">
         <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
@@ -121,6 +149,7 @@
             <button class="btn btn-warning btn-sm text-dark" data-job="investor_trend" onclick="runJobManual(this)">▶ 투자자매매동향 실행</button>
             <button class="btn btn-warning btn-sm text-dark" data-job="sector_index" onclick="runJobManual(this)">▶ 업종지수 실행</button>
             <button class="btn btn-warning btn-sm text-dark" data-job="market_cap_signal_score" onclick="runJobManual(this)">▶ 시가총액+Signal Score 실행</button>
+            <button class="btn btn-warning btn-sm text-dark" data-job="market_cap_morning_backup" onclick="runJobManual(this)">▶ 시가총액 백업 실행</button>
             <button class="btn btn-warning btn-sm text-dark" data-job="remote_sync" onclick="runJobManual(this)">▶ 원격동기화 실행</button>
             <button class="btn btn-warning btn-sm text-dark" data-job="top_interest" onclick="runJobManual(this)">▶ 관심종목등록 상위 실행</button>
             <button class="btn btn-warning btn-sm text-dark" data-job="top_gainers_sync" onclick="runJobManual(this)">▶ 상승률순위 동기화 실행</button>

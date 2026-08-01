@@ -985,6 +985,36 @@ def run_job_sector_index(trigger_type: str = 'auto') -> bool:
     return ok
 
 
+def run_job_market_cap_morning_backup(trigger_type: str = 'auto') -> bool:
+    """시가총액 순위(코스피+코스닥)만 수집하는 오전 백업 작업.
+    Signal Score 계산/Slack 알림/시트 동기화는 하지 않는다 — 그건 15:40 정식 수집(
+    run_job_market_cap_and_signal_score)에서만 하며, 이걸 오전에도 돌리면 아직 장 시작 전
+    전일 종가 기준 데이터로 A등급 Slack 알림이 오전/오후 중복 발송되기 때문.
+    이 백업은 15:40 수집이 그날 실패했을 때를 대비해 최소한 시가총액 데이터라도
+    남겨두는 용도(같은 date 키라 15:40 수집이 성공하면 그 값으로 덮어써짐).
+    반환: 시가총액 수집(코스피+코스닥)이 모두 성공했는지 여부.
+    """
+    start = datetime.now()
+    error_message = None
+    all_ok = True
+    try:
+        for iscd in ('0001', '1001'):
+            ok = fetch_market_cap_ranking(mrkt_div_code='J', input_iscd=iscd)
+            if not ok:
+                all_ok = False
+            time.sleep(2)
+        if not all_ok:
+            error_message = "시가총액 수집 일부 실패 (코스피/코스닥 중 하나 이상)"
+    except Exception as e:
+        all_ok = False
+        error_message = str(e)
+
+    _log_job_run('market_cap_morning_backup', '시가총액 수집 백업 (오전, Signal Score/Slack 알림 없음)',
+                 '/uapi/domestic-stock/v1/ranking/market-cap', start, all_ok,
+                 error_message=error_message, trigger_type=trigger_type)
+    return all_ok
+
+
 def run_job_market_cap_and_signal_score(trigger_type: str = 'auto') -> bool:
     """시가총액 순위 + 종목별 투자자 수집 → Signal Score 계산/저장/Slack알림/시트동기화까지 한 번에 실행.
     반환: 시가총액 수집(코스피+코스닥)이 모두 성공했는지 여부.
@@ -1074,11 +1104,22 @@ def run_stock_monitor():
     last_top_interest_date = None  # 관심종목등록 상위 일 1회 수집 여부
     last_top_gainers_hour = None  # 상승률 순위 스냅샷 9:10/12:10/15:10/18:10 수집 여부 (시간 단위로 추적)
     last_top_gainers_sync_date = None  # 상승률 순위 전용 동기화(18:20) 여부 (하루 1회)
+    last_market_cap_morning_date = None  # 시가총액 수집 오전 백업(8:30) 여부 (하루 1회)
 
     while True:
         try:
             now = datetime.now()
             today_str = now.strftime('%Y-%m-%d')
+
+            # 평일 8:30 — 시가총액 수집 오전 백업 (Signal Score/Slack 알림 없이 시가총액만, 하루 1회)
+            # 15:40 정식 수집이 그날 실패하는 경우를 대비한 안전망 — 같은 date 키라 15:40 수집이
+            # 성공하면 그 값으로 덮어써진다.
+            if now.weekday() < 5 and now.hour == 8 and now.minute >= 30 and last_market_cap_morning_date != today_str:
+                logger.info("⏰ [스케줄] 8시 30분 시가총액 수집 백업 시작")
+                if run_job_market_cap_morning_backup():
+                    last_market_cap_morning_date = today_str
+                else:
+                    logger.warning("⚠️ 시가총액 수집 백업 실패 — 다음 루프에서 재시도합니다.")
 
             # 평일 장중(09~15시) 매시 10분 이후 첫 루프 — HTS조회상위20종목 수집 (시간당 1회)
             if now.weekday() < 5 and 9 <= now.hour <= 15 and now.minute >= 10:

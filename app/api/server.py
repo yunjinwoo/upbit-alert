@@ -39,7 +39,7 @@ from app.core.stock_monitor import (
     fetch_ranking_preview, fetch_sector_stocks, fetch_multi_stock_price,
     fetch_fluctuation_ranking, fetch_fluctuation_ranking_combined,
     run_job_hts_top_view, run_job_investor_trend, run_job_sector_index,
-    run_job_market_cap_and_signal_score, run_job_remote_sync, run_job_top_interest,
+    run_job_market_cap_and_signal_score, run_job_market_cap_morning_backup, run_job_remote_sync, run_job_top_interest,
     run_job_top_gainers, run_job_top_gainers_sync,
     SECTOR_NAMES,
 )
@@ -897,6 +897,7 @@ JOB_RUNNERS = {
     'investor_trend': lambda: run_job_investor_trend(trigger_type='manual'),
     'sector_index': lambda: run_job_sector_index(trigger_type='manual'),
     'market_cap_signal_score': lambda: run_job_market_cap_and_signal_score(trigger_type='manual'),
+    'market_cap_morning_backup': lambda: run_job_market_cap_morning_backup(trigger_type='manual'),
     'remote_sync': lambda: run_job_remote_sync(trigger_type='manual'),
     'top_interest': lambda: run_job_top_interest(trigger_type='manual'),
     'top_gainers_sync': lambda: run_job_top_gainers_sync(trigger_type='manual'),
