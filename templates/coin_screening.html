@@ -224,14 +224,26 @@
         });
     });
 
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
     async function fetchNow() {
         const btn = document.getElementById('fetchBtn');
         btn.disabled = true;
         btn.textContent = '수집 중... (전 종목, 1~2분 소요)';
         try {
-            const res = await fetch('api/coin-screening/fetch', { method: 'POST' });
-            const json = await res.json();
-            if (json.status !== 'success') throw new Error(json.message);
+            const startRes = await fetch('api/coin-screening/fetch', { method: 'POST' });
+            const startJson = await startRes.json();
+            if (startJson.status !== 'started') throw new Error(startJson.message || '수집 시작 실패');
+            const taskId = startJson.task_id;
+
+            // 전 종목 조회라 1~2분 걸림 — 동기로 기다리면 nginx 프록시 타임아웃(504)에 걸리므로 폴링 방식으로 진행 상태 확인
+            while (true) {
+                await sleep(3000);
+                const statusRes = await fetch(`api/coin-screening/fetch/status/${taskId}`);
+                const statusJson = await statusRes.json();
+                if (statusJson.status === 'done') break;
+                if (statusJson.status === 'error') throw new Error(statusJson.message);
+            }
             await load();
         } catch (e) {
             alert('수집 실패: ' + e.message);

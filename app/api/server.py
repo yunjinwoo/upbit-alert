@@ -120,14 +120,31 @@ def get_coin_screening_api():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+_coin_screening_fetch_status = {}  # task_id → {status, message}
+
 @app.route('/api/coin-screening/fetch', methods=['POST'])
 def fetch_coin_screening_api():
-    """코인 스크리닝 데이터를 즉시 수집하도록 요청합니다 (동기 실행 — 전 종목 조회로 다소 시간이 걸릴 수 있음)."""
-    try:
-        count = run_coin_screening()
-        return jsonify({"status": "success", "message": f"{count}개 종목 스크리닝 완료"})
-    except Exception as e:
-        return jsonify({"status": "error", "message": f"코인 스크리닝 수집 중 오류 발생: {str(e)}"}), 500
+    """코인 스크리닝 데이터 수집을 백그라운드로 시작합니다 (즉시 202 반환).
+    전 종목 조회에 1~2분 걸려 동기 응답 시 nginx 프록시 타임아웃(504)에 걸리므로 비동기로 처리."""
+    import uuid
+    task_id = str(uuid.uuid4())[:8]
+    _coin_screening_fetch_status[task_id] = {"status": "running", "message": "코인 스크리닝 수집 중..."}
+
+    def run():
+        try:
+            count = run_coin_screening()
+            _coin_screening_fetch_status[task_id] = {"status": "done", "message": f"{count}개 종목 스크리닝 완료"}
+        except Exception as e:
+            _coin_screening_fetch_status[task_id] = {"status": "error", "message": f"코인 스크리닝 수집 중 오류 발생: {str(e)}"}
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify({"status": "started", "task_id": task_id}), 202
+
+@app.route('/api/coin-screening/fetch/status/<task_id>', methods=['GET'])
+def fetch_coin_screening_status_api(task_id):
+    """코인 스크리닝 백그라운드 수집 진행 상태 조회"""
+    result = _coin_screening_fetch_status.get(task_id, {"status": "unknown", "message": "작업을 찾을 수 없습니다."})
+    return jsonify(result)
 
 @app.route('/market-cap')
 def market_cap_view():
