@@ -1,9 +1,10 @@
 import time
+from datetime import datetime
 import pyupbit
 import pandas as pd
 from app.config import Config
 from app.utils.logger import get_logger
-from app.utils.db_manager import save_coin_screening
+from app.utils.db_manager import save_coin_screening, save_job_run_log
 
 logger = get_logger()
 
@@ -83,9 +84,12 @@ def calc_indicators(df: pd.DataFrame) -> dict:
     return result
 
 
-def run_coin_screening():
-    """전체 KRW 마켓 코인의 4시간봉 데이터로 매매 후보 필터 지표를 계산해 DB에 저장한다."""
+def run_coin_screening(trigger_type: str = 'auto'):
+    """전체 KRW 마켓 코인의 4시간봉 데이터로 매매 후보 필터 지표를 계산해 DB에 저장한다.
+    실행 시각/결과는 job_run_log에도 남겨서 "언제 다시 수집됐는지" 이력을 동기화 관리 페이지에서 확인할 수 있게 한다."""
     logger.info("코인 스크리닝 시작 (Upbit, 4시간봉)")
+    start = datetime.now()
+    error_message = None
     tickers = pyupbit.get_tickers(fiat="KRW")
 
     rows = []
@@ -121,13 +125,20 @@ def run_coin_screening():
 
     save_coin_screening(rows)
     logger.info(f"코인 스크리닝 완료: {len(rows)}개 종목 저장")
+
+    end = datetime.now()
+    save_job_run_log(
+        'coin_screening', '코인 스크리닝(매매 후보 필터) 수집', 'pyupbit get_ohlcv(minute240)',
+        start.strftime('%Y-%m-%d %H:%M:%S'), end.strftime('%Y-%m-%d %H:%M:%S'),
+        success=True, count=len(rows), error_message=error_message, trigger_type=trigger_type,
+    )
     return len(rows)
 
 
 def run_coin_screening_loop(interval_sec: int = 1800):
     while True:
         try:
-            run_coin_screening()
+            run_coin_screening(trigger_type='auto')
         except Exception as e:
             logger.error(f"코인 스크리닝 루프 오류: {e}")
         time.sleep(interval_sec)

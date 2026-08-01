@@ -132,7 +132,7 @@ def fetch_coin_screening_api():
 
     def run():
         try:
-            count = run_coin_screening()
+            count = run_coin_screening(trigger_type='manual')
             _coin_screening_fetch_status[task_id] = {"status": "done", "message": f"{count}개 종목 스크리닝 완료"}
         except Exception as e:
             _coin_screening_fetch_status[task_id] = {"status": "error", "message": f"코인 스크리닝 수집 중 오류 발생: {str(e)}"}
@@ -950,7 +950,8 @@ def get_job_log_api():
     """스케줄링 작업 실행 이력을 반환합니다 (기본 최근 7일)."""
     try:
         days = int(request.args.get('days', 7))
-        data = get_job_run_log(days=days)
+        job_name = request.args.get('job_name')
+        data = get_job_run_log(days=days, job_name=job_name)
         return jsonify({"status": "success", "count": len(data), "data": data})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
