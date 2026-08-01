@@ -34,10 +34,10 @@
           <select id="memoGradeSelect" class="form-select form-select-sm" style="width:auto"></select>
           <button class="btn btn-primary btn-sm" onclick="saveStockMemo()">메모 추가</button>
         </div>
-        <div class="text-end mb-1">
-          <a id="memoChartTvLink" href="#" target="_blank" rel="noopener" class="small text-muted" style="display:none">🔗 TradingView에서 보기</a>
+        <div class="d-flex gap-3 mb-2">
+          <a id="memoChartNaverLink" href="#" target="_blank" rel="noopener" class="small">📊 네이버 차트</a>
+          <a id="memoChartTvLink" href="#" target="_blank" rel="noopener" class="small">📈 TradingView 차트</a>
         </div>
-        <div id="memoChartWidget" class="border rounded mb-2" style="height:340px"></div>
         <hr>
         <label class="form-label small mb-1">다른 종목 메모 검색</label>
         <input type="text" id="memoSearchInput" class="form-control form-control-sm mb-2" placeholder="종목코드 또는 종목명으로 검색 (빈칸이면 전체 목록)">
@@ -91,65 +91,18 @@
         document.getElementById('memoModalTitle').textContent = `📝 ${name} (${code}) 메모`;
         document.getElementById('memoTextarea').value = '';
         getMemoModal().show();
-        renderMemoChart(code);
+        setMemoChartLinks(code);
         await ensureGradesLoaded();
         await loadMemoHistory();
         document.getElementById('memoSearchInput').value = '';
         loadMemoList('');
     };
 
-    // 트레이딩뷰 위젯 스크립트는 한 번만 로드하고, 이후엔 재사용 — 여러 번 <script> 태그를
-    // 새로 추가하면 중복 로드되므로 로딩 상태를 플래그로 관리한다.
-    let _tvLoaded = false;
-    let _tvLoading = false;
-
-    function ensureTradingViewScript(callback) {
-        if (window.TradingView) { callback(); return; }
-        if (_tvLoading) { setTimeout(() => ensureTradingViewScript(callback), 200); return; }
-        _tvLoading = true;
-        const script = document.createElement('script');
-        script.src = 'https://s3.tradingview.com/tv.js';
-        script.onload = () => { _tvLoaded = true; _tvLoading = false; callback(); };
-        document.head.appendChild(script);
-    }
-    // 종목 메모 전체보기 페이지(stock_memo.html)에서도 같은 로더를 재사용해 tv.js 중복 로드를 피한다.
-    window.ensureTradingViewScript = ensureTradingViewScript;
-
-    // 모달을 열 때마다 종목코드에 맞는 트레이딩뷰 차트를 새로 그림 (KRX 종목코드 기준).
-    // 같은 종목을 다시 열 때는 위젯을 재생성하지 않고 그대로 둬서(지표/줌 등 유지),
-    // 다른 종목으로 바뀔 때만 이전 위젯을 .remove()로 정리 후 새로 만든다.
-    // (innerHTML만 비우고 새로 new TradingView.widget()을 계속 호출하면 이전 인스턴스가
-    // 제대로 정리되지 않아 심볼 인식 팝업이 뜨는 등 초기화가 꼬이는 문제가 있었음.)
-    let _memoChartWidget = null;
-    let _memoChartCode = null;
-
-    function renderMemoChart(code) {
-        const tvLink = document.getElementById('memoChartTvLink');
-        tvLink.href = `https://www.tradingview.com/chart/?symbol=KRX%3A${code}`;
-        tvLink.style.display = '';
-        if (_memoChartCode === code && _memoChartWidget) return; // 같은 종목이면 그대로 유지
-        ensureTradingViewScript(() => {
-            const widgetDiv = document.getElementById('memoChartWidget');
-            if (!widgetDiv || _memoCode !== code) return; // 로딩되는 사이 다른 종목으로 바뀌었으면 무시
-            if (_memoChartWidget && typeof _memoChartWidget.remove === 'function') {
-                _memoChartWidget.remove();
-            }
-            widgetDiv.innerHTML = '';
-            _memoChartWidget = new TradingView.widget({
-                container_id: 'memoChartWidget',
-                autosize: true,
-                symbol: `KRX:${code}`,
-                interval: 'D',
-                timezone: 'Asia/Seoul',
-                theme: 'light',
-                style: '1',
-                locale: 'kr',
-                hide_top_toolbar: false,
-                hide_legend: true,
-                allow_symbol_change: false,
-            });
-            _memoChartCode = code;
-        });
+    // 임베드 위젯이 종목이 바뀌어도 갱신되지 않는 문제가 있어, 차트는 임베드 대신
+    // 네이버/트레이딩뷰 외부 링크로만 제공한다.
+    function setMemoChartLinks(code) {
+        document.getElementById('memoChartNaverLink').href = `https://finance.naver.com/item/main.naver?code=${code}`;
+        document.getElementById('memoChartTvLink').href = `https://www.tradingview.com/chart/?symbol=KRX%3A${code}`;
     }
 
     async function loadMemoHistory() {
