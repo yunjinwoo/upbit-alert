@@ -33,6 +33,7 @@ from app.utils.db_manager import (
     get_top_gainers_history, get_top_gainers_snapshot_dates, get_top_gainers_range,
     get_top_gainers_export, sync_upsert_top_gainers,
     get_quick_links, add_quick_link, delete_quick_link,
+    get_coin_screening,
 )
 from app.core.stock_monitor import (
     fetch_market_cap_ranking, fetch_investor_trend, fetch_sector_index_daily, fetch_stock_investor_daily,
@@ -43,6 +44,7 @@ from app.core.stock_monitor import (
     run_job_top_gainers, run_job_top_gainers_sync,
     SECTOR_NAMES,
 )
+from app.core.upbit_market_analysis import run_coin_screening
 from app.config import Config
 import json
 import os
@@ -103,6 +105,29 @@ def delete_quick_link_api(link_id):
     if not deleted:
         return jsonify({'status': 'error', 'message': '해당 링크를 찾을 수 없습니다.'}), 404
     return jsonify({'status': 'success', 'deleted': deleted})
+
+@app.route('/coin-screening')
+def coin_screening_view():
+    """코인(업비트 KRW 마켓) 기술지표 스크리닝 페이지를 보여줍니다."""
+    return render_template('coin_screening.html', active_page='coin_screening')
+
+@app.route('/api/coin-screening', methods=['GET'])
+def get_coin_screening_api():
+    """코인 스크리닝 스냅샷(RSI/이동평균 등)을 JSON으로 반환합니다."""
+    try:
+        data = get_coin_screening()
+        return jsonify({"status": "success", "count": len(data), "data": data})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/coin-screening/fetch', methods=['POST'])
+def fetch_coin_screening_api():
+    """코인 스크리닝 데이터를 즉시 수집하도록 요청합니다 (동기 실행 — 전 종목 조회로 다소 시간이 걸릴 수 있음)."""
+    try:
+        count = run_coin_screening()
+        return jsonify({"status": "success", "message": f"{count}개 종목 스크리닝 완료"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"코인 스크리닝 수집 중 오류 발생: {str(e)}"}), 500
 
 @app.route('/market-cap')
 def market_cap_view():

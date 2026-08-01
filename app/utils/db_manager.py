@@ -289,6 +289,25 @@ def init_db():
         )
     ''')
 
+    # 코인(업비트 KRW 마켓) 매매 후보 필터 스냅샷 — 티커당 최신 1건만 유지 (전부 4시간봉 기준)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS coin_screening_daily (
+            ticker TEXT PRIMARY KEY,
+            name TEXT,
+            price REAL,
+            change_rate REAL,
+            trade_value REAL,
+            ma200 REAL,
+            ma200_dist_pct REAL,
+            near_ma200 INTEGER,
+            above_cloud INTEGER,
+            breakout_4h INTEGER,
+            breakout_vol_ratio REAL,
+            breakout_candle_rate REAL,
+            updated_at TEXT
+        )
+    ''')
+
     # 스케줄링 작업 실행 이력 (동기화 관리 페이지 "처리 로그"용)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS job_run_log (
@@ -326,6 +345,14 @@ def init_db():
         'ALTER TABLE stock_memo ADD COLUMN updated_at TEXT',
         # 바로가기 링크를 좌/우 영역으로 나눠 보여주기 위한 컬럼 (기존 행은 기본값 left)
         'ALTER TABLE quick_links ADD COLUMN side TEXT DEFAULT "left"',
+        # 코인 스크리닝을 일봉 RSI/이평선 나열에서 4시간봉 기준 매매 후보 필터(돌파/구름/200선)로 재설계
+        'ALTER TABLE coin_screening_daily ADD COLUMN ma200 REAL',
+        'ALTER TABLE coin_screening_daily ADD COLUMN ma200_dist_pct REAL',
+        'ALTER TABLE coin_screening_daily ADD COLUMN near_ma200 INTEGER',
+        'ALTER TABLE coin_screening_daily ADD COLUMN above_cloud INTEGER',
+        'ALTER TABLE coin_screening_daily ADD COLUMN breakout_4h INTEGER',
+        'ALTER TABLE coin_screening_daily ADD COLUMN breakout_vol_ratio REAL',
+        'ALTER TABLE coin_screening_daily ADD COLUMN breakout_candle_rate REAL',
     ]
     for sql in migrations:
         try:
@@ -2527,3 +2554,45 @@ def delete_quick_link(link_id: int) -> int:
     deleted = cursor.rowcount
     conn.close()
     return deleted
+
+
+# ──────────────────────────────────────────────
+# 코인(업비트) 기술지표 스크리닝
+# ──────────────────────────────────────────────
+
+def save_coin_screening(rows: list):
+    """코인 스크리닝(매매 후보 필터) 스냅샷 저장 (티커 기준 upsert — 최신 값으로 갱신)"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    for r in rows:
+        cursor.execute('''
+            INSERT INTO coin_screening_daily
+                (ticker, name, price, change_rate, trade_value,
+                 ma200, ma200_dist_pct, near_ma200, above_cloud,
+                 breakout_4h, breakout_vol_ratio, breakout_candle_rate, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(ticker) DO UPDATE SET
+                name=excluded.name, price=excluded.price, change_rate=excluded.change_rate,
+                trade_value=excluded.trade_value,
+                ma200=excluded.ma200, ma200_dist_pct=excluded.ma200_dist_pct,
+                near_ma200=excluded.near_ma200, above_cloud=excluded.above_cloud,
+                breakout_4h=excluded.breakout_4h, breakout_vol_ratio=excluded.breakout_vol_ratio,
+                breakout_candle_rate=excluded.breakout_candle_rate,
+                updated_at=excluded.updated_at
+        ''', (r['ticker'], r.get('name'), r.get('price'), r.get('change_rate'), r.get('trade_value'),
+              r.get('ma200'), r.get('ma200_dist_pct'), int(bool(r.get('near_ma200'))), int(bool(r.get('above_cloud'))),
+              int(bool(r.get('breakout_4h'))), r.get('breakout_vol_ratio'), r.get('breakout_candle_rate'), timestamp))
+    conn.commit()
+    conn.close()
+
+
+def get_coin_screening() -> list:
+    """코인 스크리닝 스냅샷 전체 조회 (거래대금 내림차순)"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM coin_screening_daily ORDER BY trade_value DESC')
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]

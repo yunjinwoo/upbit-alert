@@ -4,35 +4,39 @@ import multiprocessing
 from app.api.server import run_server
 from app.core.upbit_monitor import run_upbit_monitor
 from app.core.stock_monitor import run_stock_monitor
+from app.core.upbit_market_analysis import run_coin_screening_loop
 from app.utils.logger import get_logger
 
 logger = get_logger()
 
 def start_all():
     logger.info("Starting all services...")
-    
+
     # Use multiprocessing to run services in parallel
     p_api = multiprocessing.Process(target=run_server, kwargs={'use_reloader': False})
     p_upbit = multiprocessing.Process(target=run_upbit_monitor)
     p_stock = multiprocessing.Process(target=run_stock_monitor)
-    
+    p_coin_analysis = multiprocessing.Process(target=run_coin_screening_loop)
+
     p_api.start()
     p_upbit.start()
     p_stock.start()
-    
+    p_coin_analysis.start()
+
     p_api.join()
     p_upbit.join()
     p_stock.join()
+    p_coin_analysis.join()
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
     
     parser = argparse.ArgumentParser(description="Upbit & Stock Alert System")
-    parser.add_argument("mode", nargs="?", choices=["all", "api", "upbit", "stock"], default="all",
-                        help="Mode to run: all (default), api, upbit, or stock")
-    
+    parser.add_argument("mode", nargs="?", choices=["all", "api", "upbit", "stock", "coin_analysis"], default="all",
+                        help="Mode to run: all (default), api, upbit, stock, or coin_analysis")
+
     args = parser.parse_args()
-    
+
     if args.mode == "all":
         start_all()
     elif args.mode == "api":
@@ -41,3 +45,5 @@ if __name__ == "__main__":
         run_upbit_monitor()
     elif args.mode == "stock":
         run_stock_monitor()
+    elif args.mode == "coin_analysis":
+        run_coin_screening_loop()
