@@ -4,7 +4,7 @@ import time
 from datetime import datetime
 from dataclasses import asdict
 from app.config import Config
-from app.utils.db_manager import save_stock_alert_to_db, init_db, save_api_token, get_api_token, save_stock_raw_data, save_daily_market_cap, save_daily_investor_trend, save_stock_investor_daily, save_sector_index_daily, save_sector_stocks_daily, get_signal_score_batch, save_hts_top_view, save_job_run_log, get_market_cap_history, save_top_interest_daily, save_top_gainers_snapshot
+from app.utils.db_manager import save_stock_alert_to_db, init_db, save_api_token, get_api_token, save_stock_raw_data, save_daily_market_cap, save_daily_investor_trend, save_stock_investor_daily, save_sector_index_daily, save_sector_stocks_daily, get_signal_score_batch, save_hts_top_view, save_job_run_log, get_market_cap_history, save_top_interest_daily, save_top_gainers_snapshot, get_recent_avg_volume
 from app.core.kis_models import RequestHeader, RequestQueryParam, MarketCapQueryParam, FluctuationRankingResponse, MarketCapRankingResponse, StockInvestorDailyItem
 from app.core.upbit_monitor import send_slack_msg
 from app.utils.google_sheets import save_signal_score_to_sheet, save_signal_score_readme, save_investor_ranking_to_sheet
@@ -1199,15 +1199,19 @@ def run_stock_monitor():
                 code = stock.stck_shrn_iscd
                 price = stock.stck_prpr
                 change_rate = stock.prdy_ctrt
-                vol_rate = float(stock.prdy_vol_rvrt if stock.prdy_vol_rvrt else 0)
-                
+                acml_vol = float(stock.acml_vol if stock.acml_vol else 0)  # 당일 누적거래량(장중 실시간)
+
+                # 전일 대비(prdy_vol_rvrt) 대신 최근 N거래일 평균 거래량 대비 배수로 계산
+                avg_info = get_recent_avg_volume(code, avg_days=Config.STOCK_VOL_AVG_LOOKBACK)
+                vol_ratio = (acml_vol / avg_info['avg_volume']) if avg_info['avg_volume'] else 0
+
                 if code not in last_notified or (now - last_notified[code]).seconds > 3600:
-                    logger.info(f"🔥 [포착] {name}({code}) | 등락: {change_rate}% | 거래량비: {vol_rate}%")
+                    logger.info(f"🔥 [포착] {name}({code}) | 등락: {change_rate}% | 거래량배수(최근{avg_info['days_used']}일평균): {vol_ratio:.2f}배")
                     save_stock_alert_to_db(
-                        code=code, name=name, price=price, 
-                        change_rate=change_rate, volume=stock.acml_vol, 
-                        volume_power="0", market_cap="-", 
-                        reason=f"전일비 거래량 {vol_rate}% 급증",
+                        code=code, name=name, price=price,
+                        change_rate=change_rate, volume=stock.acml_vol,
+                        volume_power="0", market_cap="-",
+                        reason=f"최근 {avg_info['days_used']}일 평균 거래량 대비 {vol_ratio:.2f}배",
                         url=f"https://finance.naver.com/item/main.nhn?code={code}"
                         )
                     last_notified[code] = now

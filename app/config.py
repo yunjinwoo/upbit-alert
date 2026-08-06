@@ -36,6 +36,7 @@ class Config:
     KIS_APP_KEY = os.getenv("KIS_APP_KEY")
     KIS_APP_SECRET = os.getenv("KIS_APP_SECRET")
     KIS_URL_BASE = "https://openapi.koreainvestment.com:9443"
+    STOCK_VOL_AVG_LOOKBACK = 20  # 국내주식 실시간 감시 거래량 배수 계산에 쓸 평균 거래일 수(전일 대비 → 최근 N일 평균 대비)
 
     # Google Sheets
     SHEET_NAME = "py-upbit-alram"

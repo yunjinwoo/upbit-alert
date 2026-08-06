@@ -1186,6 +1186,41 @@ def get_job_run_log(days: int = 7, job_name: str = None, limit: int = 500) -> li
     return [dict(row) for row in rows]
 
 
+def get_recent_avg_volume(code: str, avg_days: int = 20) -> dict:
+    """종목의 최근 avg_days "완결된 이전 거래일" 평균 거래량 조회 (오늘 날짜는 항상 제외).
+    실시간 감시(stock_monitor.run_stock_monitor)에서 장중 누적거래량(acml_vol)과 비교할 분모로 쓴다.
+    get_volume_ratio()와 달리 "오늘" 행이 있어도(오전 8:30 백업 수집 등, 장중이라 거래량이 미미/0) 제외하고
+    순수 과거 N거래일치만으로 평균을 낸다.
+    반환: {code, avg_volume, days_used, latest_date}
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    cursor.execute('''
+        SELECT date, MAX(CAST(volume AS INTEGER)) AS volume
+        FROM stock_market_cap_daily
+        WHERE code = ? AND date < ? AND volume IS NOT NULL AND volume != '' AND volume != '0'
+        GROUP BY date
+        ORDER BY date DESC
+        LIMIT ?
+    ''', (code, today_str, avg_days))
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        return {'code': code, 'avg_volume': 0, 'days_used': 0, 'latest_date': None}
+
+    days_used = len(rows)
+    avg_volume = sum(r['volume'] for r in rows) / days_used
+    return {
+        'code': code,
+        'avg_volume': round(avg_volume, 2),
+        'days_used': days_used,
+        'latest_date': rows[0]['date'],
+    }
+
+
 def get_volume_ratio(code: str, avg_days: int = 20) -> dict:
     """종목의 최근 N일 평균 거래량 대비 당일 거래량 배수 계산.
     반환: {code, date, today_volume, avg_volume, ratio, days_used}
