@@ -25,6 +25,7 @@ class Config:
         "minutes240": 3.0
     }
     UPBIT_SKIP_DURATION_ALERT = 3600 # seconds (1 hour)
+    UPBIT_VOL_AVG_LOOKBACK = 20      # 실시간 감시 거래량 배수 계산에 쓸 평균 봉 개수(직전 1봉 대비 → 최근 N봉 평균 대비)
 
     # 코인 스크리닝(매매 후보 필터) — 전부 4시간봉 기준
     COIN_BREAKOUT_VOL_LOOKBACK = 20     # 거래량 평균 계산에 사용할 4시간봉 개수

@@ -19,21 +19,22 @@ def send_slack_msg(text):
     except Exception as e:
         logger.error(f"슬랙 전송 실패: {e}")
 
-def get_volume_ratio(ticker, interval):
+def get_volume_ratio(ticker, interval, lookback=Config.UPBIT_VOL_AVG_LOOKBACK):
+    """현재(진행 중) 캔들 거래량이 직전 lookback개 확정 캔들의 평균 거래량 대비 몇 배인지 계산한다."""
     try:
-        df = pyupbit.get_ohlcv(ticker, interval=interval, count=2)
+        df = pyupbit.get_ohlcv(ticker, interval=interval, count=lookback + 1)
         if df is None or len(df) < 2:
             return 0
 
         vol_list = df['volume'].tolist()
-        prev_vol = float(vol_list[0])
-        curr_vol = float(vol_list[1])
+        curr_vol = float(vol_list[-1])
+        avg_vol = sum(vol_list[:-1]) / len(vol_list[:-1])
 
-        if prev_vol == 0:
+        if avg_vol == 0:
             return 0
 
-        ratio = curr_vol / prev_vol
-        logger.info(f" {ticker} - {interval} = {ratio:.2f}")
+        ratio = curr_vol / avg_vol
+        logger.info(f" {ticker} - {interval} = {ratio:.2f} (최근 {len(vol_list) - 1}봉 평균 대비)")
         return ratio
     except Exception as e:
         logger.error(f"[{ticker}-{interval}] 에러: {e}")
