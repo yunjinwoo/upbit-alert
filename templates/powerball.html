@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>파워볼 트래커</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f4f7f6; font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; }
+        .main-navbar { background-color: #1a1a2e; }
+        .main-navbar .navbar-brand { color: #fff; font-weight: bold; }
+        .main-navbar .nav-link { color: rgba(255,255,255,0.75) !important; font-size: 0.82rem; }
+        .main-navbar .nav-link:hover, .main-navbar .nav-link.active { color: #fff !important; }
+        .main-navbar .nav-link.active { border-bottom: 2px solid #4da6ff; }
+
+        .dashboard-container { margin-top: 24px; margin-bottom: 60px; }
+        .card-panel { background: white; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); padding: 18px 20px; }
+
+        .nav-tabs { border-bottom: 2px solid #0049af; margin-bottom: 18px; }
+        .nav-tabs .nav-link { font-weight: bold; color: #666; cursor: pointer; }
+        .nav-tabs .nav-link.active { color: #0049af !important; border-bottom: 3px solid #0049af !important; background: none !important; }
+
+        textarea#pasteBox { font-family: 'SF Mono', Consolas, monospace; font-size: 0.82rem; }
+        .hint { color: #8a8f9c; font-size: 0.78rem; }
+
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; margin-top: 16px; }
+        .rcard { position: relative; background: white; border-radius: 14px; box-shadow: 0 3px 10px rgba(0,0,0,0.06); padding: 14px 16px 16px; }
+        .rcard .del { position: absolute; top: 10px; right: 10px; width: 22px; height: 22px; border-radius: 50%; border: none; background: #f1f3f8; color: #99a; font-size: 0.7rem; cursor: pointer; }
+        .rcard .del:hover { background: #e35d5d; color: #fff; }
+        .rhead { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+        .rhead .round { font-weight: 800; font-size: 0.95rem; color: #1a1a2e; }
+        .rhead .date { font-size: 0.76rem; color: #888; }
+        .board { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+        .ball { aspect-ratio: 1; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.72rem; background: #eef0f8; color: #b7bbdb; }
+        .ball.hit { background: #3454c9; color: #fff; }
+        .pbrow { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+        .pbrow .lbl { font-size: 0.62rem; letter-spacing: .05em; color: #999; font-weight: 700; width: 44px; flex: none; }
+        .pbnums { display: flex; gap: 4px; flex: 1; }
+        .pball { flex: 1; aspect-ratio: 1; max-width: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.68rem; background: #eef0f8; color: #b7bbdb; }
+        .pball.hit { background: #b5790a; color: #fff; }
+        .ball, .pball { cursor: pointer; transition: box-shadow .1s; }
+        .ball.marked, .pball.marked { box-shadow: 0 0 0 2px #8b5cf6 inset; }
+        .stats { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed #e5e8f0; }
+        .chip { font-size: 0.68rem; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: #f1f3f8; color: #666; }
+        .chip b { color: #1a1a2e; }
+        .empty { color: #a0a4b8; font-size: 0.85rem; padding: 26px 4px; text-align: center; border: 1px dashed #dde1ec; border-radius: 12px; margin-top: 16px; }
+
+        .freq-wrap { display: flex; flex-wrap: wrap; gap: 6px; }
+        .freq-chip {
+            display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px 4px 12px;
+            border-radius: 999px; background: #eef0f8; color: #1a1a2e; font-weight: 700; font-size: 0.78rem;
+            cursor: pointer; border: 2px solid transparent;
+        }
+        .freq-chip .cnt { background: #dfe3f5; color: #3454c9; font-weight: 800; font-size: 0.7rem; padding: 1px 7px; border-radius: 999px; }
+        .freq-chip.pb .cnt { background: #fdf1de; color: #b5790a; }
+        .freq-chip.marked { border-color: #8b5cf6; }
+
+        .pickboard { display: grid; grid-template-columns: repeat(7, minmax(0,42px)); gap: 6px; }
+        .pickball { aspect-ratio: 1; border-radius: 50%; border: 1px solid #dde1ec; background: #f6f7fb; color: #1a1a2e; font-weight: 700; font-size: 0.8rem; cursor: pointer; }
+        .pickball.sel { background: #3454c9; color: #fff; border-color: transparent; }
+        .pickball:disabled { opacity: .35; }
+        .pickpb { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+        .pickpb .pickball { width: 42px; }
+
+        .favrow { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; background: white; border-radius: 12px; box-shadow: 0 3px 10px rgba(0,0,0,0.06); padding: 12px 16px; margin-bottom: 10px; }
+        .favrow .name { font-weight: 800; font-size: 0.86rem; min-width: 90px; }
+        .favrow .balls { display: flex; gap: 4px; }
+        .favrow .balls span { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.7rem; font-weight: 700; background: #eef0f8; color: #3454c9; }
+        .favrow .balls span.pb { background: #fdf1de; color: #b5790a; }
+        .favrow .best { font-size: 0.78rem; color: #777; margin-left: auto; }
+        .favrow .best b { color: #1f8a5f; }
+
+        .msg { font-size: 0.78rem; font-weight: 600; margin-top: 8px; white-space: pre-line; }
+        .msg.ok { color: #1f8a5f; }
+        .msg.err { color: #c14a4a; }
+    </style>
+</head>
+<body>
+
+{% include '_navbar.html' %}
+
+<div class="container dashboard-container">
+    <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+        <h2 class="mb-0" style="font-size:1.2rem; font-weight:700; color:#1a1a2e">🎱 파워볼 당첨결과 &amp; 즐겨찾기 번호</h2>
+    </div>
+
+    <ul class="nav nav-tabs" id="mainTab">
+        <li class="nav-item"><a class="nav-link active" onclick="switchTab('results')">당첨결과</a></li>
+        <li class="nav-item"><a class="nav-link" onclick="switchTab('favorites')">즐겨찾기 번호</a></li>
+    </ul>
+
+    <!-- 당첨결과 탭 -->
+    <div id="panel-results">
+        <div class="card-panel mb-3">
+            <h6 class="fw-bold mb-1">번호별 출현 횟수 (많이 나온 순)</h6>
+            <p class="hint mb-2">저장된 당첨결과 전체 기준 · 칩을 클릭하면 아래 카드에서도 같이 표시돼요 (최대 6개)</p>
+            <div class="hint mb-1">일반볼</div>
+            <div class="freq-wrap mb-2" id="freqBoard"></div>
+            <div class="hint mb-1">파워볼</div>
+            <div class="freq-wrap" id="freqPbBoard"></div>
+        </div>
+
+        <div class="card-panel mb-3">
+            <h6 class="fw-bold mb-1">새 회차 추가</h6>
+            <p class="hint mb-2">동행복권 파워볼 결과 페이지에서 복사한 텍스트를 그대로 붙여넣으세요. 회차당 9줄(추첨일 / 회차 / 번호5개 / 파워볼 / 숫자합 / 홀짝 / 대중소 / 숫자합구간 / 파워볼구간) 형식입니다.</p>
+            <textarea id="pasteBox" class="form-control" rows="4" placeholder="2026-08-08&#10;1485863&#10;25,09,22,08,24&#10;04&#10;88&#10;짝(Even)&#10;대(81~130)&#10;F(79~130)&#10;B(3~4)"></textarea>
+            <div class="mt-2 d-flex gap-2">
+                <button class="btn btn-primary btn-sm" id="addBtn">회차 추가</button>
+                <button class="btn btn-outline-secondary btn-sm" id="clearBoxBtn">입력창 비우기</button>
+            </div>
+            <div class="msg" id="addMsg"></div>
+        </div>
+
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <span class="hint">일반볼 5개(파란색) · 파워볼 1개(금색)가 당첨번호 · 번호를 클릭하면 전체 카드에서 같은 번호에 보라색 테두리가 표시돼요 (최대 6개)</span>
+            <span class="d-flex align-items-center gap-2">
+                <span class="hint" id="roundCount"></span>
+                <span class="hint" id="markCount">일반 0/6 · 파워볼 0/6</span>
+                <button class="btn btn-outline-secondary btn-sm" id="clearMarksBtn">표시 지우기</button>
+            </span>
+        </div>
+        <div id="board" class="grid"></div>
+    </div>
+
+    <!-- 즐겨찾기 탭 -->
+    <div id="panel-favorites" style="display:none">
+        <div class="card-panel mb-3">
+            <h6 class="fw-bold mb-1">내 번호 만들기</h6>
+            <p class="hint mb-2">일반볼 5개와 파워볼 1개를 골라 저장하면, 저장된 당첨결과와 자동으로 비교해서 가장 많이 맞은 회차를 보여드려요.</p>
+            <div class="hint mb-1">일반볼 (<span id="pickCount">0</span>/5)</div>
+            <div class="pickboard" id="pickBoard"></div>
+            <div class="hint mb-1 mt-3">파워볼</div>
+            <div class="pickpb" id="pickPb"></div>
+            <div class="mt-3 d-flex gap-2 flex-wrap">
+                <input class="form-control form-control-sm" style="max-width:220px" id="favName" placeholder="이름 (예: 생일 조합)" maxlength="24">
+                <button class="btn btn-warning btn-sm" id="saveFavBtn">즐겨찾기 저장</button>
+                <button class="btn btn-outline-secondary btn-sm" id="resetPickBtn">선택 초기화</button>
+            </div>
+            <div class="msg" id="favMsg"></div>
+        </div>
+
+        <div id="favList"></div>
+    </div>
+</div>
+
+<script>
+    function switchTab(tab) {
+        document.querySelectorAll('#mainTab .nav-link').forEach(a => a.classList.remove('active'));
+        event.target.classList.add('active');
+        document.getElementById('panel-results').style.display = tab === 'results' ? '' : 'none';
+        document.getElementById('panel-favorites').style.display = tab === 'favorites' ? '' : 'none';
+    }
+
+    function roundCard(r) {
+        const hit = new Set(r.nums);
+        const balls = Array.from({length: 28}, (_, i) => i + 1)
+            .map(n => `<span class="ball${hit.has(n) ? ' hit' : ''}" data-num="${n}">${n}</span>`).join('');
+        const pballs = Array.from({length: 10}, (_, i) => i)
+            .map(n => `<span class="pball${n === r.pb ? ' hit' : ''}" data-num="${n}">${n}</span>`).join('');
+        return `
+            <div class="rcard">
+                <button class="del" data-del-round="${r.id}" title="삭제">✕</button>
+                <div class="rhead">
+                    <span class="round">제 ${r.round} 회</span>
+                    <span class="date">${r.date}</span>
+                </div>
+                <div class="board">${balls}</div>
+                <div class="pbrow"><span class="lbl">파워볼</span><div class="pbnums">${pballs}</div></div>
+                <div class="stats">
+                    <span class="chip">합 <b>${r.sum}</b></span>
+                    <span class="chip">홀짝 <b>${r.oe}</b></span>
+                    <span class="chip">대중소 <b>${r.size}</b></span>
+                    <span class="chip">구간 <b>${r.sum_band}</b></span>
+                    <span class="chip">파워볼구간 <b>${r.pb_band}</b></span>
+                </div>
+            </div>`;
+    }
+
+    // 번호 클릭 시 전체 카드 + 출현빈도 칩에서 같은 번호에 보더를 토글하는 표시 상태 (일반볼/파워볼 별도 관리, 각 최대 6개)
+    const MAX_MARKS = 6;
+    const markedNums = new Set();
+    const markedPb = new Set();
+    let lastRounds = [];
+
+    function toggleMark(set, n) {
+        if (set.has(n)) { set.delete(n); return; }
+        if (set.size >= MAX_MARKS) return;  // 최대 개수 도달 — 새로 추가하지 않고 무시
+        set.add(n);
+    }
+
+    function computeFreq(rounds, field, domainSize, domainStart) {
+        const counts = new Map();
+        for (let n = domainStart; n < domainStart + domainSize; n++) counts.set(n, 0);
+        rounds.forEach(r => {
+            const values = field === 'pb' ? [r.pb] : r.nums;
+            values.forEach(n => counts.set(n, (counts.get(n) || 0) + 1));
+        });
+        return Array.from(counts.entries())
+            .filter(([, c]) => c > 0)
+            .sort((a, b) => b[1] - a[1] || a[0] - b[0]);
+    }
+
+    function renderFreq(containerId, freqList, markedSet, pbStyle) {
+        const el = document.getElementById(containerId);
+        el.innerHTML = freqList.length
+            ? freqList.map(([n, c]) => `<span class="freq-chip${pbStyle ? ' pb' : ''}${markedSet.has(n) ? ' marked' : ''}" data-num="${n}">${n} <span class="cnt">${c}회</span></span>`).join('')
+            : '<span class="hint">아직 데이터가 없어요</span>';
+    }
+
+    function applyMarks() {
+        document.querySelectorAll('#board .ball').forEach(el => {
+            el.classList.toggle('marked', markedNums.has(parseInt(el.dataset.num, 10)));
+        });
+        document.querySelectorAll('#board .pball').forEach(el => {
+            el.classList.toggle('marked', markedPb.has(parseInt(el.dataset.num, 10)));
+        });
+        renderFreq('freqBoard', computeFreq(lastRounds, 'nums', 28, 1), markedNums, false);
+        renderFreq('freqPbBoard', computeFreq(lastRounds, 'pb', 10, 0), markedPb, true);
+        document.getElementById('markCount').textContent = `일반 ${markedNums.size}/${MAX_MARKS} · 파워볼 ${markedPb.size}/${MAX_MARKS}`;
+    }
+
+    // 카드/칩이 다시 그려져도(추가/삭제) 클릭 위임은 부모 컨테이너에 한 번만 걸어두면 계속 동작함
+    function bindMarkClicks(containerId) {
+        document.getElementById(containerId).addEventListener('click', (e) => {
+            const ballEl = e.target.closest('.ball, .freq-chip:not(.pb)');
+            if (ballEl) {
+                toggleMark(markedNums, parseInt(ballEl.dataset.num, 10));
+                applyMarks();
+                return;
+            }
+            const pballEl = e.target.closest('.pball, .freq-chip.pb');
+            if (pballEl) {
+                toggleMark(markedPb, parseInt(pballEl.dataset.num, 10));
+                applyMarks();
+            }
+        });
+    }
+    bindMarkClicks('board');
+    bindMarkClicks('freqBoard');
+    bindMarkClicks('freqPbBoard');
+
+    document.getElementById('clearMarksBtn').addEventListener('click', () => {
+        markedNums.clear();
+        markedPb.clear();
+        applyMarks();
+    });
+
+    async function loadRounds() {
+        const res = await fetch('/api/powerball/rounds');
+        const json = await res.json();
+        const board = document.getElementById('board');
+        const rounds = json.data || [];
+        lastRounds = rounds;
+        board.innerHTML = rounds.length
+            ? rounds.map(roundCard).join('')
+            : '<div class="empty" style="grid-column:1/-1">아직 등록된 회차가 없어요. 위에 붙여넣고 "회차 추가"를 눌러보세요.</div>';
+        document.getElementById('roundCount').textContent = `총 ${rounds.length}개 회차 저장됨`;
+        applyMarks();
+
+        board.querySelectorAll('[data-del-round]').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                await fetch(`/api/powerball/rounds/${btn.dataset.delRound}`, { method: 'DELETE' });
+                loadRounds();
+                loadFavorites();
+            });
+        });
+    }
+
+    document.getElementById('addBtn').addEventListener('click', async () => {
+        const box = document.getElementById('pasteBox');
+        const msg = document.getElementById('addMsg');
+        const res = await fetch('/api/powerball/rounds', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: box.value })
+        });
+        const json = await res.json();
+        if (json.status !== 'success') {
+            msg.textContent = json.message || '추가 실패';
+            msg.className = 'msg err';
+            return;
+        }
+        const parts = [];
+        if (json.added > 0) parts.push(`${json.added}개 회차 추가됨`);
+        if (json.skipped > 0) parts.push(`이미 있는 회차 ${json.skipped}개는 건너뜀`);
+        if (json.errors && json.errors.length) parts.push('오류:\n' + json.errors.join('\n'));
+        msg.textContent = parts.join(' · ') || '추가할 내용이 없습니다.';
+        msg.className = 'msg ' + (json.added > 0 ? 'ok' : 'err');
+        if (json.added > 0) { box.value = ''; loadRounds(); }
+    });
+
+    document.getElementById('clearBoxBtn').addEventListener('click', () => {
+        document.getElementById('pasteBox').value = '';
+        document.getElementById('addMsg').textContent = '';
+    });
+
+    // ---- 즐겨찾기 ----
+    let pick = { nums: new Set(), pb: null };
+
+    function renderPicker() {
+        const board = document.getElementById('pickBoard');
+        board.innerHTML = Array.from({length: 28}, (_, i) => i + 1).map(n => {
+            const sel = pick.nums.has(n);
+            const disabled = !sel && pick.nums.size >= 5;
+            return `<button type="button" class="pickball${sel ? ' sel' : ''}" data-n="${n}" ${disabled ? 'disabled' : ''}>${n}</button>`;
+        }).join('');
+        board.querySelectorAll('.pickball').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const n = parseInt(btn.dataset.n, 10);
+                if (pick.nums.has(n)) pick.nums.delete(n);
+                else if (pick.nums.size < 5) pick.nums.add(n);
+                renderPicker();
+            });
+        });
+        document.getElementById('pickCount').textContent = pick.nums.size;
+
+        const pb = document.getElementById('pickPb');
+        pb.innerHTML = Array.from({length: 10}, (_, i) => i).map(n =>
+            `<button type="button" class="pickball${pick.pb === n ? ' sel' : ''}" data-pb="${n}">${n}</button>`
+        ).join('');
+        pb.querySelectorAll('.pickball').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const n = parseInt(btn.dataset.pb, 10);
+                pick.pb = (pick.pb === n) ? null : n;
+                renderPicker();
+            });
+        });
+    }
+
+    document.getElementById('resetPickBtn').addEventListener('click', () => {
+        pick = { nums: new Set(), pb: null };
+        document.getElementById('favName').value = '';
+        renderPicker();
+    });
+
+    document.getElementById('saveFavBtn').addEventListener('click', async () => {
+        const msg = document.getElementById('favMsg');
+        if (pick.nums.size !== 5 || pick.pb === null) {
+            msg.textContent = '일반볼 5개와 파워볼 1개를 모두 선택해주세요.';
+            msg.className = 'msg err';
+            return;
+        }
+        const name = document.getElementById('favName').value.trim();
+        const res = await fetch('/api/powerball/favorites', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, nums: Array.from(pick.nums), pb: pick.pb })
+        });
+        const json = await res.json();
+        if (json.status !== 'success') {
+            msg.textContent = json.message || '저장 실패';
+            msg.className = 'msg err';
+            return;
+        }
+        msg.textContent = '저장됨';
+        msg.className = 'msg ok';
+        pick = { nums: new Set(), pb: null };
+        document.getElementById('favName').value = '';
+        renderPicker();
+        loadFavorites();
+    });
+
+    function favRow(f) {
+        const balls = f.nums.map(n => `<span>${n}</span>`).join('');
+        const pball = `<span class="pb">${f.pb}</span>`;
+        const best = (f.best_round === null)
+            ? '비교할 당첨결과가 아직 없어요'
+            : `최다 일치: 제 ${f.best_round}회 — 일반볼 <b>${f.best_hit_count}개</b>${f.best_pb_hit ? ' + 파워볼 일치' : ''}`;
+        return `
+            <div class="favrow">
+                <span class="name">${f.name}</span>
+                <div class="balls">${balls}${pball}</div>
+                <span class="best">${best}</span>
+                <button class="btn btn-outline-danger btn-sm" data-del-fav="${f.id}">삭제</button>
+            </div>`;
+    }
+
+    async function loadFavorites() {
+        const res = await fetch('/api/powerball/favorites');
+        const json = await res.json();
+        const list = document.getElementById('favList');
+        const favs = json.data || [];
+        list.innerHTML = favs.length
+            ? favs.map(favRow).join('')
+            : '<div class="empty">아직 저장한 번호가 없어요. 위에서 번호를 고르고 저장해보세요.</div>';
+        list.querySelectorAll('[data-del-fav]').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                await fetch(`/api/powerball/favorites/${btn.dataset.delFav}`, { method: 'DELETE' });
+                loadFavorites();
+            });
+        });
+    }
+
+    renderPicker();
+    loadRounds();
+    loadFavorites();
+</script>
+</body>
+</html>
