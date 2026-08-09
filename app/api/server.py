@@ -1,7 +1,9 @@
 from flask import Flask, jsonify, render_template, request, session, redirect, url_for
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.security import generate_password_hash, check_password_hash
 from app.utils.db_manager import (
+    init_db,
     get_latest_alerts, delete_alert,
     get_latest_stock_alerts, delete_stock_alert,
     get_latest_stock_raw_data, get_market_cap_history,
@@ -37,6 +39,7 @@ from app.utils.db_manager import (
     save_powerball_rounds, get_powerball_rounds, delete_powerball_round,
     add_powerball_favorite, get_powerball_favorites, delete_powerball_favorite,
     save_lotto645_rounds, get_lotto645_rounds, delete_lotto645_round,
+    get_login_settings, save_login_settings,
 )
 from app.core.powerball import parse_powerball_block
 from app.core.lotto645 import parse_lotto645_block, parse_lotto645_excel
@@ -53,17 +56,23 @@ from app.core.upbit_market_analysis import run_coin_screening
 from app.config import Config
 import json
 import os
+import string
 import threading
 import secrets
 import subprocess
 import time as _time
 from datetime import datetime as _dt, timedelta as _timedelta
-from app.core.upbit_monitor import send_slack_msg
+from app.utils.slack import send_slack_msg
 
 app = Flask(__name__, template_folder='../../templates')
 app.config['APPLICATION_ROOT'] = Config.APP_ROOT
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 CORS(app)
+
+# API 프로세스는 다른 프로세스(run_stock_monitor 등)의 init_db() 호출 시점에 의존하지 않도록
+# 여기서도 명시적으로 한 번 호출(idempotent) — 특히 아래 login_settings 조회가 모듈 임포트 시점에
+# 바로 실행되므로, 테이블이 아직 없는 상태로 레이스 컨디션에 걸리는 걸 방지
+init_db()
 
 if not Config.SECRET_KEY:
     app.logger.warning("[로그인] SECRET_KEY가 설정되지 않아 임시 키를 사용합니다 — 서버 재시작마다 로그인이 풀립니다. "
@@ -72,19 +81,27 @@ app.secret_key = Config.SECRET_KEY or secrets.token_hex(32)
 app.config['PERMANENT_SESSION_LIFETIME'] = _timedelta(days=Config.SESSION_LIFETIME_DAYS)
 
 # ──────────────────────────────────────────────
-# 로그인 (Slack으로 1회용 코드 전송) — 앱 전체를 세션 로그인으로 보호
+# 로그인 (잠금 토글 — 켜질 때마다 새 비밀번호를 Slack으로 전송, 해제될 때까지 그 비밀번호 재사용)
 # ──────────────────────────────────────────────
-_pending_login_code = {"code": None, "expires_at": 0}
-_last_code_sent_at = 0
+_PASSWORD_ALPHABET = ''.join(c for c in string.ascii_letters + string.digits if c not in 'lIO0')  # 헷갈리는 문자 제외
 
-# 로그인 없이 접근 가능한 엔드포인트 — 로그인 화면 자체, 코드 발급/검증 API, 정적 파일
-_PUBLIC_ENDPOINTS = {'login_view', 'request_login_code_api', 'verify_login_code_api', 'static'}
+_login_state = get_login_settings()  # {'lock_enabled': bool, 'password_hash': str|None} — 시작 시 DB에서 로드, 이후 메모리 캐시
+_login_fail_count = 0
+_login_locked_until = 0
+_MAX_LOGIN_FAILS = 5
+_LOGIN_FAIL_LOCKOUT_SECONDS = 60
+
+# 로그인 없이 접근 가능한 엔드포인트 — 로그인 화면, 비밀번호 검증 API, 정적 파일
+# (잠금 토글/재발급 API는 일부러 여기 안 넣음 — 잠금 켜진 상태에선 로그인해야만 끄거나 재발급할 수 있어야 함)
+_PUBLIC_ENDPOINTS = {'login_view', 'verify_password_api', 'static'}
 
 @app.before_request
 def require_login():
     # 서버 간 동기화(/api/sync/*)는 자체 토큰(X-Sync-Token)으로 별도 인증하므로 세션 로그인과 무관
     if request.path.startswith('/api/sync/'):
         return
+    if not _login_state['lock_enabled']:
+        return  # 잠금 꺼져있으면 전체 오픈
     if request.endpoint in _PUBLIC_ENDPOINTS:
         return
     if not session.get('logged_in'):
@@ -98,40 +115,70 @@ def login_view():
         return redirect(url_for('index'))
     return render_template('login.html')
 
-@app.route('/api/login/request-code', methods=['POST'])
-def request_login_code_api():
-    """Slack으로 1회용 로그인 코드 전송"""
-    global _pending_login_code, _last_code_sent_at
+@app.route('/api/login/status', methods=['GET'])
+def login_status_api():
+    """잠금 켜짐/꺼짐 여부만 반환 (비밀번호 자체는 절대 내려주지 않음)"""
+    return jsonify({'status': 'success', 'lock_enabled': _login_state['lock_enabled']})
+
+def _issue_new_password() -> str:
+    """새 비밀번호를 생성해 해시로 저장하고 Slack으로 평문 전송. 반환: 평문 비밀번호(로그용)"""
+    password = ''.join(secrets.choice(_PASSWORD_ALPHABET) for _ in range(10))
+    _login_state['password_hash'] = generate_password_hash(password)
+    save_login_settings(_login_state['lock_enabled'], _login_state['password_hash'])
+    send_slack_msg(f"🔐 로그인 비밀번호: *{password}*\n해제하거나 다시 발급하기 전까지 계속 이 비밀번호를 쓰시면 됩니다.")
+    return password
+
+@app.route('/api/login/toggle', methods=['POST'])
+def toggle_lock_api():
+    """잠금 켜기/끄기. 켜질 때는(꺼짐→켜짐이든, 이미 켜진 상태에서 재발급이든) 항상 새 비밀번호를 발급해 Slack으로 보냄.
+    끌 때는 비밀번호 그대로 두고(다음에 켤 때 재사용 안 함 — 켤 때마다 무조건 새로 발급) 잠금만 해제.
+    body: {enabled: bool}
+    """
+    body = request.get_json(silent=True) or {}
+    enabled = bool(body.get('enabled'))
+
+    if enabled:
+        if not Config.SLACK_WEBHOOK_URL:
+            return jsonify({'status': 'error', 'message': 'Slack 웹훅(SLACK_TOKEN)이 설정돼 있지 않아 비밀번호를 보낼 수 없습니다.'}), 500
+        _login_state['lock_enabled'] = True
+        _issue_new_password()
+        app.logger.info("[로그인] 잠금 켜짐 — 새 비밀번호 발급")
+    else:
+        _login_state['lock_enabled'] = False
+        save_login_settings(False, _login_state['password_hash'])
+        app.logger.info("[로그인] 잠금 꺼짐")
+
+    return jsonify({'status': 'success', 'lock_enabled': _login_state['lock_enabled']})
+
+@app.route('/api/login/reissue', methods=['POST'])
+def reissue_password_api():
+    """잠금은 켜진 채로 비밀번호만 새로 발급(로그인된 상태에서만 호출 가능 — before_request가 이미 보장)"""
     if not Config.SLACK_WEBHOOK_URL:
-        return jsonify({'status': 'error', 'message': 'Slack 웹훅(SLACK_TOKEN)이 설정돼 있지 않아 코드를 보낼 수 없습니다.'}), 500
-
-    now = _time.time()
-    remaining = Config.LOGIN_CODE_REQUEST_COOLDOWN - (now - _last_code_sent_at)
-    if remaining > 0:
-        return jsonify({'status': 'error', 'message': f'{int(remaining)}초 후 다시 요청해주세요.'}), 429
-
-    code = f"{secrets.randbelow(1_000_000):06d}"
-    _pending_login_code = {"code": code, "expires_at": now + Config.LOGIN_CODE_TTL}
-    _last_code_sent_at = now
-    send_slack_msg(f"🔐 로그인 코드: *{code}* ({Config.LOGIN_CODE_TTL // 60}분간 유효, 1회용)")
-    app.logger.info("[로그인] Slack으로 코드 전송함")
-    return jsonify({'status': 'success', 'message': 'Slack으로 코드를 보냈습니다.'})
+        return jsonify({'status': 'error', 'message': 'Slack 웹훅(SLACK_TOKEN)이 설정돼 있지 않아 비밀번호를 보낼 수 없습니다.'}), 500
+    _issue_new_password()
+    app.logger.info("[로그인] 비밀번호 재발급")
+    return jsonify({'status': 'success'})
 
 @app.route('/api/login/verify', methods=['POST'])
-def verify_login_code_api():
-    """코드 검증 → 통과 시 세션 로그인 처리(30일 유지)"""
+def verify_password_api():
+    """비밀번호 검증 → 통과 시 세션 로그인 처리(30일 유지). 여러 번 재사용 가능한 상시 비밀번호."""
+    global _login_fail_count, _login_locked_until
+    now = _time.time()
+    if now < _login_locked_until:
+        return jsonify({'status': 'error', 'message': f'로그인 시도가 너무 많았습니다. {int(_login_locked_until - now)}초 후 다시 시도해주세요.'}), 429
+
     body = request.get_json(silent=True) or {}
-    code = (body.get('code') or '').strip()
+    password = body.get('password') or ''
 
-    if not _pending_login_code.get('code'):
-        return jsonify({'status': 'error', 'message': '먼저 코드를 요청해주세요.'}), 400
-    if _time.time() > _pending_login_code['expires_at']:
-        _pending_login_code['code'] = None
-        return jsonify({'status': 'error', 'message': '코드가 만료됐습니다. 다시 요청해주세요.'}), 400
-    if code != _pending_login_code['code']:
-        return jsonify({'status': 'error', 'message': '코드가 일치하지 않습니다.'}), 401
+    if not _login_state['password_hash'] or not check_password_hash(_login_state['password_hash'], password):
+        _login_fail_count += 1
+        if _login_fail_count >= _MAX_LOGIN_FAILS:
+            _login_locked_until = now + _LOGIN_FAIL_LOCKOUT_SECONDS
+            _login_fail_count = 0
+            return jsonify({'status': 'error', 'message': f'{_LOGIN_FAIL_LOCKOUT_SECONDS}초 동안 로그인이 잠겼습니다.'}), 429
+        return jsonify({'status': 'error', 'message': '비밀번호가 일치하지 않습니다.'}), 401
 
-    _pending_login_code['code'] = None  # 1회용 — 성공 즉시 폐기
+    _login_fail_count = 0
     session.permanent = True
     session['logged_in'] = True
     app.logger.info("[로그인] 로그인 성공")
@@ -141,6 +188,11 @@ def verify_login_code_api():
 def logout_view():
     session.clear()
     return redirect(url_for('login_view'))
+
+@app.route('/security')
+def security_view():
+    """앱 잠금 설정 페이지 (잠금 토글 + 비밀번호 재발급)"""
+    return render_template('security.html', active_page='security', lock_enabled=_login_state['lock_enabled'])
 
 @app.route('/')
 def index():

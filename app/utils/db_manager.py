@@ -349,6 +349,17 @@ def init_db():
         )
     ''')
 
+    # 앱 잠금 설정 — 싱글톤 1행(id=1). 잠금 켜질 때마다 비밀번호를 새로 발급해 Slack으로 전송하고,
+    # 해제될 때까지 그 비밀번호를 계속 재사용한다(매번 새 코드를 받는 방식이 아님).
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS login_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            lock_enabled INTEGER DEFAULT 0,
+            password_hash TEXT,
+            updated_at TEXT
+        )
+    ''')
+
     # 스케줄링 작업 실행 이력 (동기화 관리 페이지 "처리 로그"용)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS job_run_log (
@@ -2634,6 +2645,45 @@ def delete_quick_link(link_id: int) -> int:
     deleted = cursor.rowcount
     conn.close()
     return deleted
+
+
+# ──────────────────────────────────────────────
+# 앱 잠금 설정 (Slack 비밀번호 로그인)
+# ──────────────────────────────────────────────
+
+def get_login_settings() -> dict:
+    """잠금 설정 조회. 반환: {lock_enabled: bool, password_hash: str|None}
+    행이 없으면(최초 실행) 잠금 꺼짐 상태로 취급.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM login_settings WHERE id = 1')
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return {'lock_enabled': False, 'password_hash': None}
+    return {'lock_enabled': bool(row['lock_enabled']), 'password_hash': row['password_hash']}
+
+
+def save_login_settings(lock_enabled: bool, password_hash: str = None) -> None:
+    """잠금 설정 저장(upsert, 싱글톤 1행). password_hash를 None으로 넘기면 기존 값 유지."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    if password_hash is None:
+        cursor.execute('SELECT password_hash FROM login_settings WHERE id = 1')
+        row = cursor.fetchone()
+        password_hash = row[0] if row else None
+    cursor.execute('''
+        INSERT INTO login_settings (id, lock_enabled, password_hash, updated_at)
+        VALUES (1, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET lock_enabled = excluded.lock_enabled,
+                                       password_hash = excluded.password_hash,
+                                       updated_at = excluded.updated_at
+    ''', (1 if lock_enabled else 0, password_hash, timestamp))
+    conn.commit()
+    conn.close()
 
 
 # ──────────────────────────────────────────────

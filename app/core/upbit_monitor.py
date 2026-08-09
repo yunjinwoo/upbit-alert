@@ -1,23 +1,13 @@
 import pyupbit
 import time
-import requests
 from datetime import datetime, timedelta
 from app.config import Config
 from app.utils.logger import get_logger
 from app.utils.google_sheets import init_sheet, save_to_sheet, get_daily_volume_info
 from app.utils.db_manager import get_today_alert_count
+from app.utils.slack import send_slack_msg  # noqa: F401 — 기존 호출부(stock_monitor.py 등) 호환용 재노출
 
 logger = get_logger()
-
-def send_slack_msg(text):
-    if not Config.SLACK_WEBHOOK_URL:
-        logger.warning("Slack webhook URL not configured.")
-        return
-    try:
-        payload = {"text": text}
-        requests.post(Config.SLACK_WEBHOOK_URL, json=payload, timeout=5)
-    except Exception as e:
-        logger.error(f"슬랙 전송 실패: {e}")
 
 def get_volume_ratio(ticker, interval, lookback=Config.UPBIT_VOL_AVG_LOOKBACK):
     """현재(진행 중) 캔들 거래량이 직전 lookback개 확정 캔들의 평균 거래량 대비 몇 배인지 계산한다.
