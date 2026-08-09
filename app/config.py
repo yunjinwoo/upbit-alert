@@ -55,9 +55,7 @@ class Config:
     SYNC_SERVER_URL = os.getenv("SYNC_SERVER_URL", "http://49.247.202.50/upbit")  # 동기화 관리 페이지 기본값과 동일
     SYNC_AUTO_LIMIT = 7  # 자동 동기화 시 전송할 최근 날짜 수
 
-    # 로그인 (Slack으로 1회용 코드 전송 → 세션 쿠키 유지)
+    # 로그인 (잠금 토글 — 켜질 때마다 Slack으로 새 비밀번호 전송, 해제 전까지 재사용 → 세션 쿠키 유지)
     # SECRET_KEY 미설정 시 매번 랜덤 키로 대체 — 서버 재시작마다 로그인이 풀림. 꼭 .env(또는 환경변수)에 고정값으로 설정할 것.
     SECRET_KEY = os.getenv("SECRET_KEY")
-    LOGIN_CODE_TTL = 600                 # 로그인 코드 유효시간(초) — 10분, 1회용
-    LOGIN_CODE_REQUEST_COOLDOWN = 30     # 코드 재요청 최소 간격(초) — Slack 도배 방지
-    SESSION_LIFETIME_DAYS = 30           # 로그인 유지 기간(일) — 이 기간 안엔 코드 재입력 없이 세션 유지
+    SESSION_LIFETIME_DAYS = 30           # 로그인 유지 기간(일) — 이 기간 안엔 비밀번호 재입력 없이 세션 유지

@@ -18,74 +18,40 @@
         .login-sub { font-size: 0.82rem; color: #8a8f9c; margin-bottom: 22px; }
         .btn-navy { background: #1a1a2e; color: #fff; border: none; }
         .btn-navy:hover { background: #2d2d4e; color: #fff; }
-        .code-input {
-            letter-spacing: 0.4em; text-align: center; font-size: 1.3rem; font-weight: 700;
-            font-variant-numeric: tabular-nums;
-        }
         .msg { font-size: 0.8rem; font-weight: 600; margin-top: 10px; white-space: pre-line; }
         .msg.ok { color: #1f8a5f; }
         .msg.err { color: #c14a4a; }
-        #step2 { display: none; }
     </style>
 </head>
 <body>
 
 <div class="login-card">
     <div class="login-title">📡 알림 시스템</div>
-    <div class="login-sub">Slack으로 받은 코드로 로그인하세요</div>
+    <div class="login-sub">Slack으로 받은 비밀번호를 입력하세요</div>
 
-    <div id="step1">
-        <button class="btn btn-navy w-100" id="requestBtn">Slack으로 코드 받기</button>
-    </div>
-
-    <div id="step2">
-        <label class="form-label small text-muted mt-3">Slack으로 받은 6자리 코드</label>
-        <input type="text" class="form-control code-input" id="codeInput" maxlength="6" inputmode="numeric" placeholder="000000" autocomplete="one-time-code">
-        <button class="btn btn-navy w-100 mt-3" id="verifyBtn">로그인</button>
-        <button class="btn btn-outline-secondary btn-sm w-100 mt-2" id="resendBtn">코드 다시 받기</button>
-    </div>
+    <input type="password" class="form-control" id="pwInput" placeholder="비밀번호" autocomplete="current-password" autofocus>
+    <button class="btn btn-navy w-100 mt-3" id="loginBtn">로그인</button>
 
     <div class="msg" id="msg"></div>
 </div>
 
 <script>
-    const step1 = document.getElementById('step1');
-    const step2 = document.getElementById('step2');
+    const pwInput = document.getElementById('pwInput');
     const msg = document.getElementById('msg');
-    const codeInput = document.getElementById('codeInput');
 
     function showMsg(text, ok) {
         msg.textContent = text;
         msg.className = 'msg ' + (ok ? 'ok' : 'err');
     }
 
-    async function requestCode() {
-        showMsg('요청 중...', true);
-        try {
-            const res = await fetch('/api/login/request-code', { method: 'POST' });
-            const json = await res.json();
-            if (json.status !== 'success') { showMsg(json.message || '요청 실패', false); return; }
-            showMsg(json.message, true);
-            step1.style.display = 'none';
-            step2.style.display = '';
-            codeInput.value = '';
-            codeInput.focus();
-        } catch (e) {
-            showMsg('요청 중 오류: ' + e.message, false);
-        }
-    }
-
-    document.getElementById('requestBtn').addEventListener('click', requestCode);
-    document.getElementById('resendBtn').addEventListener('click', requestCode);
-
-    document.getElementById('verifyBtn').addEventListener('click', async () => {
-        const code = codeInput.value.trim();
-        if (!code) { showMsg('코드를 입력해주세요.', false); return; }
+    async function login() {
+        const password = pwInput.value;
+        if (!password) { showMsg('비밀번호를 입력해주세요.', false); return; }
         showMsg('확인 중...', true);
         try {
             const res = await fetch('/api/login/verify', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ code })
+                body: JSON.stringify({ password })
             });
             const json = await res.json();
             if (json.status !== 'success') { showMsg(json.message || '로그인 실패', false); return; }
@@ -93,11 +59,10 @@
         } catch (e) {
             showMsg('로그인 중 오류: ' + e.message, false);
         }
-    });
+    }
 
-    codeInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') document.getElementById('verifyBtn').click();
-    });
+    document.getElementById('loginBtn').addEventListener('click', login);
+    pwInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') login(); });
 </script>
 </body>
 </html>

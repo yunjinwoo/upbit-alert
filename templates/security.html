@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>보안 설정</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f4f7f6; font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; }
+        .main-navbar { background-color: #1a1a2e; }
+        .main-navbar .navbar-brand { color: #fff; font-weight: bold; }
+        .main-navbar .nav-link { color: rgba(255,255,255,0.75) !important; font-size: 0.82rem; }
+        .main-navbar .nav-link:hover, .main-navbar .nav-link.active { color: #fff !important; }
+        .main-navbar .nav-link.active { border-bottom: 2px solid #4da6ff; }
+
+        .dashboard-container { margin-top: 24px; margin-bottom: 60px; max-width: 560px; }
+        .card-panel { background: white; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); padding: 22px 24px; }
+
+        .lock-row { display: flex; align-items: center; justify-content: space-between; }
+        .lock-label { font-weight: 700; font-size: 0.95rem; color: #1a1a2e; }
+        .lock-status { font-size: 0.78rem; margin-top: 2px; }
+        .lock-status.on { color: #1f8a5f; }
+        .lock-status.off { color: #8a8f9c; }
+        .form-switch .form-check-input { width: 3em; height: 1.5em; cursor: pointer; }
+
+        .hint { color: #8a8f9c; font-size: 0.78rem; line-height: 1.6; }
+        .msg { font-size: 0.8rem; font-weight: 600; margin-top: 10px; white-space: pre-line; }
+        .msg.ok { color: #1f8a5f; }
+        .msg.err { color: #c14a4a; }
+    </style>
+</head>
+<body>
+
+{% include '_navbar.html' %}
+
+<div class="container dashboard-container">
+    <h2 class="mb-3" style="font-size:1.2rem; font-weight:700; color:#1a1a2e">🔒 보안 설정</h2>
+
+    <div class="card-panel mb-3">
+        <div class="lock-row">
+            <div>
+                <div class="lock-label">앱 잠금</div>
+                <div class="lock-status {{ 'on' if lock_enabled else 'off' }}" id="lockStatus">
+                    {{ '켜짐 — 로그인 필요' if lock_enabled else '꺼짐 — 누구나 접근 가능' }}
+                </div>
+            </div>
+            <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="lockSwitch" {{ 'checked' if lock_enabled }}>
+            </div>
+        </div>
+        <p class="hint mt-3 mb-0">잠금을 켤 때마다 새 비밀번호가 생성돼 Slack으로 전송됩니다. 끄면 로그인 없이 전체 페이지가 열립니다.</p>
+    </div>
+
+    <div class="card-panel" id="reissuePanel" style="{{ '' if lock_enabled else 'display:none' }}">
+        <div class="lock-label mb-1">비밀번호 재발급</div>
+        <p class="hint mb-2">잠금은 켠 채로 비밀번호만 새로 받고 싶을 때 사용하세요 (기존 비밀번호는 즉시 무효화됩니다).</p>
+        <button class="btn btn-outline-secondary btn-sm" id="reissueBtn">Slack으로 새 비밀번호 받기</button>
+    </div>
+
+    <div class="msg" id="msg"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    const msg = document.getElementById('msg');
+    function showMsg(text, ok) {
+        msg.textContent = text;
+        msg.className = 'msg ' + (ok ? 'ok' : 'err');
+    }
+
+    document.getElementById('lockSwitch').addEventListener('change', async (e) => {
+        const enabled = e.target.checked;
+        showMsg(enabled ? 'Slack으로 새 비밀번호 보내는 중...' : '잠금 해제 중...', true);
+        try {
+            const res = await fetch('/api/login/toggle', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled })
+            });
+            const json = await res.json();
+            if (json.status !== 'success') {
+                showMsg(json.message || '변경 실패', false);
+                e.target.checked = !enabled;  // 실패 시 스위치 원복
+                return;
+            }
+            const statusEl = document.getElementById('lockStatus');
+            statusEl.textContent = json.lock_enabled ? '켜짐 — 로그인 필요' : '꺼짐 — 누구나 접근 가능';
+            statusEl.className = 'lock-status ' + (json.lock_enabled ? 'on' : 'off');
+            document.getElementById('reissuePanel').style.display = json.lock_enabled ? '' : 'none';
+            showMsg(json.lock_enabled ? 'Slack으로 새 비밀번호를 보냈습니다.' : '잠금이 해제됐습니다.', true);
+        } catch (err) {
+            showMsg('오류: ' + err.message, false);
+            e.target.checked = !enabled;
+        }
+    });
+
+    document.getElementById('reissueBtn').addEventListener('click', async () => {
+        showMsg('Slack으로 새 비밀번호 보내는 중...', true);
+        try {
+            const res = await fetch('/api/login/reissue', { method: 'POST' });
+            const json = await res.json();
+            if (json.status !== 'success') { showMsg(json.message || '재발급 실패', false); return; }
+            showMsg('Slack으로 새 비밀번호를 보냈습니다. 다른 기기 세션은 로그아웃 전까지 그대로 유지됩니다.', true);
+        } catch (err) {
+            showMsg('오류: ' + err.message, false);
+        }
+    });
+</script>
+</body>
+</html>
