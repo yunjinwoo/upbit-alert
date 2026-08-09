@@ -20,25 +20,28 @@ def send_slack_msg(text):
         logger.error(f"슬랙 전송 실패: {e}")
 
 def get_volume_ratio(ticker, interval, lookback=Config.UPBIT_VOL_AVG_LOOKBACK):
-    """현재(진행 중) 캔들 거래량이 직전 lookback개 확정 캔들의 평균 거래량 대비 몇 배인지 계산한다."""
+    """현재(진행 중) 캔들 거래량이 직전 lookback개 확정 캔들의 평균 거래량 대비 몇 배인지 계산한다.
+    신규 상장 등으로 lookback만큼 확정 캔들이 쌓이지 않아 평균을 낼 수 없으면 None(데이터 없음)을 반환한다.
+    (예: 상장 1~2주된 코인은 주봉이 1~2개뿐이라 20주 평균을 못 냄 — 이 타임프레임은 감시 대상에서 제외됨)
+    """
     try:
         df = pyupbit.get_ohlcv(ticker, interval=interval, count=lookback + 1)
         if df is None or len(df) < 2:
-            return 0
+            return None
 
         vol_list = df['volume'].tolist()
         curr_vol = float(vol_list[-1])
         avg_vol = sum(vol_list[:-1]) / len(vol_list[:-1])
 
         if avg_vol == 0:
-            return 0
+            return None
 
         ratio = curr_vol / avg_vol
         logger.info(f" {ticker} - {interval} = {ratio:.2f} (최근 {len(vol_list) - 1}봉 평균 대비)")
         return ratio
     except Exception as e:
         logger.error(f"[{ticker}-{interval}] 에러: {e}")
-        return 0
+        return None
 
 def run_upbit_monitor():
     logger.info(f"🚀 전 타임프레임 동시 폭발 감시 시작! (Upbit)")
@@ -70,20 +73,24 @@ def run_upbit_monitor():
 
             skip_cache.pop(ticker, None)
 
-            # ④ 분봉 조회
+            # ④ 분봉 조회 — 데이터가 부족한(None) 타임프레임은 아예 감시 대상에서 제외
             ratios = {}
             for interval in intervals.keys():
-                ratios[interval] = get_volume_ratio(ticker, interval)
+                r = get_volume_ratio(ticker, interval)
+                if r is not None:
+                    ratios[interval] = r
                 time.sleep(0.4)
 
+            total_intervals = len(ratios)  # 이 티커에서 실제로 평가 가능했던 타임프레임 수
             surge_count = 0
             active_intervals = []
 
-            for interval, name in intervals.items():
+            for interval, ratio in ratios.items():
+                name = intervals[interval]
                 threshold = thresholds.get(interval, 3.0)
-                if ratios[interval] >= threshold:
+                if ratio >= threshold:
                     surge_count += 1
-                    active_intervals.append(f"{name}(*{ratios[interval]:.1f}배* / 기준:{threshold}배)")
+                    active_intervals.append(f"{name}(*{ratio:.1f}배* / 기준:{threshold}배)")
 
             daily_str = (
                 f"▲{daily['increase_rate']}%  "
@@ -93,14 +100,14 @@ def run_upbit_monitor():
             
             if surge_count >= 2:
                 logger.info(f" surge_count: {surge_count}, active_intervals: {active_intervals}")
-                
-                if ratios["minutes240"] >= 1:
+
+                if ratios.get("minutes240", 0) >= 1:
                     df_now = pyupbit.get_ohlcv(ticker, interval="minutes5", count=1)
                     if df_now is not None and not df_now.empty:
                         current_candle_time = df_now.index[0]
-                        
+
                         if last_notified_time.get(ticker, {}).get("alert") != current_candle_time:
-                            save_to_sheet(ticker, active_intervals, surge_count, daily_str)
+                            save_to_sheet(ticker, active_intervals, surge_count, daily_str, total_intervals)
 
                             # 코인 알림은 Slack 발송 없이 DB/시트 저장만 수행 (Slack은 주식 Signal Score A등급 전용)
                             today_count = get_today_alert_count(ticker)

@@ -10,22 +10,19 @@ class Config:
     # Database
     DB_NAME = "alerts.db"
 
-    # Upbit Settings
+    # Upbit Settings — 분봉은 노이즈가 커서 4시간봉 하나만 대표로 남기고, 일봉/주봉을 더해 3개 타임프레임으로 감시
     UPBIT_INTERVALS = {
-        "minutes240": "4시간봉",
-        "minutes60": "1시간봉",
-        "minutes15": "15분봉",
-        "minutes30": "30분봉"
+        "week": "주봉",
+        "day": "일봉",
+        "minutes240": "4시간봉"
     }
     UPBIT_THRESHOLDS = {
-        "minutes5": 10.0,
-        "minutes15": 8.0,
-        "minutes30": 6.0,
-        "minutes60": 4.0,
+        "week": 2.0,
+        "day": 2.5,
         "minutes240": 3.0
     }
     UPBIT_SKIP_DURATION_ALERT = 3600 # seconds (1 hour)
-    UPBIT_VOL_AVG_LOOKBACK = 20      # 실시간 감시 거래량 배수 계산에 쓸 평균 봉 개수(직전 1봉 대비 → 최근 N봉 평균 대비)
+    UPBIT_VOL_AVG_LOOKBACK = 100     # 실시간 감시 거래량 배수 계산에 쓸 평균 봉 개수(20 → 100으로 확대, 주봉/일봉/4시간봉 공통 적용)
 
     # 코인 스크리닝(매매 후보 필터) — 전부 4시간봉 기준
     COIN_BREAKOUT_VOL_LOOKBACK = 20     # 거래량 평균 계산에 사용할 4시간봉 개수

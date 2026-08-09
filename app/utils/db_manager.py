@@ -353,6 +353,10 @@ def init_db():
         'ALTER TABLE coin_screening_daily ADD COLUMN breakout_4h INTEGER',
         'ALTER TABLE coin_screening_daily ADD COLUMN breakout_vol_ratio REAL',
         'ALTER TABLE coin_screening_daily ADD COLUMN breakout_candle_rate REAL',
+        # 실시간 감시에 주봉 타임프레임 추가
+        'ALTER TABLE alerts ADD COLUMN mweek TEXT',
+        # 실시간 감시에 일봉 타임프레임 추가 (분봉 3종 제거, 주/일/4시간봉 3개로 재편)
+        'ALTER TABLE alerts ADD COLUMN mday TEXT',
     ]
     for sql in migrations:
         try:
@@ -393,14 +397,14 @@ def get_api_token(provider):
     conn.close()
     return row[0] if row else None
 
-def save_alert_to_db(ticker, surge_count, m240, m60, m30, m15, daily_info, url):
+def save_alert_to_db(ticker, surge_count, m240, m60, m30, m15, daily_info, url, mweek="-", mday="-"):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     cursor.execute('''
-        INSERT INTO alerts (timestamp, ticker, surge_count, m240, m60, m30, m15, daily_info, url)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (timestamp, ticker, surge_count, m240, m60, m30, m15, daily_info, url))
+        INSERT INTO alerts (timestamp, ticker, surge_count, m240, m60, m30, m15, daily_info, url, mweek, mday)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (timestamp, ticker, surge_count, m240, m60, m30, m15, daily_info, url, mweek, mday))
     conn.commit()
     conn.close()
 
