@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, session, redirect, url_for
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
 from app.utils.db_manager import (
@@ -57,12 +57,90 @@ import threading
 import secrets
 import subprocess
 import time as _time
-from datetime import datetime as _dt
+from datetime import datetime as _dt, timedelta as _timedelta
+from app.core.upbit_monitor import send_slack_msg
 
 app = Flask(__name__, template_folder='../../templates')
 app.config['APPLICATION_ROOT'] = Config.APP_ROOT
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 CORS(app)
+
+if not Config.SECRET_KEY:
+    app.logger.warning("[로그인] SECRET_KEY가 설정되지 않아 임시 키를 사용합니다 — 서버 재시작마다 로그인이 풀립니다. "
+                        ".env(또는 환경변수)에 SECRET_KEY를 고정값으로 설정하세요.")
+app.secret_key = Config.SECRET_KEY or secrets.token_hex(32)
+app.config['PERMANENT_SESSION_LIFETIME'] = _timedelta(days=Config.SESSION_LIFETIME_DAYS)
+
+# ──────────────────────────────────────────────
+# 로그인 (Slack으로 1회용 코드 전송) — 앱 전체를 세션 로그인으로 보호
+# ──────────────────────────────────────────────
+_pending_login_code = {"code": None, "expires_at": 0}
+_last_code_sent_at = 0
+
+# 로그인 없이 접근 가능한 엔드포인트 — 로그인 화면 자체, 코드 발급/검증 API, 정적 파일
+_PUBLIC_ENDPOINTS = {'login_view', 'request_login_code_api', 'verify_login_code_api', 'static'}
+
+@app.before_request
+def require_login():
+    # 서버 간 동기화(/api/sync/*)는 자체 토큰(X-Sync-Token)으로 별도 인증하므로 세션 로그인과 무관
+    if request.path.startswith('/api/sync/'):
+        return
+    if request.endpoint in _PUBLIC_ENDPOINTS:
+        return
+    if not session.get('logged_in'):
+        if request.path.startswith('/api/'):
+            return jsonify({'status': 'error', 'message': '로그인이 필요합니다.'}), 401
+        return redirect(url_for('login_view'))
+
+@app.route('/login')
+def login_view():
+    if session.get('logged_in'):
+        return redirect(url_for('index'))
+    return render_template('login.html')
+
+@app.route('/api/login/request-code', methods=['POST'])
+def request_login_code_api():
+    """Slack으로 1회용 로그인 코드 전송"""
+    global _pending_login_code, _last_code_sent_at
+    if not Config.SLACK_WEBHOOK_URL:
+        return jsonify({'status': 'error', 'message': 'Slack 웹훅(SLACK_TOKEN)이 설정돼 있지 않아 코드를 보낼 수 없습니다.'}), 500
+
+    now = _time.time()
+    remaining = Config.LOGIN_CODE_REQUEST_COOLDOWN - (now - _last_code_sent_at)
+    if remaining > 0:
+        return jsonify({'status': 'error', 'message': f'{int(remaining)}초 후 다시 요청해주세요.'}), 429
+
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    _pending_login_code = {"code": code, "expires_at": now + Config.LOGIN_CODE_TTL}
+    _last_code_sent_at = now
+    send_slack_msg(f"🔐 로그인 코드: *{code}* ({Config.LOGIN_CODE_TTL // 60}분간 유효, 1회용)")
+    app.logger.info("[로그인] Slack으로 코드 전송함")
+    return jsonify({'status': 'success', 'message': 'Slack으로 코드를 보냈습니다.'})
+
+@app.route('/api/login/verify', methods=['POST'])
+def verify_login_code_api():
+    """코드 검증 → 통과 시 세션 로그인 처리(30일 유지)"""
+    body = request.get_json(silent=True) or {}
+    code = (body.get('code') or '').strip()
+
+    if not _pending_login_code.get('code'):
+        return jsonify({'status': 'error', 'message': '먼저 코드를 요청해주세요.'}), 400
+    if _time.time() > _pending_login_code['expires_at']:
+        _pending_login_code['code'] = None
+        return jsonify({'status': 'error', 'message': '코드가 만료됐습니다. 다시 요청해주세요.'}), 400
+    if code != _pending_login_code['code']:
+        return jsonify({'status': 'error', 'message': '코드가 일치하지 않습니다.'}), 401
+
+    _pending_login_code['code'] = None  # 1회용 — 성공 즉시 폐기
+    session.permanent = True
+    session['logged_in'] = True
+    app.logger.info("[로그인] 로그인 성공")
+    return jsonify({'status': 'success'})
+
+@app.route('/logout')
+def logout_view():
+    session.clear()
+    return redirect(url_for('login_view'))
 
 @app.route('/')
 def index():
