@@ -289,6 +289,47 @@ def init_db():
         )
     ''')
 
+    # 동행복권 파워볼 당첨결과 — 회차별 1건, round은 붙여넣기 중복 방지용 UNIQUE
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS powerball_rounds (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            round TEXT UNIQUE,
+            date TEXT,
+            nums TEXT,
+            pb INTEGER,
+            sum INTEGER,
+            oe TEXT,
+            size TEXT,
+            sum_band TEXT,
+            pb_band TEXT,
+            created_at TEXT
+        )
+    ''')
+
+    # 동행복권 로또6/45 당첨결과 — 회차별 1건, round은 붙여넣기 중복 방지용 UNIQUE
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS lotto645_rounds (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            round TEXT UNIQUE,
+            nums TEXT,
+            bonus INTEGER,
+            winners INTEGER,
+            prize INTEGER,
+            created_at TEXT
+        )
+    ''')
+
+    # 파워볼 즐겨찾기 번호 (개인이 골라둔 조합 — 당첨결과와 비교용)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS powerball_favorites (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            nums TEXT,
+            pb INTEGER,
+            created_at TEXT
+        )
+    ''')
+
     # 코인(업비트 KRW 마켓) 매매 후보 필터 스냅샷 — 티커당 최신 1건만 유지 (전부 4시간봉 기준)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS coin_screening_daily (
@@ -2585,6 +2626,174 @@ def delete_quick_link(link_id: int) -> int:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('DELETE FROM quick_links WHERE id = ?', (link_id,))
+    conn.commit()
+    deleted = cursor.rowcount
+    conn.close()
+    return deleted
+
+
+# ──────────────────────────────────────────────
+# 동행복권 파워볼 — 당첨결과 저장/조회 + 즐겨찾기 번호 관리
+# ──────────────────────────────────────────────
+
+def save_powerball_rounds(rounds: list) -> tuple:
+    """파워볼 당첨결과 여러 회차를 한 번에 저장. round(회차)가 이미 있으면 건너뜀.
+    rounds: [{round, date, nums(list[int]), pb, sum, oe, size, sum_band, pb_band}, ...]
+    반환: (added, skipped)
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    added = 0
+    skipped = 0
+    for r in rounds:
+        nums_str = ','.join(str(n) for n in r['nums'])
+        try:
+            cursor.execute('''
+                INSERT INTO powerball_rounds (round, date, nums, pb, sum, oe, size, sum_band, pb_band, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (r['round'], r['date'], nums_str, r['pb'], r['sum'], r['oe'], r['size'], r['sum_band'], r['pb_band'], timestamp))
+            added += 1
+        except sqlite3.IntegrityError:
+            skipped += 1  # round UNIQUE 제약 위반 — 이미 저장된 회차
+    conn.commit()
+    conn.close()
+    return added, skipped
+
+
+def get_powerball_rounds(limit: int = 300) -> list:
+    """파워볼 당첨결과 목록 조회 (회차 최신순). nums는 리스트[int]로 파싱해서 반환."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM powerball_rounds ORDER BY round DESC LIMIT ?', (limit,))
+    rows = cursor.fetchall()
+    conn.close()
+    result = []
+    for row in rows:
+        d = dict(row)
+        d['nums'] = [int(n) for n in d['nums'].split(',')] if d['nums'] else []
+        result.append(d)
+    return result
+
+
+def delete_powerball_round(round_id: int) -> int:
+    """파워볼 당첨결과 1건 삭제 (id 기준). 반환: 삭제된 행 수(0 또는 1)"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM powerball_rounds WHERE id = ?', (round_id,))
+    conn.commit()
+    deleted = cursor.rowcount
+    conn.close()
+    return deleted
+
+
+def add_powerball_favorite(name: str, nums: list, pb: int) -> int:
+    """즐겨찾기 번호 추가. nums: 일반볼 5개(list[int]), pb: 파워볼 1개. 반환: 새로 생성된 id"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    nums_str = ','.join(str(n) for n in sorted(nums))
+    cursor.execute('INSERT INTO powerball_favorites (name, nums, pb, created_at) VALUES (?, ?, ?, ?)',
+                   (name, nums_str, pb, timestamp))
+    conn.commit()
+    new_id = cursor.lastrowid
+    conn.close()
+    return new_id
+
+
+def get_powerball_favorites() -> list:
+    """즐겨찾기 번호 목록 조회 (최신순) — 저장된 당첨결과 전체와 비교해 가장 많이 맞은 회차도 함께 계산해서 반환.
+    각 항목에 best_round/best_date/best_hit_count/best_pb_hit 필드가 추가됨(비교할 결과가 없으면 None).
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM powerball_favorites ORDER BY id DESC')
+    fav_rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+
+    rounds = get_powerball_rounds(limit=1000)
+
+    result = []
+    for fav in fav_rows:
+        fav_nums = set(int(n) for n in fav['nums'].split(',')) if fav['nums'] else set()
+        best = None
+        for r in rounds:
+            hit_count = len(fav_nums & set(r['nums']))
+            pb_hit = (fav['pb'] == r['pb'])
+            if best is None or hit_count > best['best_hit_count'] or (hit_count == best['best_hit_count'] and pb_hit and not best['best_pb_hit']):
+                best = {'best_round': r['round'], 'best_date': r['date'], 'best_hit_count': hit_count, 'best_pb_hit': pb_hit}
+        fav['nums'] = sorted(fav_nums)
+        if best:
+            fav.update(best)
+        else:
+            fav.update({'best_round': None, 'best_date': None, 'best_hit_count': None, 'best_pb_hit': None})
+        result.append(fav)
+    return result
+
+
+def delete_powerball_favorite(fav_id: int) -> int:
+    """즐겨찾기 번호 1건 삭제 (id 기준). 반환: 삭제된 행 수(0 또는 1)"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM powerball_favorites WHERE id = ?', (fav_id,))
+    conn.commit()
+    deleted = cursor.rowcount
+    conn.close()
+    return deleted
+
+
+# ──────────────────────────────────────────────
+# 동행복권 로또6/45 — 당첨결과 저장/조회
+# ──────────────────────────────────────────────
+
+def save_lotto645_rounds(rounds: list) -> tuple:
+    """로또6/45 당첨결과 여러 회차를 한 번에 저장. round(회차)가 이미 있으면 건너뜀.
+    rounds: [{round, nums(list[int] 6개), bonus, winners, prize}, ...]
+    반환: (added, skipped)
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    added = 0
+    skipped = 0
+    for r in rounds:
+        nums_str = ','.join(str(n) for n in r['nums'])
+        try:
+            cursor.execute('''
+                INSERT INTO lotto645_rounds (round, nums, bonus, winners, prize, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (r['round'], nums_str, r['bonus'], r['winners'], r['prize'], timestamp))
+            added += 1
+        except sqlite3.IntegrityError:
+            skipped += 1  # round UNIQUE 제약 위반 — 이미 저장된 회차
+    conn.commit()
+    conn.close()
+    return added, skipped
+
+
+def get_lotto645_rounds(limit: int = 300) -> list:
+    """로또6/45 당첨결과 목록 조회 (회차 최신순). nums는 리스트[int]로 파싱해서 반환."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM lotto645_rounds ORDER BY round DESC LIMIT ?', (limit,))
+    rows = cursor.fetchall()
+    conn.close()
+    result = []
+    for row in rows:
+        d = dict(row)
+        d['nums'] = [int(n) for n in d['nums'].split(',')] if d['nums'] else []
+        result.append(d)
+    return result
+
+
+def delete_lotto645_round(round_id: int) -> int:
+    """로또6/45 당첨결과 1건 삭제 (id 기준). 반환: 삭제된 행 수(0 또는 1)"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM lotto645_rounds WHERE id = ?', (round_id,))
     conn.commit()
     deleted = cursor.rowcount
     conn.close()

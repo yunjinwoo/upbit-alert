@@ -34,7 +34,12 @@ from app.utils.db_manager import (
     get_top_gainers_export, sync_upsert_top_gainers,
     get_quick_links, add_quick_link, delete_quick_link,
     get_coin_screening,
+    save_powerball_rounds, get_powerball_rounds, delete_powerball_round,
+    add_powerball_favorite, get_powerball_favorites, delete_powerball_favorite,
+    save_lotto645_rounds, get_lotto645_rounds, delete_lotto645_round,
 )
+from app.core.powerball import parse_powerball_block
+from app.core.lotto645 import parse_lotto645_block, parse_lotto645_excel
 from app.core.stock_monitor import (
     fetch_market_cap_ranking, fetch_investor_trend, fetch_sector_index_daily, fetch_stock_investor_daily,
     fetch_ranking_preview, fetch_sector_stocks, fetch_multi_stock_price,
@@ -105,6 +110,111 @@ def delete_quick_link_api(link_id):
     if not deleted:
         return jsonify({'status': 'error', 'message': '해당 링크를 찾을 수 없습니다.'}), 404
     return jsonify({'status': 'success', 'deleted': deleted})
+
+@app.route('/powerball')
+def powerball_view():
+    """동행복권 파워볼 당첨결과 저장 + 즐겨찾기 번호 관리 페이지"""
+    return render_template('powerball.html', active_page='powerball')
+
+@app.route('/api/powerball/rounds', methods=['GET'])
+def get_powerball_rounds_api():
+    """저장된 파워볼 당첨결과 전체 조회 (회차 최신순)"""
+    data = get_powerball_rounds()
+    return jsonify({'status': 'success', 'count': len(data), 'data': data})
+
+@app.route('/api/powerball/rounds', methods=['POST'])
+def add_powerball_rounds_api():
+    """동행복권 사이트에서 복사한 텍스트를 붙여넣어 회차 일괄 추가. body: {text}"""
+    body = request.get_json(silent=True) or {}
+    text = body.get('text') or ''
+    if not text.strip():
+        return jsonify({'status': 'error', 'message': '붙여넣은 텍스트가 비어있습니다.'}), 400
+    rounds, errors = parse_powerball_block(text)
+    added, skipped = save_powerball_rounds(rounds) if rounds else (0, 0)
+    return jsonify({'status': 'success', 'added': added, 'skipped': skipped, 'errors': errors})
+
+@app.route('/api/powerball/rounds/<int:round_id>', methods=['DELETE'])
+def delete_powerball_round_api(round_id):
+    """파워볼 당첨결과 1건 삭제"""
+    deleted = delete_powerball_round(round_id)
+    if not deleted:
+        return jsonify({'status': 'error', 'message': '해당 회차를 찾을 수 없습니다.'}), 404
+    return jsonify({'status': 'success', 'deleted': deleted})
+
+@app.route('/api/powerball/favorites', methods=['GET'])
+def get_powerball_favorites_api():
+    """즐겨찾기 번호 목록 + 저장된 당첨결과 대비 최다 일치 회차 조회"""
+    data = get_powerball_favorites()
+    return jsonify({'status': 'success', 'count': len(data), 'data': data})
+
+@app.route('/api/powerball/favorites', methods=['POST'])
+def add_powerball_favorite_api():
+    """즐겨찾기 번호 추가. body: {name, nums: [일반볼 5개], pb: 파워볼 1개}"""
+    body = request.get_json(silent=True) or {}
+    name = (body.get('name') or '').strip()
+    nums = body.get('nums') or []
+    pb = body.get('pb')
+    if len(nums) != 5 or any(not isinstance(n, int) for n in nums):
+        return jsonify({'status': 'error', 'message': '일반볼 5개(정수)가 필요합니다.'}), 400
+    if not isinstance(pb, int):
+        return jsonify({'status': 'error', 'message': '파워볼 번호(정수)가 필요합니다.'}), 400
+    if not name:
+        name = f"내 번호 {_dt.now().strftime('%H%M%S')}"
+    new_id = add_powerball_favorite(name, nums, pb)
+    return jsonify({'status': 'success', 'id': new_id})
+
+@app.route('/api/powerball/favorites/<int:fav_id>', methods=['DELETE'])
+def delete_powerball_favorite_api(fav_id):
+    """즐겨찾기 번호 1건 삭제"""
+    deleted = delete_powerball_favorite(fav_id)
+    if not deleted:
+        return jsonify({'status': 'error', 'message': '해당 즐겨찾기를 찾을 수 없습니다.'}), 404
+    return jsonify({'status': 'success', 'deleted': deleted})
+
+@app.route('/lotto645')
+def lotto645_view():
+    """동행복권 로또6/45 당첨결과 저장 페이지"""
+    return render_template('lotto645.html', active_page='lotto645')
+
+@app.route('/api/lotto645/rounds', methods=['GET'])
+def get_lotto645_rounds_api():
+    """저장된 로또6/45 당첨결과 전체 조회 (회차 최신순)"""
+    data = get_lotto645_rounds()
+    return jsonify({'status': 'success', 'count': len(data), 'data': data})
+
+@app.route('/api/lotto645/rounds', methods=['POST'])
+def add_lotto645_rounds_api():
+    """동행복권 사이트에서 복사한 텍스트를 붙여넣어 회차 일괄 추가. body: {text}"""
+    body = request.get_json(silent=True) or {}
+    text = body.get('text') or ''
+    if not text.strip():
+        return jsonify({'status': 'error', 'message': '붙여넣은 텍스트가 비어있습니다.'}), 400
+    rounds, errors = parse_lotto645_block(text)
+    added, skipped = save_lotto645_rounds(rounds) if rounds else (0, 0)
+    return jsonify({'status': 'success', 'added': added, 'skipped': skipped, 'errors': errors})
+
+@app.route('/api/lotto645/rounds/<int:round_id>', methods=['DELETE'])
+def delete_lotto645_round_api(round_id):
+    """로또6/45 당첨결과 1건 삭제"""
+    deleted = delete_lotto645_round(round_id)
+    if not deleted:
+        return jsonify({'status': 'error', 'message': '해당 회차를 찾을 수 없습니다.'}), 404
+    return jsonify({'status': 'success', 'deleted': deleted})
+
+@app.route('/api/lotto645/upload', methods=['POST'])
+def upload_lotto645_excel_api():
+    """동행복권 "로또 회차별 당첨번호" 통계 엑셀(.xlsx) 파일을 업로드해서 일괄 추가. multipart form, 필드명: file"""
+    file = request.files.get('file')
+    if not file or not file.filename:
+        return jsonify({'status': 'error', 'message': '업로드할 파일이 없습니다.'}), 400
+    if not file.filename.lower().endswith('.xlsx'):
+        return jsonify({'status': 'error', 'message': '.xlsx 파일만 지원합니다.'}), 400
+    try:
+        rounds, errors = parse_lotto645_excel(file.stream)
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'엑셀 파일을 읽지 못했습니다: {e}'}), 400
+    added, skipped = save_lotto645_rounds(rounds) if rounds else (0, 0)
+    return jsonify({'status': 'success', 'added': added, 'skipped': skipped, 'errors': errors})
 
 @app.route('/coin-screening')
 def coin_screening_view():
