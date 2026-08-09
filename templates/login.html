@@ -29,8 +29,9 @@
     <div class="login-title">📡 알림 시스템</div>
     <div class="login-sub">Slack으로 받은 비밀번호를 입력하세요</div>
 
-    <input type="password" class="form-control" id="pwInput" placeholder="비밀번호" autocomplete="current-password" autofocus>
+    <input type="password" class="form-control text-center" id="pwInput" placeholder="0000000" maxlength="7" inputmode="numeric" autocomplete="current-password" autofocus style="letter-spacing:.3em; font-variant-numeric:tabular-nums;">
     <button class="btn btn-navy w-100 mt-3" id="loginBtn">로그인</button>
+    <button class="btn btn-outline-secondary w-100 mt-2" id="requestBtn" type="button">🔐 비밀번호 받기 (Slack)</button>
 
     <div class="msg" id="msg"></div>
 </div>
@@ -44,8 +45,14 @@
         msg.className = 'msg ' + (ok ? 'ok' : 'err');
     }
 
+    // 붙여넣기 시 별표/공백/줄바꿈 등이 섞여 들어와도 숫자만 남기고 정리
+    pwInput.addEventListener('input', () => {
+        const digitsOnly = pwInput.value.replace(/\D/g, '').slice(0, 7);
+        if (digitsOnly !== pwInput.value) pwInput.value = digitsOnly;
+    });
+
     async function login() {
-        const password = pwInput.value;
+        const password = pwInput.value.trim().replace(/\D/g, '');
         if (!password) { showMsg('비밀번호를 입력해주세요.', false); return; }
         showMsg('확인 중...', true);
         try {
@@ -61,7 +68,52 @@
         }
     }
 
+    const requestBtn = document.getElementById('requestBtn');
+    const REQUEST_COOLDOWN_KEY = 'pwRequestCooldownUntil';
+    let cooldownTimer = null;
+
+    function startCooldown(untilTs) {
+        localStorage.setItem(REQUEST_COOLDOWN_KEY, String(untilTs));
+        if (cooldownTimer) clearInterval(cooldownTimer);
+        cooldownTimer = setInterval(() => {
+            const remain = Math.ceil((untilTs - Date.now()) / 1000);
+            if (remain <= 0) {
+                clearInterval(cooldownTimer);
+                requestBtn.disabled = false;
+                requestBtn.textContent = '🔐 비밀번호 받기 (Slack)';
+                return;
+            }
+            requestBtn.disabled = true;
+            requestBtn.textContent = `${remain}초 후 다시 요청 가능`;
+        }, 500);
+    }
+
+    // 새로고침해도 쿨다운이 풀리지 않도록 저장된 값 복원
+    (function restoreCooldown() {
+        const saved = Number(localStorage.getItem(REQUEST_COOLDOWN_KEY) || 0);
+        if (saved > Date.now()) startCooldown(saved);
+    })();
+
+    async function requestPassword() {
+        if (requestBtn.disabled) return;
+        showMsg('요청 중...', true);
+        try {
+            const res = await fetch('/api/login/request', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+            const json = await res.json();
+            if (json.status !== 'success') {
+                showMsg(json.message || '요청 실패', false);
+                // 429(너무 자주 요청) 등으로 서버가 남은 시간을 메시지에 포함한 경우, 클라이언트도 그만큼 잠가둔다
+                return;
+            }
+            showMsg(json.message || 'Slack으로 새 비밀번호를 보냈습니다.', true);
+            startCooldown(Date.now() + (json.cooldown || 120) * 1000);
+        } catch (e) {
+            showMsg('요청 중 오류: ' + e.message, false);
+        }
+    }
+
     document.getElementById('loginBtn').addEventListener('click', login);
+    requestBtn.addEventListener('click', requestPassword);
     pwInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') login(); });
 </script>
 </body>
