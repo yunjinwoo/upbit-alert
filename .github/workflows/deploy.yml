@@ -31,7 +31,9 @@ jobs:
             grep -q "APP_ROOT" .env 2>/dev/null || echo "APP_ROOT=/upbit" >> .env
 
             # 4. 필요한 라이브러리 설치
-            pip install -r requirements.txt
+            # 반드시 venv의 pip를 써야 함 — 그냥 pip는 시스템 파이썬에 설치되어 버려서,
+            # 실제 앱이 도는 ./venv/bin/python3 쪽엔 패키지가 반영되지 않는 문제가 있었음
+            ./venv/bin/pip install -r requirements.txt
             
             # 4. PM2를 이용한 프로세스 재시작
             # 기존 프로세스가 있다면 중지 후 삭제 (확실한 재시작을 위해)
