@@ -56,7 +56,6 @@ from app.core.upbit_market_analysis import run_coin_screening
 from app.config import Config
 import json
 import os
-import string
 import threading
 import secrets
 import subprocess
@@ -79,21 +78,26 @@ if not Config.SECRET_KEY:
                         ".env(또는 환경변수)에 SECRET_KEY를 고정값으로 설정하세요.")
 app.secret_key = Config.SECRET_KEY or secrets.token_hex(32)
 app.config['PERMANENT_SESSION_LIFETIME'] = _timedelta(days=Config.SESSION_LIFETIME_DAYS)
+# APPLICATION_ROOT(운영 서버의 리버스 프록시 하위경로, 예: /upbit)를 지정 안 하면 Flask가 세션 쿠키의
+# Path를 APPLICATION_ROOT로 그대로 써버려서, 그 경로 밖에서 접근(로컬 직접 접속 등)하면 로그인 직후
+# 쿠키가 안 돌아와 계속 /login으로 튕기는 문제가 있었음 — 쿠키는 항상 사이트 전체(/)에 적용되게 고정
+app.config['SESSION_COOKIE_PATH'] = '/'
 
 # ──────────────────────────────────────────────
 # 로그인 (잠금 토글 — 켜질 때마다 새 비밀번호를 Slack으로 전송, 해제될 때까지 그 비밀번호 재사용)
 # ──────────────────────────────────────────────
-_PASSWORD_ALPHABET = ''.join(c for c in string.ascii_letters + string.digits if c not in 'lIO0')  # 헷갈리는 문자 제외
-
 _login_state = get_login_settings()  # {'lock_enabled': bool, 'password_hash': str|None} — 시작 시 DB에서 로드, 이후 메모리 캐시
 _login_fail_count = 0
 _login_locked_until = 0
 _MAX_LOGIN_FAILS = 5
 _LOGIN_FAIL_LOCKOUT_SECONDS = 60
 
-# 로그인 없이 접근 가능한 엔드포인트 — 로그인 화면, 비밀번호 검증 API, 정적 파일
+_login_request_last_ts = 0.0
+_LOGIN_REQUEST_COOLDOWN_SECONDS = 120  # 로그인 페이지의 "비밀번호 받기" 재요청 최소 간격(남용 방지)
+
+# 로그인 없이 접근 가능한 엔드포인트 — 로그인 화면, 비밀번호 검증 API, 비밀번호 요청 API, 정적 파일
 # (잠금 토글/재발급 API는 일부러 여기 안 넣음 — 잠금 켜진 상태에선 로그인해야만 끄거나 재발급할 수 있어야 함)
-_PUBLIC_ENDPOINTS = {'login_view', 'verify_password_api', 'static'}
+_PUBLIC_ENDPOINTS = {'login_view', 'verify_password_api', 'request_password_api', 'static'}
 
 @app.before_request
 def require_login():
@@ -122,10 +126,11 @@ def login_status_api():
 
 def _issue_new_password() -> str:
     """새 비밀번호를 생성해 해시로 저장하고 Slack으로 평문 전송. 반환: 평문 비밀번호(로그용)"""
-    password = ''.join(secrets.choice(_PASSWORD_ALPHABET) for _ in range(10))
+    password = f"{secrets.randbelow(10_000_000):07d}"  # 숫자 7자리(0000000~9999999, 0으로 시작 가능)
     _login_state['password_hash'] = generate_password_hash(password)
     save_login_settings(_login_state['lock_enabled'], _login_state['password_hash'])
-    send_slack_msg(f"🔐 로그인 비밀번호: *{password}*\n해제하거나 다시 발급하기 전까지 계속 이 비밀번호를 쓰시면 됩니다.")
+    # 마크다운(*강조*)을 쓰지 않음 — 렌더링 안 되는 클라이언트에서 별표가 문자 그대로 보여 복사·붙여넣기 시 섞여 들어가는 걸 방지
+    send_slack_msg(f"🔐 로그인 비밀번호: {password}\n해제하거나 다시 발급하기 전까지 계속 이 비밀번호를 쓰시면 됩니다.")
     return password
 
 @app.route('/api/login/toggle', methods=['POST'])
@@ -183,6 +188,26 @@ def verify_password_api():
     session['logged_in'] = True
     app.logger.info("[로그인] 로그인 성공")
     return jsonify({'status': 'success'})
+
+@app.route('/api/login/request', methods=['POST'])
+def request_password_api():
+    """로그인 페이지에서 비밀번호를 잊었을 때 Slack으로 새 비밀번호를 재발급 요청.
+    로그인 없이 호출 가능한 공개 API라 남용 방지를 위해 쿨다운을 둔다."""
+    global _login_request_last_ts
+    if not _login_state['lock_enabled']:
+        return jsonify({'status': 'error', 'message': '잠금이 꺼져있어 비밀번호가 필요 없습니다.'}), 400
+    if not Config.SLACK_WEBHOOK_URL:
+        return jsonify({'status': 'error', 'message': 'Slack 웹훅(SLACK_TOKEN)이 설정돼 있지 않아 비밀번호를 보낼 수 없습니다.'}), 500
+
+    now = _time.time()
+    remain = _LOGIN_REQUEST_COOLDOWN_SECONDS - (now - _login_request_last_ts)
+    if remain > 0:
+        return jsonify({'status': 'error', 'message': f'{int(remain)}초 후 다시 요청해주세요.'}), 429
+
+    _login_request_last_ts = now
+    _issue_new_password()
+    app.logger.info("[로그인] 로그인 페이지에서 비밀번호 재발급 요청")
+    return jsonify({'status': 'success', 'message': 'Slack으로 새 비밀번호를 보냈습니다.', 'cooldown': _LOGIN_REQUEST_COOLDOWN_SECONDS})
 
 @app.route('/logout')
 def logout_view():
