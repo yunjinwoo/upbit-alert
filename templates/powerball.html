@@ -246,7 +246,7 @@
     });
 
     async function loadRounds() {
-        const res = await fetch('/api/powerball/rounds');
+        const res = await fetch('api/powerball/rounds');
         const json = await res.json();
         const board = document.getElementById('board');
         const rounds = json.data || [];
@@ -260,7 +260,7 @@
         board.querySelectorAll('[data-del-round]').forEach(btn => {
             btn.addEventListener('click', async (e) => {
                 e.stopPropagation();
-                await fetch(`/api/powerball/rounds/${btn.dataset.delRound}`, { method: 'DELETE' });
+                await fetch(`api/powerball/rounds/${btn.dataset.delRound}`, { method: 'DELETE' });
                 loadRounds();
                 loadFavorites();
             });
@@ -270,7 +270,7 @@
     document.getElementById('addBtn').addEventListener('click', async () => {
         const box = document.getElementById('pasteBox');
         const msg = document.getElementById('addMsg');
-        const res = await fetch('/api/powerball/rounds', {
+        const res = await fetch('api/powerball/rounds', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: box.value })
         });
@@ -341,7 +341,7 @@
             return;
         }
         const name = document.getElementById('favName').value.trim();
-        const res = await fetch('/api/powerball/favorites', {
+        const res = await fetch('api/powerball/favorites', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name, nums: Array.from(pick.nums), pb: pick.pb })
         });
@@ -375,7 +375,7 @@
     }
 
     async function loadFavorites() {
-        const res = await fetch('/api/powerball/favorites');
+        const res = await fetch('api/powerball/favorites');
         const json = await res.json();
         const list = document.getElementById('favList');
         const favs = json.data || [];
@@ -384,7 +384,7 @@
             : '<div class="empty">아직 저장한 번호가 없어요. 위에서 번호를 고르고 저장해보세요.</div>';
         list.querySelectorAll('[data-del-fav]').forEach(btn => {
             btn.addEventListener('click', async () => {
-                await fetch(`/api/powerball/favorites/${btn.dataset.delFav}`, { method: 'DELETE' });
+                await fetch(`api/powerball/favorites/${btn.dataset.delFav}`, { method: 'DELETE' });
                 loadFavorites();
             });
         });
