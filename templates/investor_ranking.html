@@ -77,6 +77,11 @@
         .col-nav button { background: none; border: 1px solid #e2e8f0; border-radius: 4px; padding: 1px 7px; cursor: pointer; font-size: 0.78rem; color: #475569; }
         .col-nav button:hover { background: #f1f5f9; }
         .col-nav span { min-width: 90px; text-align: center; }
+
+        .stock-name.clickable { cursor: pointer; }
+        .stock-name.clickable:hover { text-decoration: underline; color: #1a4fd6; }
+        #chartLinks a { color: #475569; text-decoration: none; }
+        #chartLinks a:hover { color: #1a1a2e; text-decoration: underline; }
     </style>
 </head>
 <body>
@@ -103,10 +108,25 @@
         </div>
     </div>
 
-    <!-- 차트 -->
+    <!-- 분포도 -->
     <div class="chart-panel mb-3">
         <div class="chart-title" id="chartTitle">상위 종목 금액 추이 (백만원)</div>
         <canvas id="trendChart" style="height:1000px !important; max-height:1000px"></canvas>
+    </div>
+
+    <!-- 종목 차트 -->
+    <div class="chart-panel mb-3" id="chartPanel">
+        <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+            <h6 class="mb-0" style="font-size:0.9rem">📈 차트 <span id="chartStockLabel" class="text-muted small fw-normal"></span></h6>
+            <div id="chartLinks" style="display:none">
+                <a id="chartNaverLink" href="#" target="_blank" rel="noopener" class="small me-3">📊 네이버 차트</a>
+                <a id="chartTvLink" href="#" target="_blank" rel="noopener" class="small me-3">📈 트레이딩뷰 차트</a>
+                <a id="chartTossLink" href="#" target="_blank" rel="noopener" class="small">💳 토스증권</a>
+            </div>
+        </div>
+        <div id="chartArea" class="text-center">
+            <div class="text-muted small p-4">종목을 클릭하면 차트가 표시됩니다.</div>
+        </div>
     </div>
 
     <!-- 테이블 -->
@@ -173,6 +193,18 @@
     function fmtNum(v) {
         const n = parseInt(v);
         return isNaN(n) ? '—' : Math.abs(n).toLocaleString();
+    }
+
+    // 종목명 클릭 시 상단 차트 패널에 네이버 일별 시세 차트 이미지를 띄우고,
+    // 그 위에 네이버/트레이딩뷰/토스증권 바로가기 링크를 함께 노출한다.
+    function selectChart(code, name) {
+        document.getElementById('chartStockLabel').textContent = `${name} (${code})`;
+        document.getElementById('chartLinks').style.display = '';
+        document.getElementById('chartNaverLink').href = `https://finance.naver.com/item/fchart.naver?code=${code}`;
+        document.getElementById('chartTvLink').href = `https://www.tradingview.com/chart/?symbol=KRX%3A${code}`;
+        document.getElementById('chartTossLink').href = `https://www.tossinvest.com/stocks/A${code}/order`;
+        document.getElementById('chartArea').innerHTML =
+            `<img src="https://ssl.pstatic.net/imgfinance/chart/item/candle/day/${code}.png" alt="${name} 일별 차트" style="max-width:100%; border:1px solid #e2e8f0; border-radius:8px;">`;
     }
 
 
@@ -386,7 +418,7 @@
                     rows += `<td class="empty-cell${bc}" colspan="2">—</td>`;
                 } else {
                     rows += `<td class="${bc}">` +
-                                `<div class="stock-name">${item.name}</div>` +
+                                `<div class="stock-name clickable" onclick='selectChart(${JSON.stringify(item.code)}, ${JSON.stringify(item.name || "")})'>${item.name}</div>` +
                                 `<div class="stock-code">${item.code}</div>` +
                             `</td>` +
                             `<td class="${amtCls}">` +
