@@ -1,0 +1,37 @@
+<!-- 종목 차트 패널 (공용) — volume_ratio.html / investor_ranking.html / stock_memo.html 에서 include.
+     종목명 클릭(또는 selectChart 직접 호출) 시 네이버 일별 캔들 차트 이미지를 띄우고,
+     그 위에 네이버/트레이딩뷰/토스증권 바로가기 링크를 노출한다.
+     플레이스홀더 문구를 바꾸고 싶으면 include 전에 {% set chart_placeholder = '...' %} 로 지정. -->
+<div class="card-panel mb-3" id="chartPanel">
+    <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+        <h6 class="mb-0" style="font-size:0.9rem">📈 차트 <span id="chartStockLabel" class="text-muted small fw-normal"></span></h6>
+        <div id="chartLinks" style="display:none">
+            <a id="chartNaverLink" href="#" target="_blank" rel="noopener" class="small me-3">📊 네이버 차트</a>
+            <a id="chartTvLink" href="#" target="_blank" rel="noopener" class="small me-3">📈 트레이딩뷰 차트</a>
+            <a id="chartTossLink" href="#" target="_blank" rel="noopener" class="small">💳 토스증권</a>
+        </div>
+    </div>
+    <div id="chartArea" class="text-center">
+        <div class="text-muted small p-4">{{ chart_placeholder or '종목을 클릭하면 차트가 표시됩니다.' }}</div>
+    </div>
+</div>
+<style>
+    #chartLinks a { color: #475569; text-decoration: none; }
+    #chartLinks a:hover { color: #1a1a2e; text-decoration: underline; }
+</style>
+<script>
+    // 이 파일을 include한 페이지 전역에서 selectChart(code, name)를 사용할 수 있다.
+    // name은 사용자 입력(종목 메모)일 수 있으므로 innerHTML에 넣기 전 반드시 이스케이프한다.
+    function _escHtmlChart(s) {
+        return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+    function selectChart(code, name) {
+        document.getElementById('chartStockLabel').textContent = `${name} (${code})`;
+        document.getElementById('chartLinks').style.display = '';
+        document.getElementById('chartNaverLink').href = `https://finance.naver.com/item/fchart.naver?code=${code}`;
+        document.getElementById('chartTvLink').href = `https://www.tradingview.com/chart/?symbol=KRX%3A${code}`;
+        document.getElementById('chartTossLink').href = `https://www.tossinvest.com/stocks/A${code}/order`;
+        document.getElementById('chartArea').innerHTML =
+            `<img src="https://ssl.pstatic.net/imgfinance/chart/item/candle/day/${code}.png" alt="${_escHtmlChart(name)} 일별 차트" style="max-width:100%; border:1px solid #e2e8f0; border-radius:8px;">`;
+    }
+</script>
