@@ -56,7 +56,7 @@
         if (!password) { showMsg('비밀번호를 입력해주세요.', false); return; }
         showMsg('확인 중...', true);
         try {
-            const res = await fetch('/api/login/verify', {
+            const res = await fetch('api/login/verify', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ password })
             });
@@ -98,7 +98,7 @@
         if (requestBtn.disabled) return;
         showMsg('요청 중...', true);
         try {
-            const res = await fetch('/api/login/request', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+            const res = await fetch('api/login/request', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
             const json = await res.json();
             if (json.status !== 'success') {
                 showMsg(json.message || '요청 실패', false);

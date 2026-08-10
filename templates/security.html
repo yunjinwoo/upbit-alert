@@ -72,7 +72,7 @@
         const enabled = e.target.checked;
         showMsg(enabled ? 'Slack으로 새 비밀번호 보내는 중...' : '잠금 해제 중...', true);
         try {
-            const res = await fetch('/api/login/toggle', {
+            const res = await fetch('api/login/toggle', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ enabled })
             });
@@ -96,7 +96,7 @@
     document.getElementById('reissueBtn').addEventListener('click', async () => {
         showMsg('Slack으로 새 비밀번호 보내는 중...', true);
         try {
-            const res = await fetch('/api/login/reissue', { method: 'POST' });
+            const res = await fetch('api/login/reissue', { method: 'POST' });
             const json = await res.json();
             if (json.status !== 'success') { showMsg(json.message || '재발급 실패', false); return; }
             showMsg('Slack으로 새 비밀번호를 보냈습니다. 다른 기기 세션은 로그아웃 전까지 그대로 유지됩니다.', true);

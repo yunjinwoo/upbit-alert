@@ -175,7 +175,7 @@
     });
 
     async function loadRounds() {
-        const res = await fetch('/api/lotto645/rounds');
+        const res = await fetch('api/lotto645/rounds');
         const json = await res.json();
         const board = document.getElementById('board');
         const rounds = json.data || [];
@@ -189,7 +189,7 @@
         board.querySelectorAll('[data-del-round]').forEach(btn => {
             btn.addEventListener('click', async (e) => {
                 e.stopPropagation();
-                await fetch(`/api/lotto645/rounds/${btn.dataset.delRound}`, { method: 'DELETE' });
+                await fetch(`api/lotto645/rounds/${btn.dataset.delRound}`, { method: 'DELETE' });
                 loadRounds();
             });
         });
@@ -198,7 +198,7 @@
     document.getElementById('addBtn').addEventListener('click', async () => {
         const box = document.getElementById('pasteBox');
         const msg = document.getElementById('addMsg');
-        const res = await fetch('/api/lotto645/rounds', {
+        const res = await fetch('api/lotto645/rounds', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: box.value })
         });
@@ -236,7 +236,7 @@
         const formData = new FormData();
         formData.append('file', file);
         try {
-            const res = await fetch('/api/lotto645/upload', { method: 'POST', body: formData });
+            const res = await fetch('api/lotto645/upload', { method: 'POST', body: formData });
             const json = await res.json();
             if (json.status !== 'success') {
                 msg.textContent = json.message || '업로드 실패';
