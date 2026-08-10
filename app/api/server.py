@@ -87,6 +87,17 @@ app.config['SESSION_COOKIE_PATH'] = '/'
 # 로그인 (잠금 토글 — 켜질 때마다 새 비밀번호를 Slack으로 전송, 해제될 때까지 그 비밀번호 재사용)
 # ──────────────────────────────────────────────
 _login_state = get_login_settings()  # {'lock_enabled': bool, 'password_hash': str|None} — 시작 시 DB에서 로드, 이후 메모리 캐시
+# 안전장치: 잠금은 켜져 있는데(기본값) 발급된 비밀번호가 없고 Slack 웹훅도 설정 안 돼 있으면
+# 비밀번호를 받을 방법이 전혀 없어 영구적으로 잠기게 된다. 이 경우에만 잠금을 강제로 꺼서
+# 접근 불가 상태를 막는다 — SLACK_TOKEN을 설정하고 /security에서 다시 켜면 정상적으로 잠글 수 있음.
+if _login_state['lock_enabled'] and not _login_state['password_hash'] and not Config.SLACK_WEBHOOK_URL:
+    app.logger.warning(
+        "[로그인] 잠금 기본값이 켜져 있지만 비밀번호가 없고 SLACK_TOKEN도 설정돼 있지 않아 "
+        "로그인할 방법이 없습니다. 잠금을 임시로 꺼둡니다 — SLACK_TOKEN을 설정한 뒤 "
+        "/security에서 잠금을 다시 켜주세요."
+    )
+    _login_state['lock_enabled'] = False
+    save_login_settings(False, None)
 _login_fail_count = 0
 _login_locked_until = 0
 _MAX_LOGIN_FAILS = 5
