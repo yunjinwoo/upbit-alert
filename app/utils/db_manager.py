@@ -354,7 +354,7 @@ def init_db():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS login_settings (
             id INTEGER PRIMARY KEY CHECK (id = 1),
-            lock_enabled INTEGER DEFAULT 0,
+            lock_enabled INTEGER DEFAULT 1,
             password_hash TEXT,
             updated_at TEXT
         )
@@ -2653,7 +2653,8 @@ def delete_quick_link(link_id: int) -> int:
 
 def get_login_settings() -> dict:
     """잠금 설정 조회. 반환: {lock_enabled: bool, password_hash: str|None}
-    행이 없으면(최초 실행) 잠금 꺼짐 상태로 취급.
+    행이 없으면(최초 실행) 잠금 켜짐 상태로 취급 — 기본값은 잠금이며, 비밀번호는 /security에서
+    직접 켜거나 로그인 페이지의 "비밀번호 받기"로 최초 발급해야 한다.
     """
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -2662,7 +2663,7 @@ def get_login_settings() -> dict:
     row = cursor.fetchone()
     conn.close()
     if not row:
-        return {'lock_enabled': False, 'password_hash': None}
+        return {'lock_enabled': True, 'password_hash': None}
     return {'lock_enabled': bool(row['lock_enabled']), 'password_hash': row['password_hash']}
 
 

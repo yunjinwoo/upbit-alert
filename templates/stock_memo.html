@@ -43,6 +43,8 @@
         .empty-col { color: #cbd5e1; font-size: 0.78rem; text-align: center; padding: 20px 0; }
         .memo-card .memo-chart-btn { background: none; border: none; padding: 0 2px; font-size: 0.78rem; cursor: pointer; opacity: 0.6; }
         .memo-card .memo-chart-btn:hover { opacity: 1; }
+        #chartLinks a { color: #475569; text-decoration: none; }
+        #chartLinks a:hover { color: #1a1a2e; text-decoration: underline; }
     </style>
 </head>
 <body>
@@ -89,12 +91,17 @@
     </div>
 
     <!-- 차트 -->
-    <div class="card-panel mb-3">
-        <div class="d-flex justify-content-between align-items-center mb-2">
+    <div class="card-panel mb-3" id="chartPanel">
+        <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
             <h6 class="mb-0" style="font-size:0.9rem">📈 차트 <span id="chartStockLabel" class="text-muted small fw-normal"></span></h6>
+            <div id="chartLinks" style="display:none">
+                <a id="chartNaverLink" href="#" target="_blank" rel="noopener" class="small me-3">📊 네이버 차트</a>
+                <a id="chartTvLink" href="#" target="_blank" rel="noopener" class="small me-3">📈 트레이딩뷰 차트</a>
+                <a id="chartTossLink" href="#" target="_blank" rel="noopener" class="small">💳 토스증권</a>
+            </div>
         </div>
-        <div id="pageChartLinks" class="d-flex gap-3">
-            <span class="text-muted small">메모 카드의 📈 아이콘을 클릭하면 차트 링크가 표시됩니다.</span>
+        <div id="chartArea" class="text-center">
+            <div class="text-muted small p-4">메모 카드의 📈 아이콘을 클릭하면 차트가 표시됩니다.</div>
         </div>
     </div>
 
@@ -118,14 +125,16 @@
         );
     }
 
-    // 메모 카드의 📈 아이콘 클릭 시 해당 종목의 네이버/트레이딩뷰 차트 링크를 표시한다.
-    // (임베드 위젯은 종목이 바뀌어도 갱신되지 않는 문제가 있어 링크 방식으로 대체)
+    // 메모 카드의 📈 아이콘 클릭 시 상단 차트 패널에 네이버 일별 시세 차트 이미지를 띄우고,
+    // 그 위에 네이버/트레이딩뷰/토스증권 바로가기 링크를 함께 노출한다.
     window.selectMemoChart = function(code, name) {
         document.getElementById('chartStockLabel').textContent = `${name} (${code})`;
-        document.getElementById('pageChartLinks').innerHTML = `
-            <a href="https://finance.naver.com/item/main.naver?code=${code}" target="_blank" rel="noopener" class="small">📊 네이버 차트</a>
-            <a href="https://www.tradingview.com/chart/?symbol=KRX%3A${code}" target="_blank" rel="noopener" class="small">📈 TradingView 차트</a>
-        `;
+        document.getElementById('chartLinks').style.display = '';
+        document.getElementById('chartNaverLink').href = `https://finance.naver.com/item/fchart.naver?code=${code}`;
+        document.getElementById('chartTvLink').href = `https://www.tradingview.com/chart/?symbol=KRX%3A${code}`;
+        document.getElementById('chartTossLink').href = `https://www.tossinvest.com/stocks/A${code}/order`;
+        document.getElementById('chartArea').innerHTML =
+            `<img src="https://ssl.pstatic.net/imgfinance/chart/item/candle/day/${code}.png" alt="${name} 일별 차트" style="max-width:100%; border:1px solid #e2e8f0; border-radius:8px;">`;
     };
 
     async function loadGrades() {
