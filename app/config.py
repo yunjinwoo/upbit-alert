@@ -60,7 +60,5 @@ class Config:
     # app/api/server.py 참고. .env에 값을 넣으면 그쪽이 항상 우선한다.
     SECRET_KEY = os.getenv("SECRET_KEY")
     SESSION_LIFETIME_DAYS = 30           # 로그인 유지 기간(일) — 이 기간 안엔 비밀번호 재입력 없이 세션 유지
-
-    # 실행 환경 구분(로컬/서버) — 로그인 비밀번호를 Slack으로 보낼 때 어디서 발급됐는지 표시하는 용도.
-    # 서버 배포 스크립트(.github/workflows/deploy.yml)가 .env에 APP_ENV=production을 자동으로 추가해준다.
-    APP_ENV = os.getenv("APP_ENV", "local")
+    # 로그인 비밀번호를 어디서 발급했는지(로컬/서버)는 별도 설정값 없이 발급 시점에
+    # platform.system()/platform.node()로 직접 조회함 — app/api/server.py의 _issue_new_password() 참고

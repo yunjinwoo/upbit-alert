@@ -58,6 +58,7 @@ from app.core.upbit_market_analysis import run_coin_screening
 from app.config import Config
 import json
 import os
+import platform
 import threading
 import secrets
 import subprocess
@@ -141,18 +142,17 @@ def login_status_api():
     """잠금 켜짐/꺼짐 여부만 반환 (비밀번호 자체는 절대 내려주지 않음)"""
     return jsonify({'status': 'success', 'lock_enabled': _login_state['lock_enabled']})
 
-# 어느 환경에서 발급된 비밀번호인지 Slack 메시지에서 한눈에 구분하기 위한 표시(Config.APP_ENV → 라벨)
-_APP_ENV_LABELS = {"production": "🖥 서버", "local": "💻 로컬"}
-
-
 def _issue_new_password() -> str:
     """새 비밀번호를 생성해 해시로 저장하고 Slack으로 평문 전송. 반환: 평문 비밀번호(로그용)"""
     password = f"{secrets.randbelow(10_000_000):07d}"  # 숫자 7자리(0000000~9999999, 0으로 시작 가능)
     _login_state['password_hash'] = generate_password_hash(password)
     save_login_settings(_login_state['lock_enabled'], _login_state['password_hash'])
-    env_label = _APP_ENV_LABELS.get(Config.APP_ENV, Config.APP_ENV)
+    # "로컬/서버"로 미리 라벨링하지 않고 실제 OS + 호스트명을 그대로 보냄 — local/production 같은 별도
+    # 구분값을 관리·동기화할 필요 없이, 어디서 보냈는지 발급 시점에 platform 모듈로 그냥 알려줌
+    # (로컬 Windows PC에서 보내면 "Windows / DESKTOP-XXXX", 리눅스 서버에서 보내면 "Linux / <서버 호스트명>")
+    # 공인 IP는 넣지 않음 — 외부 API 호출이 추가로 필요하고, 서버 IP가 Slack 메시지 평문에 그대로 노출되는 게 부담스러움
     # 마크다운(*강조*)을 쓰지 않음 — 렌더링 안 되는 클라이언트에서 별표가 문자 그대로 보여 복사·붙여넣기 시 섞여 들어가는 걸 방지
-    send_slack_msg(f"🔐 [{env_label}] 로그인 비밀번호: {password}\n해제하거나 다시 발급하기 전까지 계속 이 비밀번호를 쓰시면 됩니다.")
+    send_slack_msg(f"🔐 [{platform.system()} / {platform.node()}] 로그인 비밀번호: {password}\n해제하거나 다시 발급하기 전까지 계속 이 비밀번호를 쓰시면 됩니다.")
     return password
 
 @app.route('/api/login/toggle', methods=['POST'])
