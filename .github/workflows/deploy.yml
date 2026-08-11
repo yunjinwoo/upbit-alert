@@ -29,6 +29,7 @@ jobs:
 
             # 3. 필요한 환경변수 보장 (.env에 없으면 추가)
             grep -q "APP_ROOT" .env 2>/dev/null || echo "APP_ROOT=/upbit" >> .env
+            grep -q "APP_ENV" .env 2>/dev/null || echo "APP_ENV=production" >> .env
 
             # 4. 필요한 라이브러리 설치
             # 반드시 venv의 pip를 써야 함 — 그냥 pip는 시스템 파이썬에 설치되어 버려서,

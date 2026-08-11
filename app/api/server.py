@@ -7,6 +7,7 @@ from app.utils.db_manager import (
     get_latest_alerts, delete_alert,
     get_latest_stock_alerts, delete_stock_alert,
     get_latest_stock_raw_data, get_market_cap_history,
+    get_db_stats, delete_oldest_stock_raw_data,
     get_investor_trend_history,
     get_stock_investor_combined, get_latest_market_cap_date,
     get_stock_investor_trend,
@@ -40,6 +41,7 @@ from app.utils.db_manager import (
     add_powerball_favorite, get_powerball_favorites, delete_powerball_favorite,
     save_lotto645_rounds, get_lotto645_rounds, delete_lotto645_round,
     get_login_settings, save_login_settings,
+    get_or_create_secret_key,
 )
 from app.core.powerball import parse_powerball_block
 from app.core.lotto645 import parse_lotto645_block, parse_lotto645_excel
@@ -73,10 +75,14 @@ CORS(app)
 # 바로 실행되므로, 테이블이 아직 없는 상태로 레이스 컨디션에 걸리는 걸 방지
 init_db()
 
-if not Config.SECRET_KEY:
-    app.logger.warning("[로그인] SECRET_KEY가 설정되지 않아 임시 키를 사용합니다 — 서버 재시작마다 로그인이 풀립니다. "
-                        ".env(또는 환경변수)에 SECRET_KEY를 고정값으로 설정하세요.")
-app.secret_key = Config.SECRET_KEY or secrets.token_hex(32)
+if Config.SECRET_KEY:
+    app.secret_key = Config.SECRET_KEY
+else:
+    # .env에 SECRET_KEY가 없으면 DB에 저장된 값을 쓴다(없으면 최초 1회 자동 생성) — 재시작(배포 포함)해도
+    # 계속 같은 키를 재사용하므로 로그인 세션이 풀리지 않는다. 완전히 새 키로 강제 교체하고 싶다면
+    # (=모든 세션 강제 로그아웃) DB의 app_secret 테이블 행을 지우거나 .env에 SECRET_KEY를 직접 지정할 것.
+    app.secret_key = get_or_create_secret_key()
+    app.logger.info("[로그인] SECRET_KEY가 .env에 없어 DB에 저장된 키를 사용합니다(최초 실행 시 자동 생성·이후 재사용).")
 app.config['PERMANENT_SESSION_LIFETIME'] = _timedelta(days=Config.SESSION_LIFETIME_DAYS)
 # APPLICATION_ROOT(운영 서버의 리버스 프록시 하위경로, 예: /upbit)를 지정 안 하면 Flask가 세션 쿠키의
 # Path를 APPLICATION_ROOT로 그대로 써버려서, 그 경로 밖에서 접근(로컬 직접 접속 등)하면 로그인 직후
@@ -135,13 +141,18 @@ def login_status_api():
     """잠금 켜짐/꺼짐 여부만 반환 (비밀번호 자체는 절대 내려주지 않음)"""
     return jsonify({'status': 'success', 'lock_enabled': _login_state['lock_enabled']})
 
+# 어느 환경에서 발급된 비밀번호인지 Slack 메시지에서 한눈에 구분하기 위한 표시(Config.APP_ENV → 라벨)
+_APP_ENV_LABELS = {"production": "🖥 서버", "local": "💻 로컬"}
+
+
 def _issue_new_password() -> str:
     """새 비밀번호를 생성해 해시로 저장하고 Slack으로 평문 전송. 반환: 평문 비밀번호(로그용)"""
     password = f"{secrets.randbelow(10_000_000):07d}"  # 숫자 7자리(0000000~9999999, 0으로 시작 가능)
     _login_state['password_hash'] = generate_password_hash(password)
     save_login_settings(_login_state['lock_enabled'], _login_state['password_hash'])
+    env_label = _APP_ENV_LABELS.get(Config.APP_ENV, Config.APP_ENV)
     # 마크다운(*강조*)을 쓰지 않음 — 렌더링 안 되는 클라이언트에서 별표가 문자 그대로 보여 복사·붙여넣기 시 섞여 들어가는 걸 방지
-    send_slack_msg(f"🔐 로그인 비밀번호: {password}\n해제하거나 다시 발급하기 전까지 계속 이 비밀번호를 쓰시면 됩니다.")
+    send_slack_msg(f"🔐 [{env_label}] 로그인 비밀번호: {password}\n해제하거나 다시 발급하기 전까지 계속 이 비밀번호를 쓰시면 됩니다.")
     return password
 
 @app.route('/api/login/toggle', methods=['POST'])
@@ -1020,6 +1031,36 @@ def get_stock_raw_data_api():
             "status": "error",
             "message": str(e)
         }), 500
+
+@app.route('/api/stock-raw-data/cleanup', methods=['POST'])
+def cleanup_stock_raw_data_api():
+    """오래된 주식 원본 데이터(stock_raw_data)를 오래된 순으로 count건 삭제합니다."""
+    try:
+        body = request.get_json(silent=True) or {}
+        count = body.get('count', 1000)
+        try:
+            count = int(count)
+        except (TypeError, ValueError):
+            return jsonify({"status": "error", "message": "count는 숫자여야 합니다."}), 400
+
+        if count <= 0:
+            return jsonify({"status": "error", "message": "count는 1 이상이어야 합니다."}), 400
+        if count > 100000:
+            return jsonify({"status": "error", "message": "한 번에 최대 100,000건까지만 삭제할 수 있습니다."}), 400
+
+        deleted = delete_oldest_stock_raw_data(count)
+        return jsonify({"status": "success", "deleted": deleted})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/db-stats', methods=['GET'])
+def get_db_stats_api():
+    """DB 파일 크기 및 테이블별 행 수/컬럼/추정 용량을 반환합니다."""
+    try:
+        stats = get_db_stats()
+        return jsonify({"status": "success", **stats})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/alerts', methods=['GET'])
 def get_alerts():

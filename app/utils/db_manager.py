@@ -2,6 +2,7 @@ import sqlite3
 from datetime import datetime, timedelta
 import os
 import json
+import secrets
 from typing import List
 from app.config import Config
 from app.core.kis_models import MarketCapRankingItem, StockInvestorDailyItem
@@ -360,6 +361,16 @@ def init_db():
         )
     ''')
 
+    # Flask 세션 서명 키(SECRET_KEY) — 싱글톤 1행(id=1). .env에 SECRET_KEY를 수동으로 안 넣어도
+    # 최초 실행 시 자동 생성해 여기에 저장하고, 이후엔 재시작(배포 포함)마다 이 값을 재사용한다.
+    # (.env에 SECRET_KEY가 있으면 그쪽이 우선 — app/config.py 참고)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS app_secret (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            secret_key TEXT NOT NULL
+        )
+    ''')
+
     # 스케줄링 작업 실행 이력 (동기화 관리 페이지 "처리 로그"용)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS job_run_log (
@@ -423,6 +434,71 @@ def init_db():
 
     conn.commit()
     conn.close()
+
+def get_db_stats():
+    """DB 파일 전체 크기 + 테이블별 행 수/컬럼/추정 용량 조회 (원본 데이터 페이지용)"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    page_count = cursor.execute("PRAGMA page_count").fetchone()[0]
+    page_size = cursor.execute("PRAGMA page_size").fetchone()[0]
+    db_size_bytes = page_count * page_size
+    try:
+        file_size_bytes = os.path.getsize(DB_PATH)
+    except OSError:
+        file_size_bytes = db_size_bytes
+
+    table_names = [
+        row[0] for row in cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        ).fetchall()
+    ]
+
+    tables = []
+    for name in table_names:
+        # 컬럼 정보
+        col_rows = cursor.execute(f'PRAGMA table_info("{name}")').fetchall()
+        columns = [
+            {
+                "name": c[1],
+                "type": c[2] or "",
+                "notnull": bool(c[3]),
+                "pk": bool(c[5]),
+            }
+            for c in col_rows
+        ]
+
+        row_count = cursor.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0]
+
+        # 실제 페이지 단위 크기는 dbstat 가상 테이블이 없으면 알 수 없어,
+        # 각 컬럼 값의 바이트 길이 합으로 근사치를 계산 (인덱스/페이지 오버헤드 제외)
+        estimated_bytes = 0
+        if row_count > 0 and columns:
+            length_expr = " + ".join(
+                f'IFNULL(LENGTH("{c["name"]}"), 0)' for c in columns
+            )
+            estimated_bytes = cursor.execute(
+                f'SELECT IFNULL(SUM({length_expr}), 0) FROM "{name}"'
+            ).fetchone()[0]
+
+        tables.append({
+            "name": name,
+            "row_count": row_count,
+            "estimated_bytes": estimated_bytes,
+            "columns": columns,
+        })
+
+    conn.close()
+
+    tables.sort(key=lambda t: t["estimated_bytes"], reverse=True)
+
+    return {
+        "file_size_bytes": file_size_bytes,
+        "db_size_bytes": db_size_bytes,
+        "page_count": page_count,
+        "page_size": page_size,
+        "tables": tables,
+    }
 
 def save_api_token(provider, token):
     """API 토큰 저장 (날짜 포함)"""
@@ -544,6 +620,25 @@ def get_latest_stock_raw_data(limit=10):
     conn.close()
 
     return [dict(row) for row in rows]
+
+def delete_oldest_stock_raw_data(count):
+    """오래된 주식 원본 데이터를 id 오름차순(가장 오래된 것부터) count건 삭제.
+    반환값: 실제 삭제된 행 수"""
+    count = int(count)
+    if count <= 0:
+        return 0
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        DELETE FROM stock_raw_data
+        WHERE id IN (
+            SELECT id FROM stock_raw_data ORDER BY id ASC LIMIT ?
+        )
+    ''', (count,))
+    deleted = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return deleted
 
 def save_daily_market_cap(data_list: List[MarketCapRankingItem], fid_input_iscd: str = "0000"):
     """일별 시가총액 순위 데이터 일괄 저장 (당일 + 동일 시장구분 데이터 덮어쓰기)"""
@@ -2685,6 +2780,31 @@ def save_login_settings(lock_enabled: bool, password_hash: str = None) -> None:
     ''', (1 if lock_enabled else 0, password_hash, timestamp))
     conn.commit()
     conn.close()
+
+
+def get_or_create_secret_key() -> str:
+    """Flask 세션 서명 키(SECRET_KEY) 조회. DB에 이미 있으면 그 값을 반환하고,
+    없으면(최초 실행) 새로 생성해 저장한 뒤 반환한다 — 이후엔 계속 이 값을 재사용하므로
+    서버 재시작(배포 포함)마다 로그인 세션이 풀리지 않는다.
+    (.env에 SECRET_KEY가 설정돼 있으면 이 함수는 아예 호출되지 않음 — app/api/server.py 참고)
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('SELECT secret_key FROM app_secret WHERE id = 1')
+    row = cursor.fetchone()
+    if row:
+        conn.close()
+        return row[0]
+
+    # INSERT OR IGNORE: 여러 프로세스가 동시에 최초 실행되더라도(레이스 컨디션) 하나만 실제 저장되고,
+    # 나머지는 무시된 뒤 아래 SELECT로 동일한 값을 읽어가게 됨
+    new_key = secrets.token_hex(32)
+    cursor.execute('INSERT OR IGNORE INTO app_secret (id, secret_key) VALUES (1, ?)', (new_key,))
+    conn.commit()
+    cursor.execute('SELECT secret_key FROM app_secret WHERE id = 1')
+    row = cursor.fetchone()
+    conn.close()
+    return row[0]
 
 
 # ──────────────────────────────────────────────
