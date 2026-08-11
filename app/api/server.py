@@ -40,11 +40,17 @@ from app.utils.db_manager import (
     save_powerball_rounds, get_powerball_rounds, delete_powerball_round,
     add_powerball_favorite, get_powerball_favorites, delete_powerball_favorite,
     save_lotto645_rounds, get_lotto645_rounds, delete_lotto645_round,
+    add_lotto645_favorite, get_lotto645_favorites, delete_lotto645_favorite,
+    save_pension720_rounds, get_pension720_rounds, delete_pension720_round,
+    add_pension720_favorite, get_pension720_favorites, delete_pension720_favorite,
+    save_lottery_recommendations, get_lottery_recommendations,
+    delete_lottery_recommendation, delete_lottery_recommendations_bulk,
     get_login_settings, save_login_settings,
     get_or_create_secret_key,
 )
 from app.core.powerball import parse_powerball_block
 from app.core.lotto645 import parse_lotto645_block, parse_lotto645_excel
+from app.core.pension720 import parse_pension720_block, parse_pension720_excel
 from app.core.stock_monitor import (
     fetch_market_cap_ranking, fetch_investor_trend, fetch_sector_index_daily, fetch_stock_investor_daily,
     fetch_ranking_preview, fetch_sector_stocks, fetch_multi_stock_price,
@@ -392,6 +398,171 @@ def upload_lotto645_excel_api():
         return jsonify({'status': 'error', 'message': f'엑셀 파일을 읽지 못했습니다: {e}'}), 400
     added, skipped = save_lotto645_rounds(rounds) if rounds else (0, 0)
     return jsonify({'status': 'success', 'added': added, 'skipped': skipped, 'errors': errors})
+
+@app.route('/api/lotto645/favorites', methods=['GET'])
+def get_lotto645_favorites_api():
+    """즐겨찾기 번호 목록 + 저장된 당첨결과 대비 최고 등수 회차 조회"""
+    data = get_lotto645_favorites()
+    return jsonify({'status': 'success', 'count': len(data), 'data': data})
+
+@app.route('/api/lotto645/favorites', methods=['POST'])
+def add_lotto645_favorite_api():
+    """즐겨찾기 번호 추가. body: {name, nums: [번호 6개]}"""
+    body = request.get_json(silent=True) or {}
+    name = (body.get('name') or '').strip()
+    nums = body.get('nums') or []
+    if len(nums) != 6 or any(not isinstance(n, int) for n in nums):
+        return jsonify({'status': 'error', 'message': '번호 6개(정수)가 필요합니다.'}), 400
+    if not name:
+        name = f"내 번호 {_dt.now().strftime('%H%M%S')}"
+    new_id = add_lotto645_favorite(name, nums)
+    return jsonify({'status': 'success', 'id': new_id})
+
+@app.route('/api/lotto645/favorites/<int:fav_id>', methods=['DELETE'])
+def delete_lotto645_favorite_api(fav_id):
+    """즐겨찾기 번호 1건 삭제"""
+    deleted = delete_lotto645_favorite(fav_id)
+    if not deleted:
+        return jsonify({'status': 'error', 'message': '해당 즐겨찾기를 찾을 수 없습니다.'}), 404
+    return jsonify({'status': 'success', 'deleted': deleted})
+
+@app.route('/pension720')
+def pension720_view():
+    """동행복권 연금복권720+ 당첨결과 저장 + 즐겨찾기 페이지"""
+    return render_template('pension720.html', active_page='pension720')
+
+@app.route('/api/pension720/rounds', methods=['GET'])
+def get_pension720_rounds_api():
+    """저장된 연금복권720+ 당첨결과 전체 조회 (회차 최신순)"""
+    data = get_pension720_rounds()
+    return jsonify({'status': 'success', 'count': len(data), 'data': data})
+
+@app.route('/api/pension720/rounds', methods=['POST'])
+def add_pension720_rounds_api():
+    """동행복권 사이트에서 복사한 텍스트를 붙여넣어 회차 일괄 추가. body: {text}"""
+    body = request.get_json(silent=True) or {}
+    text = body.get('text') or ''
+    if not text.strip():
+        return jsonify({'status': 'error', 'message': '붙여넣은 텍스트가 비어있습니다.'}), 400
+    rounds, errors = parse_pension720_block(text)
+    added, skipped = save_pension720_rounds(rounds) if rounds else (0, 0)
+    return jsonify({'status': 'success', 'added': added, 'skipped': skipped, 'errors': errors})
+
+@app.route('/api/pension720/rounds/<int:round_id>', methods=['DELETE'])
+def delete_pension720_round_api(round_id):
+    """연금복권720+ 당첨결과 1건 삭제"""
+    deleted = delete_pension720_round(round_id)
+    if not deleted:
+        return jsonify({'status': 'error', 'message': '해당 회차를 찾을 수 없습니다.'}), 404
+    return jsonify({'status': 'success', 'deleted': deleted})
+
+@app.route('/api/pension720/upload', methods=['POST'])
+def upload_pension720_excel_api():
+    """동행복권 "연금복권720+ 회차별 당첨번호" 통계 엑셀(.xlsx) 파일을 업로드해서 일괄 추가. multipart form, 필드명: file"""
+    file = request.files.get('file')
+    if not file or not file.filename:
+        return jsonify({'status': 'error', 'message': '업로드할 파일이 없습니다.'}), 400
+    if not file.filename.lower().endswith('.xlsx'):
+        return jsonify({'status': 'error', 'message': '.xlsx 파일만 지원합니다.'}), 400
+    try:
+        rounds, errors = parse_pension720_excel(file.stream)
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'엑셀 파일을 읽지 못했습니다: {e}'}), 400
+    added, skipped = save_pension720_rounds(rounds) if rounds else (0, 0)
+    return jsonify({'status': 'success', 'added': added, 'skipped': skipped, 'errors': errors})
+
+@app.route('/api/pension720/favorites', methods=['GET'])
+def get_pension720_favorites_api():
+    """즐겨찾기 번호 목록 + 저장된 당첨결과 대비 최고 등수 회차 조회"""
+    data = get_pension720_favorites()
+    return jsonify({'status': 'success', 'count': len(data), 'data': data})
+
+@app.route('/api/pension720/favorites', methods=['POST'])
+def add_pension720_favorite_api():
+    """즐겨찾기 번호 추가. body: {name, group(조, 1~5), number(6자리 문자열/숫자)}"""
+    body = request.get_json(silent=True) or {}
+    name = (body.get('name') or '').strip()
+    group = body.get('group')
+    number_raw = body.get('number')
+    if not isinstance(group, int) or not (1 <= group <= 5):
+        return jsonify({'status': 'error', 'message': '조(1~5, 정수)가 필요합니다.'}), 400
+    digits = ''.join(ch for ch in str(number_raw) if ch.isdigit()) if number_raw is not None else ''
+    if len(digits) != 6:
+        return jsonify({'status': 'error', 'message': '번호는 숫자 6자리가 필요합니다.'}), 400
+    if not name:
+        name = f"내 번호 {_dt.now().strftime('%H%M%S')}"
+    new_id = add_pension720_favorite(name, group, digits)
+    return jsonify({'status': 'success', 'id': new_id})
+
+@app.route('/api/pension720/favorites/<int:fav_id>', methods=['DELETE'])
+def delete_pension720_favorite_api(fav_id):
+    """즐겨찾기 번호 1건 삭제"""
+    deleted = delete_pension720_favorite(fav_id)
+    if not deleted:
+        return jsonify({'status': 'error', 'message': '해당 즐겨찾기를 찾을 수 없습니다.'}), 404
+    return jsonify({'status': 'success', 'deleted': deleted})
+
+@app.route('/lottery-recommend')
+def lottery_recommend_view():
+    """파워볼/로또6/45/연금복권720+ 재미용 번호 추천 페이지 — 당첨결과 통계는 브라우저에서 계산하고, 뽑은 결과는 DB에 저장"""
+    return render_template('lottery_recommend.html', active_page='lottery_recommend')
+
+_RECO_GAMES = {'powerball', 'lotto645', 'pension720'}
+_RECO_METHODS = {'full', 'hot', 'cold', 'weighted', 'filter'}
+
+def _validate_recommendation_row(r):
+    """번호 추천 저장 요청 1건의 형태를 검증. 문제 있으면 오류 메시지, 없으면 None."""
+    if not isinstance(r, dict):
+        return '항목 형식이 올바르지 않습니다.'
+    if r.get('game') not in _RECO_GAMES:
+        return f"잘못된 game 값입니다: {r.get('game')}"
+    if r.get('method') not in _RECO_METHODS:
+        return f"잘못된 method 값입니다: {r.get('method')}"
+    main = r.get('main')
+    if not isinstance(main, list) or len(main) not in (5, 6) or not all(isinstance(n, int) and not isinstance(n, bool) for n in main):
+        return 'main은 정수 5~6개짜리 배열이어야 합니다.'
+    bonus = r.get('bonus')
+    if bonus is not None and (not isinstance(bonus, int) or isinstance(bonus, bool)):
+        return 'bonus는 정수여야 합니다.'
+    return None
+
+@app.route('/api/lottery-recommend', methods=['GET'])
+def get_lottery_recommendations_api():
+    """저장된 번호 추천 결과 전체 조회 (최신순) — 필터링은 프론트에서 처리"""
+    data = get_lottery_recommendations()
+    return jsonify({'status': 'success', 'count': len(data), 'data': data})
+
+@app.route('/api/lottery-recommend', methods=['POST'])
+def save_lottery_recommendations_api():
+    """번호 추천 결과 여러 건을 한 번에 저장. body: {rows: [{game, method, main:[int,...], bonus:int|null}, ...]}"""
+    body = request.get_json(silent=True) or {}
+    rows = body.get('rows')
+    if not isinstance(rows, list) or not rows:
+        return jsonify({'status': 'error', 'message': '저장할 데이터가 없습니다.'}), 400
+    for r in rows:
+        err = _validate_recommendation_row(r)
+        if err:
+            return jsonify({'status': 'error', 'message': err}), 400
+    saved = save_lottery_recommendations(rows)
+    return jsonify({'status': 'success', 'saved': saved})
+
+@app.route('/api/lottery-recommend/bulk-delete', methods=['POST'])
+def delete_lottery_recommendations_bulk_api():
+    """번호 추천 결과 여러 건을 한 번에 삭제. body: {ids: [int, ...]}"""
+    body = request.get_json(silent=True) or {}
+    ids = body.get('ids')
+    if not isinstance(ids, list) or not ids or not all(isinstance(i, int) and not isinstance(i, bool) for i in ids):
+        return jsonify({'status': 'error', 'message': '삭제할 id 목록이 필요합니다.'}), 400
+    deleted = delete_lottery_recommendations_bulk(ids)
+    return jsonify({'status': 'success', 'deleted': deleted})
+
+@app.route('/api/lottery-recommend/<int:rec_id>', methods=['DELETE'])
+def delete_lottery_recommendation_api(rec_id):
+    """번호 추천 결과 1건 삭제"""
+    deleted = delete_lottery_recommendation(rec_id)
+    if not deleted:
+        return jsonify({'status': 'error', 'message': '해당 항목을 찾을 수 없습니다.'}), 404
+    return jsonify({'status': 'success', 'deleted': deleted})
 
 @app.route('/coin-screening')
 def coin_screening_view():

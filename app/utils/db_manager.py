@@ -331,6 +331,58 @@ def init_db():
         )
     ''')
 
+    # 동행복권 연금복권720+ 당첨결과 — 회차별 1건, round은 붙여넣기 중복 방지용 UNIQUE
+    # number는 6자리 문자열(앞자리 0 보존을 위해 TEXT로 저장)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS pension720_rounds (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            round TEXT UNIQUE,
+            group_no INTEGER,
+            number TEXT,
+            created_at TEXT
+        )
+    ''')
+
+    # 연금복권720+ 즐겨찾기 번호 (개인이 골라둔 조합 — 당첨결과와 비교용)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS pension720_favorites (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            group_no INTEGER,
+            number TEXT,
+            created_at TEXT
+        )
+    ''')
+
+    # 로또6/45 즐겨찾기 번호 (개인이 골라둔 조합 — 당첨결과와 비교용). 보너스번호는 뽑는 대상이 아니라 결과에서만 나오므로 저장 안 함
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS lotto645_favorites (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            nums TEXT,
+            created_at TEXT
+        )
+    ''')
+
+    # 재미용 "번호 추천" 결과 저장 — 파워볼/로또6/45/연금복권720+ 공통 테이블.
+    # num1~num6: 번호 자리별로 각각 컬럼 저장(파워볼은 5개만 써서 num6은 NULL, 순서는 그대로 보존).
+    # bonus: 게임별 부가값(파워볼=파워볼번호, 연금복권=조, 로또는 NULL)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS lottery_recommendations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            game TEXT,
+            method TEXT,
+            num1 INTEGER,
+            num2 INTEGER,
+            num3 INTEGER,
+            num4 INTEGER,
+            num5 INTEGER,
+            num6 INTEGER,
+            bonus INTEGER,
+            created_at TEXT
+        )
+    ''')
+
     # 코인(업비트 KRW 마켓) 매매 후보 필터 스냅샷 — 티커당 최신 1건만 유지 (전부 4시간봉 기준)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS coin_screening_daily (
@@ -420,6 +472,14 @@ def init_db():
         'ALTER TABLE alerts ADD COLUMN mweek TEXT',
         # 실시간 감시에 일봉 타임프레임 추가 (분봉 3종 제거, 주/일/4시간봉 3개로 재편)
         'ALTER TABLE alerts ADD COLUMN mday TEXT',
+        # 번호 추천: 콤마문자열 한 컬럼(main)/extra였던 걸 번호 자리별 컬럼(num1~num6)+bonus로 분리
+        'ALTER TABLE lottery_recommendations ADD COLUMN num1 INTEGER',
+        'ALTER TABLE lottery_recommendations ADD COLUMN num2 INTEGER',
+        'ALTER TABLE lottery_recommendations ADD COLUMN num3 INTEGER',
+        'ALTER TABLE lottery_recommendations ADD COLUMN num4 INTEGER',
+        'ALTER TABLE lottery_recommendations ADD COLUMN num5 INTEGER',
+        'ALTER TABLE lottery_recommendations ADD COLUMN num6 INTEGER',
+        'ALTER TABLE lottery_recommendations ADD COLUMN bonus INTEGER',
     ]
     for sql in migrations:
         try:
@@ -429,6 +489,23 @@ def init_db():
 
     try:
         cursor.execute("UPDATE stock_memo SET updated_at = created_at WHERE updated_at IS NULL")
+    except Exception:
+        pass
+
+    # 번호 추천 기존 행(main 콤마문자열/extra) → num1~num6/bonus로 1회성 백필
+    try:
+        cols = [c[1] for c in cursor.execute('PRAGMA table_info("lottery_recommendations")').fetchall()]
+        if 'main' in cols and 'num1' in cols:
+            old_rows = cursor.execute(
+                "SELECT id, main, extra FROM lottery_recommendations WHERE num1 IS NULL AND main IS NOT NULL AND main != ''"
+            ).fetchall()
+            for rec_id, main_str, extra_val in old_rows:
+                nums = [int(n) for n in main_str.split(',')] if main_str else []
+                nums = (nums + [None] * 6)[:6]
+                cursor.execute(
+                    'UPDATE lottery_recommendations SET num1=?, num2=?, num3=?, num4=?, num5=?, num6=?, bonus=? WHERE id=?',
+                    (*nums, extra_val, rec_id)
+                )
     except Exception:
         pass
 
@@ -2969,6 +3046,299 @@ def delete_lotto645_round(round_id: int) -> int:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('DELETE FROM lotto645_rounds WHERE id = ?', (round_id,))
+    conn.commit()
+    deleted = cursor.rowcount
+    conn.close()
+    return deleted
+
+
+def _lotto645_grade(fav_nums: set, r_nums: list, r_bonus: int):
+    """로또6/45 실제 등수 규칙으로 즐겨찾기 번호 1개 vs 당첨결과 1건을 비교.
+    1등(6개 일치) / 2등(5개+보너스 일치) / 3등(5개 일치) / 4등(4개 일치) / 5등(3개 일치).
+    반환: (등수 순위(1이 최고) 또는 None, 등수 라벨 또는 None)
+    """
+    main_match = len(fav_nums & set(r_nums))
+    if main_match == 6:
+        return 1, '1등'
+    if main_match == 5 and r_bonus in fav_nums:
+        return 2, '2등'
+    if main_match == 5:
+        return 3, '3등'
+    if main_match == 4:
+        return 4, '4등'
+    if main_match == 3:
+        return 5, '5등'
+    return None, None
+
+
+def add_lotto645_favorite(name: str, nums: list) -> int:
+    """즐겨찾기 번호 추가. nums: 번호 6개(list[int]). 반환: 새로 생성된 id"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    nums_str = ','.join(str(n) for n in sorted(nums))
+    cursor.execute('INSERT INTO lotto645_favorites (name, nums, created_at) VALUES (?, ?, ?)',
+                   (name, nums_str, timestamp))
+    conn.commit()
+    new_id = cursor.lastrowid
+    conn.close()
+    return new_id
+
+
+def get_lotto645_favorites() -> list:
+    """즐겨찾기 번호 목록 조회 (최신순) — 저장된 당첨결과 전체와 비교해 가장 좋은 등수의 회차도 함께 계산해서 반환.
+    각 항목에 best_round/best_grade_rank/best_grade_label/best_prize/best_winners 필드가 추가됨.
+    당첨금(best_prize)은 1등으로 정확히 일치한 회차에 한해서만 채워짐 — 2~5등은 회차마다 금액이 달라
+    (4·5등은 법으로 고정, 2·3등은 그때그때 상금 규모에 따라 달라짐) 실제 데이터를 저장해두지 않아 None으로 둠.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM lotto645_favorites ORDER BY id DESC')
+    fav_rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+
+    rounds = get_lotto645_rounds(limit=1000)
+
+    result = []
+    for fav in fav_rows:
+        fav_nums = set(int(n) for n in fav['nums'].split(',')) if fav['nums'] else set()
+        best = None
+        for r in rounds:
+            rank, label = _lotto645_grade(fav_nums, r['nums'], r['bonus'])
+            if rank is None:
+                continue
+            if best is None or rank < best['best_grade_rank']:
+                best = {
+                    'best_round': r['round'], 'best_grade_rank': rank, 'best_grade_label': label,
+                    'best_prize': r['prize'] if rank == 1 else None,
+                    'best_winners': r['winners'] if rank == 1 else None,
+                }
+        fav['nums'] = sorted(fav_nums)
+        if best:
+            fav.update(best)
+        else:
+            fav.update({'best_round': None, 'best_grade_rank': None, 'best_grade_label': None,
+                        'best_prize': None, 'best_winners': None})
+        result.append(fav)
+    return result
+
+
+def delete_lotto645_favorite(fav_id: int) -> int:
+    """즐겨찾기 번호 1건 삭제 (id 기준). 반환: 삭제된 행 수(0 또는 1)"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM lotto645_favorites WHERE id = ?', (fav_id,))
+    conn.commit()
+    deleted = cursor.rowcount
+    conn.close()
+    return deleted
+
+
+# ──────────────────────────────────────────────
+# 동행복권 연금복권720+ — 당첨결과 저장/조회 + 즐겨찾기 번호 관리
+# ──────────────────────────────────────────────
+
+def save_pension720_rounds(rounds: list) -> tuple:
+    """연금복권720+ 당첨결과 여러 회차를 한 번에 저장. round(회차)가 이미 있으면 건너뜀.
+    rounds: [{round, group(1~5), number(6자리 문자열)}, ...]
+    반환: (added, skipped)
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    added = 0
+    skipped = 0
+    for r in rounds:
+        try:
+            cursor.execute('''
+                INSERT INTO pension720_rounds (round, group_no, number, created_at)
+                VALUES (?, ?, ?, ?)
+            ''', (r['round'], r['group'], r['number'], timestamp))
+            added += 1
+        except sqlite3.IntegrityError:
+            skipped += 1  # round UNIQUE 제약 위반 — 이미 저장된 회차
+    conn.commit()
+    conn.close()
+    return added, skipped
+
+
+def get_pension720_rounds(limit: int = 400) -> list:
+    """연금복권720+ 당첨결과 목록 조회 (회차 최신순)."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM pension720_rounds ORDER BY CAST(round AS INTEGER) DESC LIMIT ?', (limit,))
+    rows = cursor.fetchall()
+    conn.close()
+    result = []
+    for row in rows:
+        d = dict(row)
+        d['group'] = d.pop('group_no')
+        result.append(d)
+    return result
+
+
+def delete_pension720_round(round_id: int) -> int:
+    """연금복권720+ 당첨결과 1건 삭제 (id 기준). 반환: 삭제된 행 수(0 또는 1)"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM pension720_rounds WHERE id = ?', (round_id,))
+    conn.commit()
+    deleted = cursor.rowcount
+    conn.close()
+    return deleted
+
+
+def _pension720_grade(fav_group: int, fav_number: str, r_group: int, r_number: str):
+    """연금복권720+ 실제 등수 규칙으로 즐겨찾기 번호 1개 vs 당첨결과 1건을 비교.
+    번호 끝자리부터 몇 자리가 연속으로 일치하는지로 등수를 매김:
+    1등(조+6자리 일치) / 2등(6자리 일치, 조 무관) / 3등(뒤5자리) / 4등(뒤4자리) / 5등(뒤3자리) / 6등(뒤2자리) / 7등(뒤1자리).
+    반환: (등수 순위(1이 최고, 낮을수록 좋음) 또는 None, 등수 라벨 문자열 또는 None)
+    """
+    trailing = 0
+    for a, b in zip(reversed(fav_number), reversed(r_number)):
+        if a != b:
+            break
+        trailing += 1
+
+    if trailing == 6:
+        return (1, '1등') if fav_group == r_group else (2, '2등')
+    if trailing == 5:
+        return 3, '3등'
+    if trailing == 4:
+        return 4, '4등'
+    if trailing == 3:
+        return 5, '5등'
+    if trailing == 2:
+        return 6, '6등'
+    if trailing == 1:
+        return 7, '7등'
+    return None, None
+
+
+def add_pension720_favorite(name: str, group: int, number: str) -> int:
+    """즐겨찾기 번호 추가. group: 조(1~5), number: 6자리 문자열. 반환: 새로 생성된 id"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('INSERT INTO pension720_favorites (name, group_no, number, created_at) VALUES (?, ?, ?, ?)',
+                   (name, group, number, timestamp))
+    conn.commit()
+    new_id = cursor.lastrowid
+    conn.close()
+    return new_id
+
+
+def get_pension720_favorites() -> list:
+    """즐겨찾기 번호 목록 조회 (최신순) — 저장된 당첨결과 전체와 비교해 가장 좋은 등수의 회차도 함께 계산해서 반환.
+    각 항목에 best_round/best_group/best_number/best_grade_rank/best_grade_label 필드가 추가됨(당첨된 적 없으면 None).
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM pension720_favorites ORDER BY id DESC')
+    fav_rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+
+    rounds = get_pension720_rounds(limit=1000)
+
+    result = []
+    for fav in fav_rows:
+        fav['group'] = fav.pop('group_no')
+        best = None
+        for r in rounds:
+            rank, label = _pension720_grade(fav['group'], fav['number'], r['group'], r['number'])
+            if rank is None:
+                continue
+            if best is None or rank < best['best_grade_rank']:
+                best = {
+                    'best_round': r['round'], 'best_group': r['group'], 'best_number': r['number'],
+                    'best_grade_rank': rank, 'best_grade_label': label,
+                }
+        if best:
+            fav.update(best)
+        else:
+            fav.update({'best_round': None, 'best_group': None, 'best_number': None,
+                        'best_grade_rank': None, 'best_grade_label': None})
+        result.append(fav)
+    return result
+
+
+def delete_pension720_favorite(fav_id: int) -> int:
+    """즐겨찾기 번호 1건 삭제 (id 기준). 반환: 삭제된 행 수(0 또는 1)"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM pension720_favorites WHERE id = ?', (fav_id,))
+    conn.commit()
+    deleted = cursor.rowcount
+    conn.close()
+    return deleted
+
+
+# ──────────────────────────────────────────────
+# 재미용 "번호 추천" 결과 저장/조회/삭제 (파워볼/로또6/45/연금복권720+ 공통)
+# ──────────────────────────────────────────────
+
+def save_lottery_recommendations(rows: list) -> int:
+    """번호 추천 결과 여러 건을 한 번에 저장 — 번호 1~6자리를 각각 num1~num6 컬럼에, 보너스(파워볼/조)는 bonus 컬럼에 저장.
+    rows: [{game, method, main(list[int], 길이 5~6, 자릿수 순서 그대로), bonus(int 또는 None)}, ...]
+    반환: 저장된 건수
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    for r in rows:
+        nums = (list(r['main']) + [None] * 6)[:6]  # 5자리 게임(파워볼)은 num6이 NULL로 남음
+        cursor.execute(
+            '''INSERT INTO lottery_recommendations
+               (game, method, num1, num2, num3, num4, num5, num6, bonus, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+            (r['game'], r['method'], *nums, r.get('bonus'), timestamp)
+        )
+    conn.commit()
+    conn.close()
+    return len(rows)
+
+
+def get_lottery_recommendations(limit: int = 1000) -> list:
+    """저장된 번호 추천 결과 목록 조회 (최신 저장순). num1~num6은 main 리스트로 합쳐서 반환(비어있는 자리는 제외)."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM lottery_recommendations ORDER BY id DESC LIMIT ?', (limit,))
+    rows = cursor.fetchall()
+    conn.close()
+    result = []
+    for row in rows:
+        d = dict(row)
+        d.pop('main', None)   # 예전 스키마의 콤마문자열 컬럼(더 이상 안 씀) — 남아있어도 응답에선 제거
+        d.pop('extra', None)  # 예전 스키마의 부가값 컬럼(bonus로 대체됨)
+        nums = [d.pop(f'num{i}') for i in range(1, 7)]
+        d['main'] = [n for n in nums if n is not None]
+        result.append(d)
+    return result
+
+
+def delete_lottery_recommendation(rec_id: int) -> int:
+    """번호 추천 결과 1건 삭제 (id 기준). 반환: 삭제된 행 수(0 또는 1)"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM lottery_recommendations WHERE id = ?', (rec_id,))
+    conn.commit()
+    deleted = cursor.rowcount
+    conn.close()
+    return deleted
+
+
+def delete_lottery_recommendations_bulk(ids: list) -> int:
+    """번호 추천 결과 여러 건을 한 번에 삭제. 반환: 삭제된 행 수"""
+    if not ids:
+        return 0
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    placeholders = ','.join('?' for _ in ids)
+    cursor.execute(f'DELETE FROM lottery_recommendations WHERE id IN ({placeholders})', ids)
     conn.commit()
     deleted = cursor.rowcount
     conn.close()
