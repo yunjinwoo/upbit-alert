@@ -46,8 +46,9 @@ API 서버 프로세스가 로그인 코드 전송 하나만을 위해 `gspread`
 | 값 | 의미 |
 |---|---|
 | `SLACK_WEBHOOK_URL` | `.env`의 `SLACK_TOKEN` 값을 웹훅 URL로 사용 |
-| `SECRET_KEY` | Flask 세션 서명 키. **`.env`에 고정값으로 안 넣으면 서버 재시작마다 기존 세션이 다 풀림** |
+| `SECRET_KEY` | Flask 세션 서명 키. `.env`에 있으면 그 값을 쓰고, 없으면 DB(`app_secret` 테이블)에 저장된 값을 자동으로 씀(최초 1회 생성 후 재사용) — 아래 "SECRET_KEY와 세션 유지" 참고 |
 | `SESSION_LIFETIME_DAYS = 30` | 로그인 세션 유지 기간 |
+| `APP_ENV` | `local`(기본) / `production`. 배포 스크립트가 서버 `.env`에 자동으로 `APP_ENV=production`을 넣어줌 — 비밀번호를 로컬/서버 중 어디서 발급했는지 Slack 메시지에 표시하는 용도 |
 
 ### 4. `app/api/server.py` — 인증 로직 본체 (제일 중요)
 
@@ -85,6 +86,24 @@ API 서버 프로세스가 로그인 코드 전송 하나만을 위해 `gspread`
 - **잠금 끄면 전체 오픈**: `require_login()`에서 `lock_enabled`가 False면 그 어떤 경로도 막지 않음 — 즉 보안은 전적으로 "잠금 토글" 상태에 의존
 - **서버 간 동기화 경로(`/api/sync/*`)는 세션 로그인과 무관하게 별도 토큰(X-Sync-Token)으로 인증** — 로그인 잠금과 섞이지 않게 분리돼 있음
 - **기본값**: DB에 `login_settings` 행이 아예 없는 최초 실행 시 잠금 **켜짐**으로 취급 ([app/utils/db_manager.py](../app/utils/db_manager.py) `get_login_settings()` / 테이블 `DEFAULT 1`) — 배포 직후 곧바로 열려 있는 상태가 되는 걸 방지하기 위한 설정
+
+## SECRET_KEY와 세션 유지 (DB 자동 저장)
+
+`SECRET_KEY`는 로그인 비밀번호가 **아니다** — 사용자가 입력하는 값이 아니라, Flask가 세션 쿠키에 서명(위조 방지)할 때만 쓰는 서버 내부 키다. 이 값이 바뀌면 기존에 발급된 세션 쿠키가 전부 무효화되어 로그인이 풀린다.
+
+- 배포할 때마다 `pm2 delete` → `pm2 start`로 프로세스가 완전히 재시작되는데, 예전엔 `.env`에 `SECRET_KEY`를 수동으로 안 넣어두면 재시작마다 랜덤 키로 대체되어 그때마다 전체 재로그인이 필요했다.
+- 지금은 `.env`에 값이 없으면 `get_or_create_secret_key()`([app/utils/db_manager.py](../app/utils/db_manager.py))가 DB `app_secret` 테이블(싱글톤 1행)에서 값을 읽어오고, 행이 없으면(최초 실행) 그때 딱 한 번 랜덤 생성해 저장한다. 이후로는 재시작(=배포)해도 같은 키를 계속 재사용하므로 세션이 안 풀린다.
+- `.env`에 `SECRET_KEY`를 직접 넣으면 여전히 그 값이 최우선 — DB 값은 아예 조회하지 않는다.
+- 모든 세션을 강제로 끊고 싶다면(=키 교체) DB `app_secret` 테이블의 행을 지우거나, `.env`에 새 `SECRET_KEY`를 지정하면 된다.
+
+## 비밀번호를 어디서 보냈는지 구분 (로컬 vs 서버)
+
+`_issue_new_password()`가 보내는 Slack 메시지 앞에 `Config.APP_ENV` 값을 라벨로 붙인다 (`app/api/server.py`의 `_APP_ENV_LABELS`):
+
+- 로컬에서 실행 중이면 `.env`에 `APP_ENV`가 없어 기본값 `local` → `🔐 [💻 로컬] 로그인 비밀번호: ...`
+- 서버는 [.github/workflows/deploy.yml](../.github/workflows/deploy.yml)이 배포마다 `.env`에 `APP_ENV=production`을 자동으로 채워 넣음(이미 있으면 건드리지 않음) → `🔐 [🖥 서버] 로그인 비밀번호: ...`
+
+로컬에서 실수로 잠금을 켜거나 재발급을 눌러도 Slack 메시지만 보고 "이건 로컬에서 온 거구나"를 바로 구분할 수 있다.
 
 ## 왜 "OTP"가 아니라 "토글+상시 비밀번호"인가
 

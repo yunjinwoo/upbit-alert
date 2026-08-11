@@ -56,6 +56,11 @@ class Config:
     SYNC_AUTO_LIMIT = 7  # 자동 동기화 시 전송할 최근 날짜 수
 
     # 로그인 (잠금 토글 — 켜질 때마다 Slack으로 새 비밀번호 전송, 해제 전까지 재사용 → 세션 쿠키 유지)
-    # SECRET_KEY 미설정 시 매번 랜덤 키로 대체 — 서버 재시작마다 로그인이 풀림. 꼭 .env(또는 환경변수)에 고정값으로 설정할 것.
+    # SECRET_KEY 미설정 시 DB(app_secret 테이블)에 저장된 값을 자동으로 쓴다(없으면 최초 1회 생성) —
+    # app/api/server.py 참고. .env에 값을 넣으면 그쪽이 항상 우선한다.
     SECRET_KEY = os.getenv("SECRET_KEY")
     SESSION_LIFETIME_DAYS = 30           # 로그인 유지 기간(일) — 이 기간 안엔 비밀번호 재입력 없이 세션 유지
+
+    # 실행 환경 구분(로컬/서버) — 로그인 비밀번호를 Slack으로 보낼 때 어디서 발급됐는지 표시하는 용도.
+    # 서버 배포 스크립트(.github/workflows/deploy.yml)가 .env에 APP_ENV=production을 자동으로 추가해준다.
+    APP_ENV = os.getenv("APP_ENV", "local")
