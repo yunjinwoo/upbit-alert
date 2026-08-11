@@ -5,7 +5,7 @@
     'top_gainers': 'data', 'coin_screening': 'data',
     'signal_score_preview': 'signal', 'signal_score_history': 'signal',
     'raw_data': 'ops', 'history': 'ops', 'sync_admin': 'ops', 'date_column_convert': 'ops', 'security': 'ops',
-    'powerball': 'lottery', 'lotto645': 'lottery',
+    'powerball': 'lottery', 'lotto645': 'lottery', 'pension720': 'lottery', 'lottery_recommend': 'lottery',
 } %}
 {% set active_group = group_map.get(active_page) %}
 {% set group_items = {
@@ -37,14 +37,21 @@
     'lottery': [
         ('powerball_view', 'powerball', '파워볼'),
         ('lotto645_view', 'lotto645', '로또6/45'),
+        ('pension720_view', 'pension720', '연금복권720+'),
+        ('lottery_recommend_view', 'lottery_recommend', '번호 추천'),
     ],
 } %}
 <style>
     .main-navbar .navbar-toggler-icon { filter: invert(1); }
     .main-navbar .navbar-toggler { border-color: rgba(255,255,255,0.3); }
     .main-navbar .dropdown-toggle { background: none; border: none; }
+    .main-navbar .dropdown-toggle::after { pointer-events: none; }
     .main-navbar .dropdown-menu { font-size: 0.85rem; min-width: 12rem; }
     .main-navbar .dropdown-item.active { background: #4da6ff; }
+    /* 클릭하면 바로 첫 하위 메뉴로 이동하고, 마우스를 올리면(hover) 하위 메뉴 목록이 펼쳐짐 */
+    @media (min-width: 992px) {
+        .main-navbar .dropdown:hover > .dropdown-menu { display: block; margin-top: 0; }
+    }
     .sub-navbar { background: #eef2f6; border-bottom: 1px solid #dde3ea; }
     .sub-navbar .sub-nav-link { color: #475569; font-size: 0.8rem; padding: 6px 4px; text-decoration: none; border-bottom: 2px solid transparent; }
     .sub-navbar .sub-nav-link:hover { color: #1a1a2e; }
@@ -56,20 +63,22 @@
         <span class="navbar-toggler-icon"></span>
     </button>
     <div class="collapse navbar-collapse" id="mainNavCollapse">
-        <div class="d-flex gap-2 flex-wrap align-items-center">
+        <div class="d-flex gap-4 flex-wrap align-items-center w-100">
             <a href="{{ url_for('index') }}" class="nav-link{{ ' active' if active_page == 'dashboard' }}">대시보드</a>
             <a href="{{ url_for('stock_memo_view') }}" class="nav-link{{ ' active' if active_page == 'stock_memo' }}">종목 메모</a>
 
             <div class="dropdown">
-                <a class="nav-link dropdown-toggle{{ ' active' if active_group == 'lottery' }}" href="{{ url_for(group_items['lottery'][0][0]) }}" role="button" data-bs-toggle="dropdown">🎱 복권</a>
+                <a class="nav-link dropdown-toggle{{ ' active' if active_group == 'lottery' }}" href="{{ url_for(group_items['lottery'][0][0]) }}">🎱 복권</a>
                 <ul class="dropdown-menu">
                     <li><a class="dropdown-item{{ ' active' if active_page == 'powerball' }}" href="{{ url_for('powerball_view') }}">파워볼</a></li>
                     <li><a class="dropdown-item{{ ' active' if active_page == 'lotto645' }}" href="{{ url_for('lotto645_view') }}">로또6/45</a></li>
+                    <li><a class="dropdown-item{{ ' active' if active_page == 'pension720' }}" href="{{ url_for('pension720_view') }}">연금복권720+</a></li>
+                    <li><a class="dropdown-item{{ ' active' if active_page == 'lottery_recommend' }}" href="{{ url_for('lottery_recommend_view') }}">🎲 번호 추천</a></li>
                 </ul>
             </div>
 
             <div class="dropdown">
-                <a class="nav-link dropdown-toggle{{ ' active' if active_group == 'data' }}" href="{{ url_for(group_items['data'][0][0]) }}" role="button" data-bs-toggle="dropdown">데이터 조회</a>
+                <a class="nav-link dropdown-toggle{{ ' active' if active_group == 'data' }}" href="{{ url_for(group_items['data'][0][0]) }}">데이터 조회</a>
                 <ul class="dropdown-menu">
                     <li><a class="dropdown-item{{ ' active' if active_page == 'market_cap' }}" href="{{ url_for('market_cap_view') }}">시가총액 추이</a></li>
                     <li><a class="dropdown-item{{ ' active' if active_page == 'stock_investor' }}" href="{{ url_for('stock_investor_view') }}">시총×투자자</a></li>
@@ -86,7 +95,7 @@
             </div>
 
             <div class="dropdown">
-                <a class="nav-link dropdown-toggle{{ ' active' if active_group == 'signal' }}" href="{{ url_for(group_items['signal'][0][0]) }}" role="button" data-bs-toggle="dropdown">Signal Score</a>
+                <a class="nav-link dropdown-toggle{{ ' active' if active_group == 'signal' }}" href="{{ url_for(group_items['signal'][0][0]) }}">Signal Score</a>
                 <ul class="dropdown-menu">
                     <li><a class="dropdown-item{{ ' active' if active_page == 'signal_score_preview' }}" href="{{ url_for('signal_score_preview_view') }}">Signal Score 종목</a></li>
                     <li><a class="dropdown-item{{ ' active' if active_page == 'signal_score_history' }}" href="{{ url_for('signal_score_history_view') }}">Signal Score 이력</a></li>
@@ -94,7 +103,7 @@
             </div>
 
             <div class="dropdown">
-                <a class="nav-link dropdown-toggle{{ ' active' if active_group == 'ops' }}" href="{{ url_for(group_items['ops'][0][0]) }}" role="button" data-bs-toggle="dropdown">운영/관리</a>
+                <a class="nav-link dropdown-toggle{{ ' active' if active_group == 'ops' }}" href="{{ url_for(group_items['ops'][0][0]) }}">운영/관리</a>
                 <ul class="dropdown-menu">
                     <li><a class="dropdown-item{{ ' active' if active_page == 'raw_data' }}" href="{{ url_for('raw_data_view') }}">원본 데이터</a></li>
                     <li><a class="dropdown-item" href="/grid">리비전 관리</a></li>
