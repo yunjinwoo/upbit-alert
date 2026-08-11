@@ -48,7 +48,6 @@ API 서버 프로세스가 로그인 코드 전송 하나만을 위해 `gspread`
 | `SLACK_WEBHOOK_URL` | `.env`의 `SLACK_TOKEN` 값을 웹훅 URL로 사용 |
 | `SECRET_KEY` | Flask 세션 서명 키. `.env`에 있으면 그 값을 쓰고, 없으면 DB(`app_secret` 테이블)에 저장된 값을 자동으로 씀(최초 1회 생성 후 재사용) — 아래 "SECRET_KEY와 세션 유지" 참고 |
 | `SESSION_LIFETIME_DAYS = 30` | 로그인 세션 유지 기간 |
-| `APP_ENV` | `local`(기본) / `production`. 배포 스크립트가 서버 `.env`에 자동으로 `APP_ENV=production`을 넣어줌 — 비밀번호를 로컬/서버 중 어디서 발급했는지 Slack 메시지에 표시하는 용도 |
 
 ### 4. `app/api/server.py` — 인증 로직 본체 (제일 중요)
 
@@ -98,12 +97,20 @@ API 서버 프로세스가 로그인 코드 전송 하나만을 위해 `gspread`
 
 ## 비밀번호를 어디서 보냈는지 구분 (로컬 vs 서버)
 
-`_issue_new_password()`가 보내는 Slack 메시지 앞에 `Config.APP_ENV` 값을 라벨로 붙인다 (`app/api/server.py`의 `_APP_ENV_LABELS`):
+`_issue_new_password()`가 보내는 Slack 메시지 앞에 `platform.system()`(OS 이름) + `platform.node()`(호스트명)을 그대로 붙인다:
 
-- 로컬에서 실행 중이면 `.env`에 `APP_ENV`가 없어 기본값 `local` → `🔐 [💻 로컬] 로그인 비밀번호: ...`
-- 서버는 [.github/workflows/deploy.yml](../.github/workflows/deploy.yml)이 배포마다 `.env`에 `APP_ENV=production`을 자동으로 채워 넣음(이미 있으면 건드리지 않음) → `🔐 [🖥 서버] 로그인 비밀번호: ...`
+```
+🔐 [Windows / DESKTOP-XXXX] 로그인 비밀번호: 1234567   ← 로컬 PC에서 발급
+🔐 [Linux / <서버 호스트명>] 로그인 비밀번호: 1234567   ← 서버에서 발급
+```
 
-로컬에서 실수로 잠금을 켜거나 재발급을 눌러도 Slack 메시지만 보고 "이건 로컬에서 온 거구나"를 바로 구분할 수 있다.
+로컬에서 실수로 잠금을 켜거나 재발급을 눌러도 Slack 메시지만 보고 어디서 온 건지 바로 구분할 수 있다.
+
+**처음엔 `Config.APP_ENV`(`.env`의 `local`/`production` 값)로 구분했었는데 두 가지 이유로 걷어냈다:**
+1. 서버 `.env`에 `APP_ENV=production`을 수동/자동으로 넣어줘야 하는 관리 부담이 있었고, 실제로 배포 스크립트가 `>>`로 단순 append하다가 `.env` 마지막 줄에 개행이 없어서 직전 값에 그대로 이어붙어 깨지는 사고가 있었다(`SECRET_KEY=abc123APP_ENV=production` 식으로).
+2. 이 프로젝트는 로컬(Windows)과 서버(Linux, iwinv)의 OS가 애초에 다르기 때문에, `.env` 값에 의존하지 않고 `platform.system()`으로 코드가 스스로 판별하면 별도 설정이 아예 필요 없다.
+
+공인(외부) IP는 넣지 않았다 — 조회하려면 비밀번호 발급마다 외부 API 호출이 추가로 필요하고, 서버의 실제 공인 IP가 Slack 메시지 평문에 그대로 남는 게 정찰 정보 노출 측면에서 부담스럽기 때문. 호스트명만으로 로컬/서버 구분에는 충분하다.
 
 ## 왜 "OTP"가 아니라 "토글+상시 비밀번호"인가
 
