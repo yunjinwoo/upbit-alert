@@ -28,8 +28,11 @@ jobs:
             git reset --hard origin/main
 
             # 3. 필요한 환경변수 보장 (.env에 없으면 추가)
-            grep -q "APP_ROOT" .env 2>/dev/null || echo "APP_ROOT=/upbit" >> .env
-            grep -q "APP_ENV" .env 2>/dev/null || echo "APP_ENV=production" >> .env
+            # .env 마지막 줄에 개행이 없는 채로 끝나있으면 `>>`로 그냥 이어붙일 때 이전 줄에
+            # 붙어버려(예: SECRET_KEY=abc123APP_ENV=production) 두 값 다 깨지는 문제가 있어,
+            # 항상 빈 줄 하나를 앞세워 새 줄에서 시작하도록 printf로 추가한다.
+            grep -q "APP_ROOT" .env 2>/dev/null || printf '\nAPP_ROOT=/upbit\n' >> .env
+            grep -q "APP_ENV" .env 2>/dev/null || printf '\nAPP_ENV=production\n' >> .env
 
             # 4. 필요한 라이브러리 설치
             # 반드시 venv의 pip를 써야 함 — 그냥 pip는 시스템 파이썬에 설치되어 버려서,
