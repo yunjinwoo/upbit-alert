@@ -1,6 +1,6 @@
 # 자동매매 1단계 — 업비트 모의매매(Dry-run) 엔진
 
-- 상태: 로컬 구현·검증 완료 / 서버 배포(PM2) 미반영 / 실거래 전환 안 함
+- 상태: 로컬 구현·검증 완료 / 서버 배포(PM2) 등록 완료 / 실거래 전환 안 함
 - 날짜: 2026-08-12
 - 관련 파일: `app/core/brokers/`, `app/core/trade_strategy.py`, `app/core/auto_trader.py`,
   `app/utils/db_manager.py`, `app/config.py`, `main.py`, `app/api/server.py`,
@@ -97,10 +97,12 @@ python main.py trade
 위한 프로세스 격리 목적.
 
 **서버 배포([.github/workflows/deploy.yml](../.github/workflows/deploy.yml))는 애초에 `all`
-모드를 안 쓰고 PM2로 `upbit-api`/`upbit-bot`/`stock-bot` 3개를 개별 프로세스로 띄우는 구조라,
-서버에서 돌리려면 여기에 `trade`를 4번째 PM2 프로세스로 추가해야 함(아직 안 함).**
-참고로 `coin_analysis`도 이 PM2 목록에 없어 보여서, 서버에서는 진입 후보 소스
-(`coin_screening_daily`)가 갱신되지 않고 있을 가능성이 있음 — 다음 단계에서 확인 필요.
+모드를 안 쓰고 PM2로 개별 프로세스를 띄우는 구조.** 기존엔 `upbit-api`/`upbit-bot`/`stock-bot`
+3개뿐이었고 `coin_analysis`도 빠져 있어서(서버에서 진입 후보 소스가 갱신 안 되고 있었음),
+이번에 `coin-analysis-bot`(`coin_analysis` 모드)과 `trade-bot`(`trade` 모드) 2개를 추가함.
+**즉 이 PR이 머지·배포되는 순간부터 서버의 실제 `alerts.db`에 자동으로 dry-run 매매가 시작된다**
+(실주문은 없지만 가상 계좌/포지션/로그가 쌓이기 시작함 — 원치 않으면 대시보드 토글로 끄거나
+배포 전에 `trade-bot` 라인을 지울 것).
 
 ## 실행/일시중지 토글
 
@@ -189,7 +191,6 @@ Slack 알림을 보내는 코드(`auto_trader.py`의 `_execute()`)는 이미 있
 
 ## 다음 단계 (이번 범위 밖)
 
-- 서버 배포 PM2에 `trade`(및 빠져 있는 것으로 보이는 `coin_analysis`) 프로세스 등록
 - Slack 알림 재활성화 여부 결정
 - KIS/토스증권 브로커 구현 — `BrokerClient` 인터페이스는 이미 확장 가능하게 설계됨
 - 실거래(live) 전환 — `UPBIT_ACCESS_KEY`/`SECRET_KEY` 추가, 실주문 브로커 구현 필요

@@ -41,13 +41,19 @@ jobs:
             
             # 4. PM2를 이용한 프로세스 재시작
             # 기존 프로세스가 있다면 중지 후 삭제 (확실한 재시작을 위해)
-            pm2 delete upbit-bot upbit-api stock-bot || true
-            
+            pm2 delete upbit-bot upbit-api stock-bot coin-analysis-bot trade-bot || true
+
             # 가상환경 내의 python3 경로를 정확히 지정하여 실행
             pm2 start main.py --name upbit-api --interpreter ./venv/bin/python3 -- api
             pm2 start main.py --name upbit-bot --interpreter ./venv/bin/python3 -- upbit
             pm2 start main.py --name stock-bot --interpreter ./venv/bin/python3 -- stock
-            
+            # coin-analysis-bot: 자동매매 진입 후보(coin_screening_daily)를 30분 주기로 채움 —
+            # trade-bot이 이 데이터에 의존하므로 반드시 같이 떠 있어야 함(그동안 서버엔 안 떠 있었음)
+            pm2 start main.py --name coin-analysis-bot --interpreter ./venv/bin/python3 -- coin_analysis
+            # trade-bot: 업비트 자동매매 1단계(모의매매/dry-run) — 실주문 없음, DB 가상 원장에만 반영.
+            # 대시보드(/auto-trade)에서 실행/일시중지 토글 및 매매 기준 조정 가능(재시작 불필요)
+            pm2 start main.py --name trade-bot --interpreter ./venv/bin/python3 -- trade
+
             # 5. 설정 저장 (서버 재부팅 시 자동 실행)
             pm2 save
             
