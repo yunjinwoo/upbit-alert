@@ -454,7 +454,13 @@ def init_db():
         )
     ''')
 
-    # 자동매매 가상 보유 포지션 — 종목당 1행(완전 청산 시 행 삭제, 분할매수/부분청산은 1단계 범위 밖)
+    # 자동매매 가상 보유 포지션 — 종목당 1행(완전 청산 시 행 삭제, 분할매도/보유기간 제한은 범위 밖).
+    # peak_price/below_stop_streak: 트레일링 손절(진입가가 아닌 "보유 중 최고가" 대비 하락률로 손절
+    # 판단) + 연속 확인(노이즈로 바로 손절되지 않게 N사이클 연속 조건 유지 확인)에 사용.
+    # dca_enabled: 대시보드 체크박스로 켠 "물타기(추가매수)" 허용 여부.
+    # dca_used: (구) 1회 제한 시절의 플래그 — 이제 dca_count로 대체됐지만 기존 배포와의 호환을 위해
+    # 컬럼은 남겨둠(더 이상 읽지 않음). dca_count: 이 포지션에서 실제로 물탄 횟수, dca_max_count(전략
+    # 설정)에 도달할 때까지 반복 허용.
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS paper_positions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -465,6 +471,11 @@ def init_db():
             avg_buy_price REAL NOT NULL,
             entry_at TEXT,
             updated_at TEXT,
+            peak_price REAL,
+            below_stop_streak INTEGER NOT NULL DEFAULT 0,
+            dca_enabled INTEGER NOT NULL DEFAULT 0,
+            dca_used INTEGER NOT NULL DEFAULT 0,
+            dca_count INTEGER NOT NULL DEFAULT 0,
             UNIQUE(broker, mode, ticker)
         )
     ''')
@@ -502,6 +513,9 @@ def init_db():
     # app/config.py의 TRADE_* 상수는 이 테이블에 행이 없을 때만 쓰이는 기본값이고, 대시보드에서
     # 저장하면 이 테이블 값이 우선한다. python main.py trade 프로세스는 재시작 없이 매 사이클마다
     # 이 값을 다시 읽는다(app/core/auto_trader.py 참고).
+    # stop_loss_confirm_cycles: 트레일링 손절 조건이 몇 사이클 연속으로 유지돼야 실제로 매도할지(기본 1=즉시,
+    # 기존 동작과 동일). dca_trigger_pct: 물타기(추가매수) 체크된 포지션이 몇 % 하락(평단 대비)했을 때
+    # 추가매수를 실행할지(기본 10%). dca_max_count: 포지션당 물타기 최대 허용 횟수(기본 2회, 무제한 방지).
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS trade_strategy_settings (
             id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -510,6 +524,9 @@ def init_db():
             stop_loss_pct REAL NOT NULL,
             take_profit_pct REAL NOT NULL,
             loop_interval_sec INTEGER NOT NULL,
+            stop_loss_confirm_cycles INTEGER NOT NULL DEFAULT 1,
+            dca_trigger_pct REAL NOT NULL DEFAULT 10.0,
+            dca_max_count INTEGER NOT NULL DEFAULT 2,
             updated_at TEXT
         )
     ''')
@@ -517,6 +534,9 @@ def init_db():
     # 매매 대상 코인 수동 승인(체크박스) — 사용자가 후보 중 일부만 체크하면 그 종목만 진입 대상으로
     # 좁힌다(대시보드/auto_trader.py 참고). 체크된 행이 하나도 없으면 기존처럼 전체 후보를 대상으로 함.
     # 체크 안 한 종목은 행 자체가 없어도 되므로(기본 미승인), 실제로 한 번이라도 토글된 종목만 저장된다.
+    # condition_watch: "정밀 매수조건 검사" 대상 여부(별도 체크박스) — approved와 독립적인 opt-in.
+    # 켜진 종목만 entry_condition_checker.py가 주기적으로 일봉/5분봉/1분봉을 조회해 조건을 검사한다
+    # (전체 후보를 매번 다중 시간대로 조회하면 API 호출이 너무 많아지므로, 사용자가 지정한 종목만 대상).
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS trade_candidate_approval (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -524,7 +544,40 @@ def init_db():
             mode TEXT NOT NULL DEFAULT 'paper',
             ticker TEXT NOT NULL,
             approved INTEGER NOT NULL DEFAULT 0,
+            condition_watch INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT,
+            UNIQUE(broker, mode, ticker)
+        )
+    ''')
+
+    # 정밀 매수조건(일봉/5분봉/1분봉 등 다중 시간대) 정의 — app/core/entry_conditions.py가 이 설정으로
+    # 조건을 계산한다. condition_key로 코드가 어떤 판단 로직을 쓸지 매칭하고, logic_group('AND'/'OR')은
+    # 여러 켜진 조건을 어떻게 결합할지: AND 그룹은 전부 충족해야 하고, OR 그룹은 하나만 충족해도 됨
+    # (AND 그룹 전부 충족 AND (OR 그룹이 비었거나 그중 하나 이상 충족)). params는 조건별 파라미터(JSON 문자열).
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS trade_condition_settings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            condition_key TEXT NOT NULL UNIQUE,
+            label TEXT,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            logic_group TEXT NOT NULL DEFAULT 'AND',
+            params TEXT,
+            updated_at TEXT
+        )
+    ''')
+
+    # 정밀 매수조건 검사 결과 캐시 — entry_condition_checker.py가 별도 루프(조건 검사 주기)로 갱신하고,
+    # auto_trader.py의 evaluate_entries()는 이 캐시된 결과만 읽는다(매매 사이클마다 재조회하지 않음).
+    # detail: 조건별 개별 판단 결과 JSON({condition_key: {passed, message}, ...}) — 대시보드 툴팁용.
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS trade_condition_status (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            broker TEXT NOT NULL DEFAULT 'upbit',
+            mode TEXT NOT NULL DEFAULT 'paper',
+            ticker TEXT NOT NULL,
+            passed INTEGER NOT NULL DEFAULT 0,
+            detail TEXT,
+            checked_at TEXT,
             UNIQUE(broker, mode, ticker)
         )
     ''')
@@ -569,10 +622,43 @@ def init_db():
         'ALTER TABLE lottery_recommendations ADD COLUMN num5 INTEGER',
         'ALTER TABLE lottery_recommendations ADD COLUMN num6 INTEGER',
         'ALTER TABLE lottery_recommendations ADD COLUMN bonus INTEGER',
+        # 자동매매: 트레일링 손절(최고가 대비 하락률) + 연속 확인 + 물타기(추가매수) 지원을 위한 컬럼 추가
+        # (trade_strategy_settings/paper_positions는 이미 배포된 테이블이라 CREATE TABLE IF NOT EXISTS만으론
+        # 기존 행에 반영이 안 돼 마이그레이션으로 추가)
+        'ALTER TABLE paper_positions ADD COLUMN peak_price REAL',
+        'ALTER TABLE paper_positions ADD COLUMN below_stop_streak INTEGER NOT NULL DEFAULT 0',
+        'ALTER TABLE paper_positions ADD COLUMN dca_enabled INTEGER NOT NULL DEFAULT 0',
+        'ALTER TABLE paper_positions ADD COLUMN dca_used INTEGER NOT NULL DEFAULT 0',
+        'ALTER TABLE trade_strategy_settings ADD COLUMN stop_loss_confirm_cycles INTEGER NOT NULL DEFAULT 1',
+        'ALTER TABLE trade_strategy_settings ADD COLUMN dca_trigger_pct REAL NOT NULL DEFAULT 10.0',
+        # 물타기 1회 제한(dca_used) → N회 제한(dca_count/dca_max_count)으로 완화.
+        # 기존에 이미 1회 물탄 행(dca_used=1)은 dca_count=1로 채워 넣어 남은 허용 횟수를 정확히 유지한다.
+        'ALTER TABLE paper_positions ADD COLUMN dca_count INTEGER NOT NULL DEFAULT 0',
+        'UPDATE paper_positions SET dca_count = 1 WHERE dca_used = 1 AND dca_count = 0',
+        'ALTER TABLE trade_strategy_settings ADD COLUMN dca_max_count INTEGER NOT NULL DEFAULT 2',
+        # 정밀 매수조건(일봉/5분봉/1분봉) 검사 기능 — 기존 배포 테이블에 컬럼 추가
+        'ALTER TABLE trade_candidate_approval ADD COLUMN condition_watch INTEGER NOT NULL DEFAULT 0',
+        'ALTER TABLE trade_strategy_settings ADD COLUMN condition_check_interval_sec INTEGER NOT NULL DEFAULT 60',
     ]
     for sql in migrations:
         try:
             cursor.execute(sql)
+        except Exception:
+            pass
+
+    # 정밀 매수조건 3종 기본 행 시딩(최초 1회, 이미 있으면 건드리지 않음) — 전부 기본 비활성화(enabled=0)로
+    # 시작해서, 사용자가 대시보드에서 켜기 전까진 기존 동작(4시간봉 필터만)이 그대로 유지된다.
+    default_conditions = [
+        ('daily_above_ma', '일봉 종가가 N일 이동평균 이상', '{"ma_period": 20}'),
+        ('m5_ma_support', '5분봉이 N선에 지지받고 반등(저가 근접 후 종가 위 마감)', '{"ma_period": 20, "touch_tolerance_pct": 0.3}'),
+        ('m1_bb_breakout_volume', '1분봉이 볼린저밴드 상단을 거래량 동반 돌파', '{"bb_period": 20, "bb_mult": 2.0, "vol_lookback": 20, "vol_ratio_threshold": 2.0}'),
+    ]
+    for condition_key, label, params in default_conditions:
+        try:
+            cursor.execute('''
+                INSERT OR IGNORE INTO trade_condition_settings (condition_key, label, enabled, logic_group, params)
+                VALUES (?, ?, 0, 'AND', ?)
+            ''', (condition_key, label, params))
         except Exception:
             pass
 
@@ -3550,19 +3636,77 @@ def get_paper_position(broker: str, mode: str, ticker: str):
     return dict(row) if row else None
 
 
-def upsert_paper_position(broker: str, mode: str, ticker: str, qty: float, avg_buy_price: float, entry_at: str = None):
+def upsert_paper_position(broker: str, mode: str, ticker: str, qty: float, avg_buy_price: float,
+                           entry_at: str = None, peak_price: float = None):
     """가상 포지션 upsert. 신규 진입이면 entry_at을 기록하고, 기존 보유분에 얹는 경우(추가매수)는
-    호출부(PaperBroker)에서 이미 합산한 qty/avg_buy_price를 넘겨받아 그대로 덮어쓴다."""
+    호출부(PaperBroker)에서 이미 합산한 qty/avg_buy_price를 넘겨받아 그대로 덮어쓴다.
+    peak_price를 명시적으로 안 넘기면(None) 기존 행이 있을 때 그 값을 그대로 유지하고(트레일링
+    손절 기준점은 매수/매도로 안 건드림 — update_position_tracking()이 사이클마다 별도 갱신),
+    신규 행이면 avg_buy_price로 시작한다. dca_enabled/dca_used/below_stop_streak은 이 함수가
+    건드리지 않음(set_position_dca_enabled/mark_position_dca_used/update_position_tracking 참고)."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     entry_at = entry_at or timestamp
+
+    if peak_price is None:
+        cursor.execute(
+            'SELECT peak_price FROM paper_positions WHERE broker = ? AND mode = ? AND ticker = ?',
+            (broker, mode, ticker)
+        )
+        existing = cursor.fetchone()
+        peak_price = existing[0] if existing and existing[0] is not None else avg_buy_price
+
     cursor.execute('''
-        INSERT INTO paper_positions (broker, mode, ticker, qty, avg_buy_price, entry_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO paper_positions (broker, mode, ticker, qty, avg_buy_price, entry_at, peak_price, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(broker, mode, ticker) DO UPDATE SET
-            qty=excluded.qty, avg_buy_price=excluded.avg_buy_price, updated_at=excluded.updated_at
-    ''', (broker, mode, ticker, qty, avg_buy_price, entry_at, timestamp))
+            qty=excluded.qty, avg_buy_price=excluded.avg_buy_price,
+            peak_price=excluded.peak_price, updated_at=excluded.updated_at
+    ''', (broker, mode, ticker, qty, avg_buy_price, entry_at, peak_price, timestamp))
+    conn.commit()
+    conn.close()
+
+
+def update_position_tracking(broker: str, mode: str, ticker: str, peak_price: float, below_stop_streak: int):
+    """트레일링 손절 추적값(보유 중 최고가/손절 조건 연속 확인 횟수) 갱신. 매수/매도가 없는(HOLD)
+    사이클에도 매번 호출해서 다음 사이클 판단에 쓰일 상태를 최신화한다."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('''
+        UPDATE paper_positions SET peak_price = ?, below_stop_streak = ?, updated_at = ?
+        WHERE broker = ? AND mode = ? AND ticker = ?
+    ''', (peak_price, below_stop_streak, timestamp, broker, mode, ticker))
+    conn.commit()
+    conn.close()
+
+
+def set_position_dca_enabled(broker: str, mode: str, ticker: str, enabled: bool):
+    """대시보드 체크박스: 이 포지션에 물타기(추가매수) 허용 여부 저장."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('''
+        UPDATE paper_positions SET dca_enabled = ?, updated_at = ?
+        WHERE broker = ? AND mode = ? AND ticker = ?
+    ''', (1 if enabled else 0, timestamp, broker, mode, ticker))
+    conn.commit()
+    conn.close()
+
+
+def mark_position_dca_used(broker: str, mode: str, ticker: str, new_peak_price: float):
+    """물타기(추가매수) 실행 직후 호출 — dca_count를 1 증가시켜(trade_strategy.py가 dca_max_count와
+    비교해 남은 허용 횟수를 판단) 트레일링 손절의 기준점(peak_price)과 연속 확인 카운트
+    (below_stop_streak)를 새 평단 시점 기준으로 리셋한다. dca_used는 더 이상 갱신하지 않음(구버전
+    호환용으로 컬럼만 남아있음)."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('''
+        UPDATE paper_positions SET dca_count = dca_count + 1, peak_price = ?, below_stop_streak = 0, updated_at = ?
+        WHERE broker = ? AND mode = ? AND ticker = ?
+    ''', (new_peak_price, timestamp, broker, mode, ticker))
     conn.commit()
     conn.close()
 
@@ -3637,6 +3781,10 @@ def get_trade_strategy_settings() -> dict:
             'stop_loss_pct': Config.TRADE_STOP_LOSS_PCT,
             'take_profit_pct': Config.TRADE_TAKE_PROFIT_PCT,
             'loop_interval_sec': Config.TRADE_LOOP_INTERVAL_SEC,
+            'stop_loss_confirm_cycles': Config.TRADE_STOP_LOSS_CONFIRM_CYCLES,
+            'dca_trigger_pct': Config.TRADE_DCA_TRIGGER_PCT,
+            'dca_max_count': Config.TRADE_DCA_MAX_COUNT,
+            'condition_check_interval_sec': Config.TRADE_CONDITION_CHECK_INTERVAL_SEC,
             'updated_at': None,
         }
     return {
@@ -3645,13 +3793,19 @@ def get_trade_strategy_settings() -> dict:
         'stop_loss_pct': row['stop_loss_pct'],
         'take_profit_pct': row['take_profit_pct'],
         'loop_interval_sec': row['loop_interval_sec'],
+        'stop_loss_confirm_cycles': row['stop_loss_confirm_cycles'],
+        'dca_trigger_pct': row['dca_trigger_pct'],
+        'dca_max_count': row['dca_max_count'],
+        'condition_check_interval_sec': row['condition_check_interval_sec'],
         'updated_at': row['updated_at'],
     }
 
 
 def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_positions: int = None,
                                  stop_loss_pct: float = None, take_profit_pct: float = None,
-                                 loop_interval_sec: int = None) -> dict:
+                                 loop_interval_sec: int = None, stop_loss_confirm_cycles: int = None,
+                                 dca_trigger_pct: float = None, dca_max_count: int = None,
+                                 condition_check_interval_sec: int = None) -> dict:
     """매매 전략 파라미터 저장(upsert, 부분 갱신 — None인 필드는 기존값 유지). 저장된 값을 반환."""
     current = get_trade_strategy_settings()
     merged = {
@@ -3660,23 +3814,34 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
         'stop_loss_pct': stop_loss_pct if stop_loss_pct is not None else current['stop_loss_pct'],
         'take_profit_pct': take_profit_pct if take_profit_pct is not None else current['take_profit_pct'],
         'loop_interval_sec': loop_interval_sec if loop_interval_sec is not None else current['loop_interval_sec'],
+        'stop_loss_confirm_cycles': stop_loss_confirm_cycles if stop_loss_confirm_cycles is not None else current['stop_loss_confirm_cycles'],
+        'dca_trigger_pct': dca_trigger_pct if dca_trigger_pct is not None else current['dca_trigger_pct'],
+        'dca_max_count': dca_max_count if dca_max_count is not None else current['dca_max_count'],
+        'condition_check_interval_sec': condition_check_interval_sec if condition_check_interval_sec is not None else current['condition_check_interval_sec'],
     }
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     cursor.execute('''
         INSERT INTO trade_strategy_settings
-            (id, max_position_krw, max_concurrent_positions, stop_loss_pct, take_profit_pct, loop_interval_sec, updated_at)
-        VALUES (1, ?, ?, ?, ?, ?, ?)
+            (id, max_position_krw, max_concurrent_positions, stop_loss_pct, take_profit_pct,
+             loop_interval_sec, stop_loss_confirm_cycles, dca_trigger_pct, dca_max_count,
+             condition_check_interval_sec, updated_at)
+        VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             max_position_krw=excluded.max_position_krw,
             max_concurrent_positions=excluded.max_concurrent_positions,
             stop_loss_pct=excluded.stop_loss_pct,
             take_profit_pct=excluded.take_profit_pct,
             loop_interval_sec=excluded.loop_interval_sec,
+            stop_loss_confirm_cycles=excluded.stop_loss_confirm_cycles,
+            dca_trigger_pct=excluded.dca_trigger_pct,
+            dca_max_count=excluded.dca_max_count,
+            condition_check_interval_sec=excluded.condition_check_interval_sec,
             updated_at=excluded.updated_at
     ''', (merged['max_position_krw'], merged['max_concurrent_positions'], merged['stop_loss_pct'],
-          merged['take_profit_pct'], merged['loop_interval_sec'], timestamp))
+          merged['take_profit_pct'], merged['loop_interval_sec'], merged['stop_loss_confirm_cycles'],
+          merged['dca_trigger_pct'], merged['dca_max_count'], merged['condition_check_interval_sec'], timestamp))
     conn.commit()
     conn.close()
     merged['updated_at'] = timestamp
@@ -3711,18 +3876,170 @@ def set_candidate_approval(broker: str, mode: str, ticker: str, approved: bool) 
     conn.close()
 
 
-def get_trade_order_log(broker: str = None, mode: str = None, limit: int = 100) -> list:
-    """매매 판단/체결 로그 최신순 조회."""
+def get_condition_watch_tickers(broker: str, mode: str) -> set:
+    """"정밀 매수조건 검사" 체크박스가 켜진 티커 집합 조회 (entry_condition_checker.py가 이 종목만
+    주기적으로 다중 시간대 조회한다)."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        'SELECT ticker FROM trade_candidate_approval WHERE broker = ? AND mode = ? AND condition_watch = 1',
+        (broker, mode)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return {r[0] for r in rows}
+
+
+def set_candidate_condition_watch(broker: str, mode: str, ticker: str, enabled: bool) -> None:
+    """"정밀 매수조건 검사" 체크박스 상태 저장(upsert) — approved 체크박스와 독립적인 컬럼."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('''
+        INSERT INTO trade_candidate_approval (broker, mode, ticker, condition_watch, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(broker, mode, ticker) DO UPDATE SET
+            condition_watch=excluded.condition_watch, updated_at=excluded.updated_at
+    ''', (broker, mode, ticker, 1 if enabled else 0, timestamp))
+    conn.commit()
+    conn.close()
+
+
+def get_trade_condition_settings() -> list:
+    """정밀 매수조건(일봉/5분봉/1분봉 등) 설정 전체 조회. params는 JSON 문자열을 dict로 파싱해 반환."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    if broker and mode:
-        cursor.execute('''
-            SELECT * FROM trade_order_log WHERE broker = ? AND mode = ?
-            ORDER BY id DESC LIMIT ?
-        ''', (broker, mode, limit))
+    cursor.execute('SELECT * FROM trade_condition_settings ORDER BY id')
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    for r in rows:
+        try:
+            r['params'] = json.loads(r['params']) if r['params'] else {}
+        except (TypeError, ValueError):
+            r['params'] = {}
+    return rows
+
+
+def set_trade_condition_setting(condition_key: str, enabled: bool = None, logic_group: str = None,
+                                 params: dict = None) -> dict:
+    """정밀 매수조건 1건 부분 갱신(None인 필드는 기존값 유지). condition_key가 없으면 예외 발생."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM trade_condition_settings WHERE condition_key = ?', (condition_key,))
+    current = cursor.fetchone()
+    if not current:
+        conn.close()
+        raise ValueError(f'알 수 없는 조건 키: {condition_key}')
+
+    next_enabled = (1 if enabled else 0) if enabled is not None else current['enabled']
+    next_logic_group = logic_group if logic_group is not None else current['logic_group']
+    if params is not None:
+        try:
+            current_params = json.loads(current['params']) if current['params'] else {}
+        except (TypeError, ValueError):
+            current_params = {}
+        current_params.update(params)
+        next_params = json.dumps(current_params, ensure_ascii=False)
     else:
-        cursor.execute('SELECT * FROM trade_order_log ORDER BY id DESC LIMIT ?', (limit,))
+        next_params = current['params']
+
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('''
+        UPDATE trade_condition_settings SET enabled = ?, logic_group = ?, params = ?, updated_at = ?
+        WHERE condition_key = ?
+    ''', (next_enabled, next_logic_group, next_params, timestamp, condition_key))
+    conn.commit()
+    conn.close()
+    result = dict(current)
+    result.update({'enabled': next_enabled, 'logic_group': next_logic_group, 'updated_at': timestamp})
+    try:
+        result['params'] = json.loads(next_params) if next_params else {}
+    except (TypeError, ValueError):
+        result['params'] = {}
+    return result
+
+
+def save_condition_status(broker: str, mode: str, ticker: str, passed: bool, detail: dict) -> None:
+    """정밀 매수조건 검사 결과 캐시 저장(upsert) — entry_condition_checker.py 전용 쓰기 지점."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('''
+        INSERT INTO trade_condition_status (broker, mode, ticker, passed, detail, checked_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(broker, mode, ticker) DO UPDATE SET
+            passed=excluded.passed, detail=excluded.detail, checked_at=excluded.checked_at
+    ''', (broker, mode, ticker, 1 if passed else 0, json.dumps(detail, ensure_ascii=False), timestamp))
+    conn.commit()
+    conn.close()
+
+
+def get_condition_status_map(broker: str, mode: str) -> dict:
+    """정밀 매수조건 검사 결과 캐시를 {ticker: {passed, detail, checked_at}} 형태로 조회.
+    evaluate_entries()가 이 값을 읽기만 하고(DB 접근 없음), 여기서 미리 dict로 준비해 넘긴다."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM trade_condition_status WHERE broker = ? AND mode = ?', (broker, mode))
+    rows = cursor.fetchall()
+    conn.close()
+    result = {}
+    for r in rows:
+        try:
+            detail = json.loads(r['detail']) if r['detail'] else {}
+        except (TypeError, ValueError):
+            detail = {}
+        result[r['ticker']] = {'passed': bool(r['passed']), 'detail': detail, 'checked_at': r['checked_at']}
+    return result
+
+
+def get_trade_order_log(broker: str = None, mode: str = None, limit: int = 100, offset: int = 0,
+                         ticker: str = None, decision: str = None) -> list:
+    """매매 판단/체결 로그 최신순 조회. offset/ticker/decision은 별도 이력 페이지(/auto-trade/logs)의
+    페이지네이션·필터용 — 기본값(offset=0, 필터 없음)이면 기존 대시보드 요약 호출과 동일하게 동작."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    where = []
+    params = []
+    if broker and mode:
+        where.append('broker = ? AND mode = ?')
+        params.extend([broker, mode])
+    if ticker:
+        where.append('ticker = ?')
+        params.append(ticker)
+    if decision:
+        where.append('decision = ?')
+        params.append(decision)
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ''
+    cursor.execute(f'''
+        SELECT * FROM trade_order_log {where_sql}
+        ORDER BY id DESC LIMIT ? OFFSET ?
+    ''', (*params, limit, offset))
     rows = cursor.fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def count_trade_order_log(broker: str = None, mode: str = None, ticker: str = None, decision: str = None) -> int:
+    """매매 판단/체결 로그 전체 건수(필터 적용) — 이력 페이지 페이지네이션용."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    where = []
+    params = []
+    if broker and mode:
+        where.append('broker = ? AND mode = ?')
+        params.extend([broker, mode])
+    if ticker:
+        where.append('ticker = ?')
+        params.append(ticker)
+    if decision:
+        where.append('decision = ?')
+        params.append(decision)
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ''
+    cursor.execute(f'SELECT COUNT(*) FROM trade_order_log {where_sql}', params)
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count

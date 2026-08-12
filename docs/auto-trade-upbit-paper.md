@@ -1,10 +1,13 @@
 # 자동매매 1단계 — 업비트 모의매매(Dry-run) 엔진
 
-- 상태: 로컬 구현·검증 완료 / 서버 배포(PM2) 미반영 / 실거래 전환 안 함
+- 상태: 로컬 구현·검증 완료 / 서버 배포(PM2) 등록은 PR로 다시 올리는 중(아래 "알아둘 점" 참고) / 실거래 전환 안 함
 - 날짜: 2026-08-12
 - 관련 파일: `app/core/brokers/`, `app/core/trade_strategy.py`, `app/core/auto_trader.py`,
+  `app/core/entry_conditions.py`, `app/core/entry_condition_checker.py`,
   `app/utils/db_manager.py`, `app/config.py`, `main.py`, `app/api/server.py`,
-  `templates/auto_trade.html`, `templates/_navbar.html`, `tests/test_trade_dry_run.py`
+  `templates/auto_trade.html`, `templates/auto_trade_logs.html`, `templates/_navbar.html`,
+  `tests/test_trade_dry_run.py`,
+  `.github/workflows/deploy.yml`
 
 ## 배경
 
@@ -97,10 +100,12 @@ python main.py trade
 위한 프로세스 격리 목적.
 
 **서버 배포([.github/workflows/deploy.yml](../.github/workflows/deploy.yml))는 애초에 `all`
-모드를 안 쓰고 PM2로 `upbit-api`/`upbit-bot`/`stock-bot` 3개를 개별 프로세스로 띄우는 구조라,
-서버에서 돌리려면 여기에 `trade`를 4번째 PM2 프로세스로 추가해야 함(아직 안 함).**
-참고로 `coin_analysis`도 이 PM2 목록에 없어 보여서, 서버에서는 진입 후보 소스
-(`coin_screening_daily`)가 갱신되지 않고 있을 가능성이 있음 — 다음 단계에서 확인 필요.
+모드를 안 쓰고 PM2로 개별 프로세스를 띄우는 구조.** 기존엔 `upbit-api`/`upbit-bot`/`stock-bot`
+3개뿐이었고 `coin_analysis`도 빠져 있어서(서버에서 진입 후보 소스가 갱신 안 되고 있었음),
+이번에 `coin-analysis-bot`(`coin_analysis` 모드)과 `trade-bot`(`trade` 모드) 2개를 추가함.
+**즉 이 PR이 머지·배포되는 순간부터 서버의 실제 `alerts.db`에 자동으로 dry-run 매매가 시작된다**
+(실주문은 없지만 가상 계좌/포지션/로그가 쌓이기 시작함 — 원치 않으면 대시보드 토글로 끄거나
+배포 전에 `trade-bot` 라인을 지울 것).
 
 ## 실행/일시중지 토글
 
@@ -118,9 +123,14 @@ python main.py trade
   - 보유 포지션(현재가·평가손익 포함) — 종목명 클릭 시 업비트 거래 화면(`https://upbit.com/exchange?code=CRIX.UPBIT.<ticker>`)으로 이동
   - **매매 대상 코인(진입 후보)** — `coin_screening_daily` 스냅샷 기준, 다음 사이클에 실제로 판단할 후보와 동일한 목록.
     종목명 클릭 시 업비트로 이동, 종목당 **매매 승인 체크박스** 제공(아래 참고)
-  - 최근 매매 판단 로그 100건(종목명 클릭 시 업비트로 이동)
   - 실행/일시중지 토글
-- API: `/api/auto-trade/summary` (GET), `/api/auto-trade/toggle` (POST),
+- `/auto-trade/logs` — 매매 판단/체결 이력(BUY/SELL/HOLD/SKIP 전부) 조회 전용 페이지. 원래
+  `/auto-trade`에 100건씩 인라인으로 박혀 있던 로그 표를 분리함 — 대시보드는 체크박스 하나만
+  토글해도 `load()`가 통째로 재실행되는데, 그때마다 실시간성이 필요 없는 로그 100줄까지 매번
+  다시 렌더링되는 게 낭비라 판단(사용자 피드백). 티커/판단(BUY 등) 필터 + 50건 단위 페이지네이션
+  제공. `/auto-trade` 상단 "📜 매매 이력" 버튼 또는 하단 안내문구 링크로 이동.
+- API: `/api/auto-trade/summary` (GET, 로그 미포함), `/api/auto-trade/logs` (GET, `limit`/`offset`/
+  `ticker`/`decision` 쿼리파라미터), `/api/auto-trade/toggle` (POST),
   `/api/auto-trade/candidates/approve` (POST), `/api/auto-trade/settings` (POST) — 전부 기존
   전역 `require_login()`에 자동으로 걸림.
 - 네비게이션 위치: 처음엔 "운영/관리" 드롭다운 안에 넣었다가, 사용자 요청으로 "대시보드"/
@@ -187,10 +197,131 @@ Slack 알림을 보내는 코드(`auto_trader.py`의 `_execute()`)는 이미 있
 새로 읽으므로 HTML/JS 변경은 바로 반영됨). 토글 API처럼 Python 로직을 새로 추가한 뒤엔
 서버 프로세스를 수동으로 재시작해야 반영된다.
 
+### 알아둘 점 — PM2 배포 커밋이 한 번 유실됐었음
+
+`.github/workflows/deploy.yml`에 `coin-analysis-bot`/`trade-bot`을 추가하고 `/coin-screening`
+차트 링크를 고친 커밋을, **이미 병합되고 닫힌 PR #45 브랜치에 그대로 푸시**하는 실수가 있었다.
+그 브랜치는 다시 PR을 열지 않는 한 main에 반영되지 않으므로, 서버에는 dry-run 엔진 코드
+자체는 배포됐어도(`python main.py trade`가 존재) **`trade-bot`/`coin-analysis-bot`이 PM2에
+등록된 적이 없어 실제로 돌고 있지 않았을 가능성이 높다.** 이후 새 브랜치(`feature/upbit-auto-
+trade-trailing-dca`)로 그 커밋과 이번 트레일링/물타기 기능을 함께 다시 PR로 올림 — **PR을
+머지할 때마다 실제로 origin/main에 반영됐는지(`git merge-base --is-ancestor <커밋> origin/main`)
+확인하는 습관이 필요함.**
+
+## 트레일링 손절 + 연속 확인 + 물타기(선택)
+
+"손절 -5%가 무조건 매도라 아쉽다"는 피드백을 받고, 진입가 기준 고정 손절 대신 다음 3단계를 도입:
+
+1. **트레일링 손절** — 기준점을 진입가가 아니라 **포지션의 보유 중 최고가(`peak_price`)**로 바꿈.
+   `paper_positions.peak_price`를 매 사이클 `max(기존 peak, 현재가)`로 갱신하고, 손절 판단은
+   `(peak - 현재가) / peak >= stop_loss_pct`로 계산. 상승 추세에서 손절선이 같이 따라 올라가
+   수익을 지키면서, 눌림목에 바로 잘리는 걸 줄임.
+2. **연속 확인(`stop_loss_confirm_cycles`)** — 트레일링 손절 조건이 몇 사이클 연속으로 유지돼야
+   실제 매도할지. `paper_positions.below_stop_streak`로 추적, 조건이 깨지면(가격 회복) 0으로
+   리셋. 기본값 1(=즉시, 기존 동작과 동일)이라 안 건드리면 동작이 안 바뀜.
+3. **물타기(체크박스, `dca_enabled`)** — 연속 확인까지 끝나서 정말 매도해야 할 시점에, 이 포지션에
+   물타기가 켜져 있고 아직 남은 횟수가 있으면(`dca_count < dca_max_count`) 곧바로 팔지 않고 **평단
+   대비 `-dca_trigger_pct`(기본 -10%)까지 한 번 더 대기**. 거기 도달하면 매도 대신 "1종목당
+   매수금액"만큼 추가매수(`DCA_BUY`)해서 평단을 낮추고, `peak_price`/`below_stop_streak`를 새 평단
+   시점으로 리셋 — 이후엔 그 새 평단 기준으로 트레일링 손절/익절을 다시 시작하고, 다시 손절 조건에
+   닿으면 이 ③번 단계가 반복된다(남은 횟수가 있는 한).
+   **물타기는 포지션당 `dca_max_count`회까지만 허용**(기본 2회, 대시보드 "매매 기준 설정"에서
+   조정 가능) — 무제한으로 계속 추가매수하면 하락장에서 손실이 끝없이 커질 수 있어서 넣은
+   안전장치. `dca_max_count`회를 다 쓰면 그다음부터는 `dca_enabled` 여부와 무관하게 그냥 일반
+   손절이 나간다. 익절(`take_profit_pct`)은 이 셋과 무관하게 항상 최우선으로 확인한다.
+   (최초 구현 시엔 1회 고정(`dca_used` 플래그)이었다가, "1회만 되는데 2회까지 허용해달라"는
+   요청으로 `dca_count`/`dca_max_count`로 일반화함 — 기존 배포에서 이미 1회 물탄 행은 마이그레이션
+   시 `dca_count=1`로 채워져 남은 허용 횟수가 정확히 유지된다.)
+
+`trade_strategy.py`의 `evaluate_exits()`는 여전히 DB/네트워크에 직접 접근하지 않는 순수 함수로
+유지 — `peak_price`/`below_stop_streak`/`dca_enabled`/`dca_count`는 호출부가 `positions` 딕셔너리에
+실어 넘겨주고, 판단 결과(다음 `peak_price`/`streak`)도 `TradeDecision`에 실어 반환하면
+`auto_trader.py`가 그 값을 다시 DB(`update_position_tracking`/`mark_position_dca_used`)에 쓴다.
+
+**대시보드**: `/auto-trade`의 "매매 기준 설정"에 손절 연속확인 사이클수·물타기 트리거(%)·물타기
+최대 횟수 입력칸 추가. "보유 포지션" 표엔 최고가·상태 배지(🟡 손절 대기중 / 🔵 물타기 대기중 /
+🟣 물타기 N/최대 완료)·물타기 체크박스 열 추가(최대 횟수를 다 쓰면 체크박스 비활성화). 상태 배지는
+`get_dashboard_summary()`가 `evaluate_exits()`를 읽기 전용으로 한 번 더 돌려서(순수 함수라 부작용
+없음) "다음 사이클에 실제로 어떤 판단이 내려질지"를 미리 계산해 보여주는 것 — 실행 로직과 완전히
+같은 함수를 재사용하므로 화면과 실제 동작이 항상 일치한다.
+
+새 API: `POST /api/auto-trade/positions/dca` (`{ticker, enabled}`), 기존
+`POST /api/auto-trade/settings`에 `stop_loss_confirm_cycles`/`dca_trigger_pct`/`dca_max_count`
+필드 추가.
+
+신규 DB 컬럼(마이그레이션, 이미 배포된 테이블이라 `ALTER TABLE`로 추가):
+`paper_positions.peak_price/below_stop_streak/dca_enabled/dca_used(구버전, 더 이상 안 씀)/dca_count`,
+`trade_strategy_settings.stop_loss_confirm_cycles/dca_trigger_pct/dca_max_count`.
+
+## 정밀 매수조건 (다중 시간대: 일봉/5분봉/1분봉)
+
+"매수 기준을 더 구체적으로(일봉 20MA 위 + 5분봉 20선 지지 + 1분봉 볼밴 상단 거래량 돌파 등) 잡고
+싶고, 대시보드에서 조건을 선택/강제매수 하고 싶다"는 요청으로 추가. 구현 전 범위를 4가지로 확정함:
+
+1. **기존 후보 위에 추가 필터** — `coin_screening_daily`(4시간봉 돌파/구름/200선) 후보군은 그대로 두고,
+   대시보드에서 **정밀검사 체크박스**를 켠 종목에만 이 조건들을 추가로 요구한다. 체크 안 한 종목은
+   기존과 동일(추가 제약 없음) — 즉 opt-in.
+2. **조건 결합은 종목 단위가 아니라 조건 단위로 AND/OR 선택** — 각 조건에 "필수(AND)"/"택일(OR)"
+   역할을 지정. 최종 판정 = (필수 조건 전부 통과) AND (택일 조건이 없거나 그중 하나 이상 통과).
+   켠 조건이 하나도 없으면 정밀검사는 항상 통과로 취급(추가 제약 없음).
+3. **강제 매수 = 종목 지정 즉시매수 버튼** — 후보 여부/승인/정밀조건/동시보유 한도를 전부 건너뛰고
+   지정 티커를 "1종목당 매수금액"만큼 지금 즉시 매수. 자동매매 루프의 정상 진입 경로와는 완전히
+   별개(감사로그엔 `강제매수(수동)`로 남음).
+4. **5분봉/1분봉은 실시간성이 중요해 별도 루프·별도 대상** — 전체 후보를 매 매매 사이클(기본
+   300초)마다 다중 시간대로 재조회하면 API 호출이 너무 많아지므로, **정밀검사 체크한 종목만** 별도
+   프로세스가 독립 주기(`condition_check_interval_sec`, 기본 60초)로 검사하고 결과를 캐시한다.
+   `evaluate_entries()`는 이 캐시만 읽는다(매매 사이클 안에서 직접 캔들을 재조회하지 않음).
+
+### 조건 3종 (기본 전부 비활성화 — 켜기 전까진 동작이 안 바뀜)
+
+| condition_key | 의미 | 기본 파라미터 |
+|---|---|---|
+| `daily_above_ma` | 일봉 종가가 N일 이동평균 이상 | `ma_period=20` |
+| `m5_ma_support` | 5분봉이 N선에 지지받고 반등 (저가가 이평선 근접까지 눌렸다가 종가는 이평선 위 마감) | `ma_period=20`, `touch_tolerance_pct=0.3` |
+| `m1_bb_breakout_volume` | 1분봉이 볼린저밴드 상단을 거래량 동반 돌파 (종가>상단밴드, 거래량≥직전 평균×배수) | `bb_period=20`, `bb_mult=2.0`, `vol_lookback=20`, `vol_ratio_threshold=2.0` |
+
+`app/core/entry_conditions.py`(순수 함수, DB/네트워크 직접 접근 없음 — 캔들은 콜백으로 주입)에
+계산 로직이 있고, `app/core/entry_condition_checker.py`(오케스트레이션, `python main.py
+condition_check`로 독립 프로세스 실행 — `trade`/`coin_analysis`와 같은 이유로 격리)가 캔들 조회
+(`pyupbit.get_ohlcv`, 공개 API)와 DB 캐시 저장을 담당한다.
+
+### DB
+
+- `trade_condition_settings` — 조건별 설정(싱글톤 아님, condition_key당 1행): `enabled`,
+  `logic_group`(AND/OR), `params`(JSON). `init_db()`가 최초 1회 3종 기본 행을 시딩(전부 `enabled=0`).
+- `trade_candidate_approval.condition_watch` — "정밀검사" 체크박스(기존 `approved` 컬럼과 독립).
+- `trade_condition_status` — 검사 결과 캐시(broker+mode+ticker당 1행): `passed`, `detail`(조건별
+  개별 결과 JSON), `checked_at`. `evaluate_entries()`가 읽기 전용으로 참조.
+- `trade_strategy_settings.condition_check_interval_sec` — 정밀검사 루프 주기(기본 60초, 최소 10초).
+
+### auto_trader.py 통합
+
+`trade_strategy.py`의 `evaluate_entries()`는 여전히 순수 함수 — `condition_watch_tickers`(집합)와
+`condition_status_map`(캐시된 dict)을 파라미터로 받을 뿐 DB에 직접 접근하지 않는다. watch 대상인데
+캐시에 결과가 없으면(검사 루프가 안 떠 있거나 아직 첫 검사 전) `SKIP: 정밀조건 검사 결과 없음`,
+있는데 `passed=False`면 `SKIP: 정밀조건 미충족`으로 매수를 보류한다.
+
+### API / 대시보드
+
+새 API: `POST /api/auto-trade/candidates/condition-watch` (`{ticker, enabled}`),
+`POST /api/auto-trade/conditions/settings` (`{conditions: [{condition_key, enabled?, logic_group?,
+params?}, ...]}`, 여러 건 한 번에 부분 갱신), `POST /api/auto-trade/force-buy` (`{ticker}`).
+기존 `POST /api/auto-trade/settings`에 `condition_check_interval_sec` 필드 추가.
+
+`/auto-trade` 대시보드에 "🧪 정밀 매수조건" 카드(조건 3종 체크박스+AND/OR 선택+파라미터 입력) 추가.
+"매매 대상 코인" 표에 **정밀검사** 체크박스 열과 상태 배지(⏳ 검사 대기 / ✅ 조건 충족 / ❌ 미충족)
+추가. 상단에 **강제 매수**(티커 입력 + 버튼) 추가 — 조건 확인창(`confirm()`) 후 실행.
+
+### 배포
+
+`.github/workflows/deploy.yml`에 `condition-check-bot`(`condition_check` 모드) PM2 프로세스 추가 —
+`trade-bot`과 마찬가지로 `all`/`start_all()`엔 포함하지 않고 독립 프로세스로 격리. 이 프로세스가 안
+떠 있으면 정밀검사 켠 종목은 검사 결과가 영영 안 생겨 매수가 계속 보류된다(의도된 안전 기본값 —
+검사 없이 통과시키지 않음).
+
 ## 다음 단계 (이번 범위 밖)
 
-- 서버 배포 PM2에 `trade`(및 빠져 있는 것으로 보이는 `coin_analysis`) 프로세스 등록
 - Slack 알림 재활성화 여부 결정
 - KIS/토스증권 브로커 구현 — `BrokerClient` 인터페이스는 이미 확장 가능하게 설계됨
 - 실거래(live) 전환 — `UPBIT_ACCESS_KEY`/`SECRET_KEY` 추가, 실주문 브로커 구현 필요
-- 부분매매, 트레일링스탑, 다중 전략, 백테스트
+- 부분매매, 다중 전략, 백테스트

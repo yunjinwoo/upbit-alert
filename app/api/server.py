@@ -40,6 +40,11 @@ from app.utils.db_manager import (
     set_trade_engine_enabled,
     set_candidate_approval,
     set_trade_strategy_settings,
+    set_position_dca_enabled,
+    set_candidate_condition_watch,
+    set_trade_condition_setting,
+    get_trade_order_log,
+    count_trade_order_log,
     save_powerball_rounds, get_powerball_rounds, delete_powerball_round,
     add_powerball_favorite, get_powerball_favorites, delete_powerball_favorite,
     save_lotto645_rounds, get_lotto645_rounds, delete_lotto645_round,
@@ -64,7 +69,7 @@ from app.core.stock_monitor import (
     SECTOR_NAMES,
 )
 from app.core.upbit_market_analysis import run_coin_screening
-from app.core.auto_trader import get_dashboard_summary
+from app.core.auto_trader import get_dashboard_summary, run_trade_cycle, force_buy
 from app.config import Config
 import json
 import os
@@ -596,10 +601,35 @@ def auto_trade_view():
     """업비트 자동매매(모의) 대시보드 — 읽기 전용. 매매 판단/실행은 별도 프로세스(python main.py trade)에서만 발생."""
     return render_template('auto_trade.html', active_page='auto_trade')
 
+@app.route('/auto-trade/logs')
+def auto_trade_logs_view():
+    """매매 판단/체결 이력(BUY/SELL/HOLD/SKIP 전부) 조회 페이지 — 대시보드(/auto-trade)에서 분리.
+    폴링되는 대시보드 요약 API에 매번 100건씩 딸려오던 부담을 줄이려고, 실시간성이 필요 없는
+    이 로그는 별도 페이지+페이지네이션으로 뺐다(get_auto_trade_logs_api 참고)."""
+    return render_template('auto_trade_logs.html', active_page='auto_trade')
+
+@app.route('/api/auto-trade/logs', methods=['GET'])
+def get_auto_trade_logs_api():
+    """매매 판단/체결 이력을 페이지네이션해서 조회. 쿼리파라미터: limit(기본 50, 최대 200),
+    offset(기본 0), ticker(선택, 예: KRW-BTC), decision(선택, BUY/SELL/HOLD/SKIP/DCA_BUY)."""
+    try:
+        limit = min(int(request.args.get('limit', 50)), 200)
+        offset = max(int(request.args.get('offset', 0)), 0)
+        ticker = (request.args.get('ticker') or '').strip() or None
+        decision = (request.args.get('decision') or '').strip() or None
+        orders = get_trade_order_log('upbit', 'paper', limit=limit, offset=offset, ticker=ticker, decision=decision)
+        total = count_trade_order_log('upbit', 'paper', ticker=ticker, decision=decision)
+        return jsonify({'status': 'success', 'orders': orders, 'total': total, 'limit': limit, 'offset': offset})
+    except (ValueError, TypeError) as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
 @app.route('/api/auto-trade/summary', methods=['GET'])
 def get_auto_trade_summary_api():
-    """가상 계좌 잔고/보유 포지션(현재가·평가손익 포함)/진입 후보(매매 대상 코인)/최근 매매 로그/엔진 실행 여부/
-    매매 전략 파라미터(settings)를 JSON으로 반환합니다 (읽기 전용, 주문 실행 없음)."""
+    """가상 계좌 잔고/보유 포지션(현재가·평가손익 포함)/진입 후보(매매 대상 코인)/엔진 실행 여부/
+    매매 전략 파라미터(settings)를 JSON으로 반환합니다 (읽기 전용, 주문 실행 없음). 매매 판단 로그는
+    포함하지 않음 — /auto-trade/logs 페이지의 /api/auto-trade/logs를 따로 호출할 것."""
     try:
         data = get_dashboard_summary()
         return jsonify({'status': 'success', **data})
@@ -617,6 +647,20 @@ def toggle_auto_trade_api():
         return jsonify({'status': 'success', 'enabled': enabled})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/auto-trade/run-now', methods=['POST'])
+def run_auto_trade_now_api():
+    """매매 루프의 다음 sleep(최대 loop_interval_sec초)을 기다리지 않고, 지금 이 요청 안에서
+    동기적으로 매매 판단 1사이클(청산→진입, 현재 DB에 저장된 매매 기준 그대로)을 즉시 실행합니다.
+    `python main.py trade` 프로세스가 떠 있는지와 무관하게 웹 서버 프로세스에서 직접 실행하며(다른
+    수동 즉시수집 버튼들과 동일한 패턴), 엔진 실행/일시중지 토글 상태와도 무관하게 항상 실행됩니다
+    (수동 트리거는 토글의 자동 스케줄링과 별개). 결과는 여느 사이클처럼 trade_order_log/job_run_log에
+    'manual'로 기록됩니다."""
+    try:
+        result = run_trade_cycle(trigger_type='manual')
+        return jsonify({'status': 'success', **result})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'즉시 실행 중 오류 발생: {str(e)}'}), 500
 
 @app.route('/api/auto-trade/candidates/approve', methods=['POST'])
 def set_candidate_approval_api():
@@ -636,10 +680,11 @@ def set_candidate_approval_api():
 
 @app.route('/api/auto-trade/settings', methods=['POST'])
 def set_trade_strategy_settings_api():
-    """매매 전략 파라미터(1종목당 매수금액/최대 동시보유/손절·익절 기준/루프 주기) 저장.
-    실행 중인 `python main.py trade` 프로세스가 다음 사이클부터 새 값을 적용하므로 재시작이 필요 없습니다.
-    body는 아래 필드 중 바꿀 것만 보내면 됩니다(부분 갱신):
-    {max_position_krw, max_concurrent_positions, stop_loss_pct, take_profit_pct, loop_interval_sec}"""
+    """매매 전략 파라미터(1종목당 매수금액/최대 동시보유/손절·익절 기준/루프 주기/손절 연속확인
+    사이클수/물타기 트리거 %) 저장. 실행 중인 `python main.py trade` 프로세스가 다음 사이클부터
+    새 값을 적용하므로 재시작이 필요 없습니다. body는 아래 필드 중 바꿀 것만 보내면 됩니다(부분 갱신):
+    {max_position_krw, max_concurrent_positions, stop_loss_pct, take_profit_pct, loop_interval_sec,
+     stop_loss_confirm_cycles, dca_trigger_pct, dca_max_count}"""
     body = request.get_json(silent=True) or {}
     try:
         kwargs = {}
@@ -668,11 +713,115 @@ def set_trade_strategy_settings_api():
             if v < 10:
                 raise ValueError('매매 루프 주기는 최소 10초 이상이어야 합니다.')
             kwargs['loop_interval_sec'] = v
+        if 'stop_loss_confirm_cycles' in body:
+            v = int(body['stop_loss_confirm_cycles'])
+            if v <= 0:
+                raise ValueError('손절 연속확인 사이클수는 1 이상이어야 합니다.')
+            kwargs['stop_loss_confirm_cycles'] = v
+        if 'dca_trigger_pct' in body:
+            v = float(body['dca_trigger_pct'])
+            if v <= 0:
+                raise ValueError('물타기 트리거(%)는 0보다 커야 합니다.')
+            kwargs['dca_trigger_pct'] = v
+        if 'dca_max_count' in body:
+            v = int(body['dca_max_count'])
+            if v <= 0:
+                raise ValueError('물타기 최대 횟수는 1 이상이어야 합니다.')
+            kwargs['dca_max_count'] = v
+        if 'condition_check_interval_sec' in body:
+            v = int(body['condition_check_interval_sec'])
+            if v < 10:
+                raise ValueError('정밀조건 검사 주기는 최소 10초 이상이어야 합니다.')
+            kwargs['condition_check_interval_sec'] = v
 
         settings = set_trade_strategy_settings(**kwargs)
         return jsonify({'status': 'success', 'settings': settings})
     except (ValueError, TypeError) as e:
         return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/auto-trade/candidates/condition-watch', methods=['POST'])
+def set_candidate_condition_watch_api():
+    """"정밀조건 검사" 체크박스 상태 저장. 켜진 종목만 entry_condition_checker.py(python main.py
+    condition_check)가 별도 주기로 일봉/5분봉/1분봉을 조회해 정밀 매수조건을 검사한다.
+    body: {ticker: str, enabled: bool}"""
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip()
+    enabled = bool(body.get('enabled'))
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    try:
+        set_candidate_condition_watch('upbit', 'paper', ticker, enabled)
+        return jsonify({'status': 'success', 'ticker': ticker, 'enabled': enabled})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/auto-trade/conditions/settings', methods=['POST'])
+def set_trade_condition_settings_api():
+    """정밀 매수조건(일봉 20MA 위/5분봉 지지반등/1분봉 볼밴+거래량 돌파 등) 설정 저장 — 여러 건
+    한 번에 부분 갱신 가능. body: {conditions: [{condition_key, enabled?, logic_group?, params?}, ...]}
+    logic_group은 'AND' 또는 'OR'만 허용. params는 조건별로 다른 키를 부분 갱신(넘긴 키만 덮어씀)."""
+    body = request.get_json(silent=True) or {}
+    conditions = body.get('conditions')
+    if not isinstance(conditions, list) or not conditions:
+        return jsonify({'status': 'error', 'message': 'conditions 배열이 필요합니다.'}), 400
+    try:
+        updated = []
+        for c in conditions:
+            condition_key = (c.get('condition_key') or '').strip()
+            if not condition_key:
+                raise ValueError('condition_key가 필요합니다.')
+            logic_group = c.get('logic_group')
+            if logic_group is not None and logic_group not in ('AND', 'OR'):
+                raise ValueError(f'logic_group은 AND/OR만 가능합니다: {logic_group}')
+            enabled = c.get('enabled')
+            params = c.get('params')
+            if params is not None and not isinstance(params, dict):
+                raise ValueError('params는 객체여야 합니다.')
+            updated.append(set_trade_condition_setting(
+                condition_key,
+                enabled=bool(enabled) if enabled is not None else None,
+                logic_group=logic_group,
+                params=params,
+            ))
+        return jsonify({'status': 'success', 'conditions': updated})
+    except ValueError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/auto-trade/force-buy', methods=['POST'])
+def force_buy_api():
+    """대시보드 "강제 매수" — 진입 후보/승인/정밀조건 등 모든 필터를 건너뛰고 지정한 티커를 지금
+    즉시 "1종목당 매수금액"만큼 시장가 매수(모의)한다. body: {ticker: str} (예: 'KRW-BTC')."""
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip().upper()
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    if not ticker.startswith('KRW-'):
+        return jsonify({'status': 'error', 'message': "ticker는 'KRW-BTC'와 같은 형식이어야 합니다."}), 400
+    try:
+        result = force_buy(ticker)
+        status = 'success' if result['success'] else 'error'
+        code = 200 if result['success'] else 400
+        return jsonify({'status': status, **result}), code
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'강제 매수 중 오류 발생: {str(e)}'}), 500
+
+@app.route('/api/auto-trade/positions/dca', methods=['POST'])
+def set_position_dca_api():
+    """보유 포지션의 물타기(추가매수) 허용 체크박스 상태 저장. 켜두면 트레일링 손절 연속확인이
+    끝난 뒤 곧바로 손절하지 않고 평단 대비 -dca_trigger_pct까지 한 번 더 기다렸다가 매매기준
+    (1종목당 매수금액)으로 추가매수합니다(1회 제한). body: {ticker: str, enabled: bool}"""
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip()
+    enabled = bool(body.get('enabled'))
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    try:
+        set_position_dca_enabled('upbit', 'paper', ticker, enabled)
+        return jsonify({'status': 'success', 'ticker': ticker, 'enabled': enabled})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
