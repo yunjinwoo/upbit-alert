@@ -17,6 +17,13 @@
         .dashboard-container { margin-top: 24px; margin-bottom: 60px; }
         .card-panel { background: white; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); padding: 16px 18px; }
 
+        .btn-search {
+            background: #1a1a2e; color: #fff; border: none; border-radius: 8px;
+            padding: 5px 16px; font-size: 0.83rem; cursor: pointer; font-weight: 600;
+        }
+        .btn-search:hover { background: #2d2d4e; color: #fff; }
+        .btn-search:disabled { opacity: 0.6; cursor: not-allowed; }
+
         .dry-run-badge {
             display: inline-block; background: #fef3c7; color: #92400e; font-size: 0.72rem;
             font-weight: 700; padding: 3px 10px; border-radius: 10px; margin-left: 8px;
@@ -36,6 +43,16 @@
         .stat-value { font-size: 1.15rem; font-weight: 700; color: #1a1a2e; }
 
         .section-title { font-size: 0.95rem; font-weight: 700; color: #1a1a2e; margin: 22px 0 10px; }
+
+        .settings-group {
+            display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px;
+            padding: 10px 14px 10px 0; border-right: 1px solid #e2e8f0; margin-right: 2px;
+        }
+        .settings-group:last-of-type { border-right: none; }
+        .settings-group-label {
+            flex-basis: 100%; font-size: 0.72rem; font-weight: 700; color: #94a3b8;
+            letter-spacing: 0.02em; margin-bottom: 2px;
+        }
 
         .table-wrap { overflow-x: auto; }
         table.trade-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
@@ -59,6 +76,12 @@
         .status-dca_pending { background: #dbeafe; color: #1d4ed8; }
         .status-dca_done { background: #f3e8ff; color: #7e22ce; }
         .empty-val { color: #cbd5e1; }
+        .detail-toggle { cursor: pointer; }
+        .detail-toggle:hover { text-decoration: underline; }
+        .cand-detail-row td { background: #f8fafc; text-align: left; white-space: normal; }
+        .collapsible-header { cursor: pointer; user-select: none; display: flex; align-items: center; justify-content: space-between; }
+        .collapsible-header:hover { color: #1d4ed8; }
+        .collapse-chevron { font-size: 0.78rem; color: #94a3b8; }
         .loading-row td { text-align: center; color: #94a3b8; padding: 24px; }
     </style>
 </head>
@@ -72,8 +95,18 @@
         <h2 class="mb-0" style="font-size:1.2rem; font-weight:700; color:#1a1a2e">
             🤖 업비트 자동매매 <span class="dry-run-badge">DRY-RUN · 실주문 없음</span>
         </h2>
-        <div class="d-flex align-items-center gap-2">
+        <div class="d-flex align-items-center gap-2 flex-wrap">
             <span id="updatedAt" class="text-muted" style="font-size:0.78rem"></span>
+            <input id="forceBuyTicker" class="form-control form-control-sm" style="width:130px" placeholder="KRW-BTC">
+            <button id="forceBuyBtn" class="btn-search" onclick="forceBuy()" title="조건/승인/동시보유 한도를 전부 건너뛰고 지정한 종목을 지금 즉시 1종목당 매수금액만큼 매수">
+                ⚡ 강제 매수
+            </button>
+            <button id="runNowBtn" class="btn-search" onclick="runNow()" title="다음 사이클(최대 매매 루프 주기)을 기다리지 않고, 현재 매매 기준 그대로 지금 즉시 1회 실행">
+                ▶ 지금 즉시 실행
+            </button>
+            <a href="/auto-trade/logs" class="btn-search" style="text-decoration:none; display:inline-block" title="매매 판단/체결 이력(BUY/SELL/HOLD/SKIP 전부)을 별도 페이지에서 조회">
+                📜 매매 이력
+            </a>
             <div class="engine-toggle-box">
                 <div class="form-check form-switch mb-0">
                     <input class="form-check-input" type="checkbox" id="engineToggle" onchange="toggleEngine()" disabled>
@@ -82,40 +115,63 @@
             </div>
         </div>
     </div>
+    <div id="runNowMsg" class="text-end text-muted mb-2" style="font-size:0.76rem"></div>
 
     <div class="card-panel mb-3">
         <div class="section-title mb-2">⚙️ 매매 기준 설정</div>
-        <div class="d-flex flex-wrap gap-3 align-items-end">
-            <div>
-                <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">1종목당 매수금액(원)</label>
-                <input type="number" id="setMaxPosition" class="form-control form-control-sm" style="width:150px" min="1">
+        <div class="d-flex flex-wrap align-items-end">
+            <div class="settings-group">
+                <div class="settings-group-label">포지션 · 루프</div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">1종목당 매수금액(원)</label>
+                    <input type="number" id="setMaxPosition" class="form-control form-control-sm" style="width:150px" min="1">
+                </div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">최대 동시보유 종목수</label>
+                    <input type="number" id="setMaxPositions" class="form-control form-control-sm" style="width:110px" min="1" step="1">
+                </div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">매매 루프 주기(초)</label>
+                    <input type="number" id="setLoopInterval" class="form-control form-control-sm" style="width:110px" min="10" step="1">
+                </div>
             </div>
-            <div>
-                <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">최대 동시보유 종목수</label>
-                <input type="number" id="setMaxPositions" class="form-control form-control-sm" style="width:110px" min="1" step="1">
+            <div class="settings-group">
+                <div class="settings-group-label">손절 · 익절</div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">손절 기준(%)</label>
+                    <input type="number" id="setStopLoss" class="form-control form-control-sm" style="width:100px" min="0.1" step="0.1">
+                </div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">익절 기준(%)</label>
+                    <input type="number" id="setTakeProfit" class="form-control form-control-sm" style="width:100px" min="0.1" step="0.1">
+                </div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">손절 연속확인 사이클수</label>
+                    <input type="number" id="setStopConfirm" class="form-control form-control-sm" style="width:110px" min="1" step="1">
+                </div>
             </div>
-            <div>
-                <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">손절 기준(%)</label>
-                <input type="number" id="setStopLoss" class="form-control form-control-sm" style="width:100px" min="0.1" step="0.1">
+            <div class="settings-group">
+                <div class="settings-group-label">물타기</div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">물타기 트리거(%)</label>
+                    <input type="number" id="setDcaTrigger" class="form-control form-control-sm" style="width:110px" min="0.1" step="0.1">
+                </div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">물타기 최대 횟수</label>
+                    <input type="number" id="setDcaMaxCount" class="form-control form-control-sm" style="width:110px" min="1" step="1">
+                </div>
             </div>
-            <div>
-                <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">익절 기준(%)</label>
-                <input type="number" id="setTakeProfit" class="form-control form-control-sm" style="width:100px" min="0.1" step="0.1">
+            <div class="settings-group">
+                <div class="settings-group-label">정밀조건</div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">정밀조건 검사 주기(초)</label>
+                    <input type="number" id="setConditionCheckInterval" class="form-control form-control-sm" style="width:130px" min="10" step="1">
+                </div>
             </div>
-            <div>
-                <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">매매 루프 주기(초)</label>
-                <input type="number" id="setLoopInterval" class="form-control form-control-sm" style="width:110px" min="10" step="1">
+            <div class="d-flex align-items-center gap-2 pb-1">
+                <button class="btn-search" onclick="saveStrategySettings()">저장</button>
+                <span id="settingsSavedMsg" class="text-muted" style="font-size:0.76rem"></span>
             </div>
-            <div>
-                <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">손절 연속확인 사이클수</label>
-                <input type="number" id="setStopConfirm" class="form-control form-control-sm" style="width:110px" min="1" step="1">
-            </div>
-            <div>
-                <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">물타기 트리거(%)</label>
-                <input type="number" id="setDcaTrigger" class="form-control form-control-sm" style="width:110px" min="0.1" step="0.1">
-            </div>
-            <button class="btn-search" onclick="saveStrategySettings()">저장</button>
-            <span id="settingsSavedMsg" class="text-muted" style="font-size:0.76rem"></span>
         </div>
         <div class="mt-2 text-muted" style="font-size:0.72rem">
             * 저장하면 DB에 즉시 반영되고, <code>python main.py trade</code> 프로세스가 재시작 없이 다음 사이클부터
@@ -125,7 +181,69 @@
             <b>손절 연속확인 사이클수</b>는 그 조건이 몇 번 연속으로 유지돼야 실제 매도할지(1=즉시,
             한 캔들 노이즈로 바로 잘리는 걸 완화하려면 2 이상). <b>물타기 트리거(%)</b>는 물타기 체크된
             포지션이 손절 조건까지 충족된 뒤에도, 평단 대비 이 %까지는 매도 대신 대기했다가 도달 시
-            1종목당 매수금액만큼 추가매수(1회 한정)하는 기준입니다 — 아래 "보유 포지션" 표에서 종목별로 켤 수 있습니다.
+            1종목당 매수금액만큼 추가매수하는 기준이고, <b>물타기 최대 횟수</b>는 포지션당 이 추가매수를
+            몇 번까지 반복 허용할지입니다 — 아래 "보유 포지션" 표에서 종목별로 켤 수 있습니다.
+        </div>
+    </div>
+
+    <div class="card-panel mb-3">
+        <div class="section-title mb-2 collapsible-header" onclick="toggleCollapse(this, 'conditionsCardBody')">
+            <span>🧪 정밀 매수조건 (다중 시간대, 선택)</span>
+            <span class="collapse-chevron" id="conditionsCardChevron">▾</span>
+        </div>
+        <div id="conditionsCardBody">
+            <div class="table-wrap">
+                <table class="trade-table" style="font-size:0.78rem">
+                    <thead>
+                        <tr>
+                            <th style="text-align:center">사용</th>
+                            <th>조건</th>
+                            <th style="text-align:center">결합</th>
+                            <th>파라미터</th>
+                        </tr>
+                    </thead>
+                    <tbody id="conditionsBody">
+                        <tr class="loading-row"><td colspan="4">로딩 중...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="d-flex align-items-center gap-2 mt-2">
+                <button class="btn-search" onclick="saveConditionSettings()">조건 저장</button>
+                <span id="conditionsSavedMsg" class="text-muted" style="font-size:0.76rem"></span>
+            </div>
+            <div class="mt-2 text-muted" style="font-size:0.72rem">
+                * 이 조건들은 <b>기존 진입 후보(coin_screening_daily, 4시간봉 돌파/구름/200선) 필터 위에
+                추가로 얹는 필터</b>입니다 — 아래 "매매 대상 코인" 표에서 <b>정밀검사</b> 체크박스를 켠
+                종목에만 적용되고, 안 켠 종목은 기존과 동일하게(추가 제약 없이) 판단합니다.
+                <br>* <b>결합</b>: "필수(AND)"로 켠 조건은 전부 충족해야 하고, "택일(OR)"로 켠 조건은 그중
+                하나만 충족해도 통과합니다 — 최종 판정 = (필수 조건 전부 통과) AND (택일 조건이 없거나 그중
+                하나 이상 통과). 켠 조건이 하나도 없으면 정밀검사는 항상 통과로 취급합니다.
+                <br>* 실시간성이 필요해서 별도 프로세스(<code>python main.py condition_check</code>)가
+                독립 주기(위 "매매 기준 설정"의 <b>정밀조건 검사 주기</b>, 기본 60초)로 <b>정밀검사 체크된
+                종목만</b> 일봉/5분봉/1분봉을 다시 조회해 판단하고 결과를 캐시합니다 — 이 프로세스가 안 떠
+                있으면 정밀검사 켠 종목은 "검사 결과 없음"으로 매수가 보류됩니다.
+            </div>
+        </div>
+    </div>
+
+    <div class="card-panel mb-3">
+        <div class="section-title mb-2 collapsible-header" onclick="toggleCollapse(this, 'screeningCardBody')">
+            <span>📊 스크리닝 근거 조건 (4시간봉 — 진입 후보 추출 기준)</span>
+            <span class="collapse-chevron" id="screeningCardChevron">▾</span>
+        </div>
+        <div id="screeningCardBody">
+            <div id="screeningThresholdsBody" class="text-muted" style="font-size:0.8rem; line-height:1.8">
+                로딩 중...
+            </div>
+            <div class="mt-2 text-muted" style="font-size:0.72rem">
+                * 아래 "매매 대상 코인(진입 후보)" 목록은 <code>coin_screening_daily</code>(4시간봉,
+                <code>python main.py coin_analysis</code>가 30분 주기로 갱신)에서 이 두 조건 중
+                <b>하나라도</b> 만족하는 종목만 뽑힙니다 — <b>①돌파(breakout_4h)</b> 또는
+                <b>②200선 근접(near_ma200) AND 구름 위(above_cloud)</b>(둘 다 만족해야).
+                각 종목이 어느 조건으로 뽑혔는지는 아래 표의 "근거" 열을 펼쳐서 확인할 수 있습니다.
+                <br>* 이 임계값들은 <code>app/config.py</code> 고정값이라 대시보드에서 수정할 수 없습니다
+                (바꾸려면 코드 수정 후 <code>coin-analysis-bot</code> 재시작 필요).
+            </div>
         </div>
     </div>
 
@@ -183,56 +301,41 @@
                 <thead>
                     <tr>
                         <th style="text-align:center">매매 승인</th>
+                        <th style="text-align:center">정밀검사</th>
                         <th>종목</th>
                         <th>스크리닝 시점가</th>
                         <th>등락률(24h)</th>
+                        <th>거래대금(24h)</th>
                         <th>근거</th>
                         <th style="text-align:center">보유 여부</th>
                         <th>스크리닝 갱신시각</th>
                     </tr>
                 </thead>
                 <tbody id="candidatesBody">
-                    <tr class="loading-row"><td colspan="7">로딩 중...</td></tr>
+                    <tr class="loading-row"><td colspan="9">로딩 중...</td></tr>
                 </tbody>
             </table>
         </div>
         <div class="mt-2 text-muted" style="font-size:0.72rem">
-            * <code>coin_screening_daily</code> 스냅샷 기준 진입 후보 목록입니다(다음 사이클에 실제로 판단할 대상과 동일).
-            가격은 최근 스크리닝 시점 값(최대 30분 전)이며 실시간 시세가 아닙니다. "이미 보유" 종목은 재매수하지 않고 건너뜁니다.
+            * <code>coin_screening_daily</code> 스냅샷 기준 진입 후보 목록이며, <b>거래대금(24h) 내림차순</b>으로
+            정렬됩니다(다음 사이클에 실제로 판단할 대상·순서와 동일). 가격·거래대금은 최근 스크리닝 시점 값(최대
+            30분 전)이며 실시간 시세가 아닙니다. "이미 보유" 종목은 재매수하지 않고 건너뜁니다.
             종목명을 클릭하면 업비트 거래 화면으로 이동합니다.
             <br>* <b>매매 승인 체크박스</b>: 하나 이상 체크하면 다음 사이클부터 <b>체크한 종목만</b> 신규 매수 대상이 됩니다
             (이미 보유 중인 종목의 손절/익절 청산에는 영향 없음). 전부 체크 해제하면 다시 전체 후보를 대상으로 합니다.
+            <br>* <b>정밀검사 체크박스</b>: 켜면 위 "정밀 매수조건"에서 켠 조건들을 이 종목에도 추가로 요구합니다(만족해야
+            매수). 체크 직후엔 아직 검사 전이라 "검사 대기"로 표시되고, <code>python main.py condition_check</code>
+            프로세스가 다음 검사 주기에 결과를 채웁니다.
         </div>
     </div>
 
-    <div class="card-panel mt-3">
-        <div class="section-title">📝 최근 매매 판단 로그 (BUY/SELL/HOLD/SKIP 전부 기록)</div>
-        <div class="table-wrap">
-            <table class="trade-table">
-                <thead>
-                    <tr>
-                        <th>시각</th>
-                        <th>종목</th>
-                        <th style="text-align:center">판단</th>
-                        <th>근거</th>
-                        <th>가격</th>
-                        <th>수량</th>
-                        <th>금액</th>
-                        <th>손익</th>
-                    </tr>
-                </thead>
-                <tbody id="ordersBody">
-                    <tr class="loading-row"><td colspan="8">로딩 중...</td></tr>
-                </tbody>
-            </table>
-        </div>
-        <div class="mt-2 text-muted" style="font-size:0.72rem">
-            * 이 페이지는 읽기 전용입니다. 매매 판단/체결은 별도 프로세스(<code>python main.py trade</code>)가 주기적으로 실행하며,
-            여기서는 즉시 매매를 트리거할 수 없습니다. 모든 체결은 실제 주문이 아닌 DB 가상 원장 시뮬레이션입니다.
-            <br>* 상단의 실행/일시중지 스위치는 <code>python main.py trade</code> 프로세스가 떠 있는 상태에서만 의미가 있습니다 —
-            프로세스 자체를 켜고 끄는 스위치가 아니라, 이미 떠 있는 프로세스가 다음 사이클(최대 5분 이내)에
-            판단/체결을 실행할지 건너뛸지를 결정하는 값입니다.
-        </div>
+    <div class="mt-3 mb-4 text-muted" style="font-size:0.72rem">
+        * 이 페이지는 읽기 전용입니다. 매매 판단/체결은 별도 프로세스(<code>python main.py trade</code>)가 주기적으로 실행하며,
+        여기서는 즉시 매매를 트리거할 수 없습니다(강제 매수 제외). 모든 체결은 실제 주문이 아닌 DB 가상 원장 시뮬레이션입니다.
+        <br>* 상단의 실행/일시중지 스위치는 <code>python main.py trade</code> 프로세스가 떠 있는 상태에서만 의미가 있습니다 —
+        프로세스 자체를 켜고 끄는 스위치가 아니라, 이미 떠 있는 프로세스가 다음 사이클(최대 5분 이내)에
+        판단/체결을 실행할지 건너뛸지를 결정하는 값입니다.
+        <br>* 매매 판단/체결 이력(BUY/SELL/HOLD/SKIP 전부)은 <a href="/auto-trade/logs">📜 매매 이력</a> 페이지에서 따로 조회할 수 있습니다.
     </div>
 </div>
 
@@ -242,6 +345,12 @@
         if (v === null || v === undefined) return '<span class="empty-val">—</span>';
         const n = Number(v);
         return isNaN(n) ? '<span class="empty-val">—</span>' : Math.round(n).toLocaleString() + '원';
+    }
+
+    function fmtEok(v) {
+        if (v === null || v === undefined) return '<span class="empty-val">—</span>';
+        const n = Number(v);
+        return isNaN(n) ? '<span class="empty-val">—</span>' : (n / 100000000).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + '억원';
     }
 
     function fmtQty(v) {
@@ -258,10 +367,6 @@
         return `<span class="${cls}">${sign}${Math.round(krw).toLocaleString()}원${pctText}</span>`;
     }
 
-    function decisionBadge(decision) {
-        return `<span class="decision-badge decision-${decision}">${decision}</span>`;
-    }
-
     function heldBadge(held) {
         return held
             ? '<span class="decision-badge decision-HOLD">보유중</span>'
@@ -272,13 +377,90 @@
         return `https://upbit.com/exchange?code=CRIX.UPBIT.${ticker}`;
     }
 
-    function positionStatusBadge(pos) {
-        if (pos.dca_used) return '<span class="status-badge status-dca_done">🟣 물타기 완료</span>';
+    function positionStatusBadge(pos, dcaMaxCount) {
+        const dcaCount = pos.dca_count || 0;
+        if (dcaMaxCount && dcaCount >= dcaMaxCount) return `<span class="status-badge status-dca_done">🟣 물타기 ${dcaCount}/${dcaMaxCount} 완료</span>`;
         if (pos.next_status === 'stop_pending') return '<span class="status-badge status-stop_pending">🟡 손절 대기중</span>';
         if (pos.next_status === 'dca_pending') return '<span class="status-badge status-dca_pending">🔵 물타기 대기중</span>';
         if (pos.next_action === 'SELL') return '<span class="status-badge status-stop_pending">🔴 다음 사이클 매도 예정</span>';
         if (pos.next_action === 'DCA_BUY') return '<span class="status-badge status-dca_pending">🔵 다음 사이클 물타기 예정</span>';
         return '<span class="empty-val">정상</span>';
+    }
+
+    function toggleCollapse(headerEl, bodyId) {
+        const body = document.getElementById(bodyId);
+        const chevron = headerEl.querySelector('.collapse-chevron');
+        if (!body) return;
+        const collapsed = body.style.display === 'none';
+        body.style.display = collapsed ? '' : 'none';
+        if (chevron) chevron.textContent = collapsed ? '▾' : '▸';
+    }
+
+    function renderScreeningThresholds(t) {
+        const el = document.getElementById('screeningThresholdsBody');
+        if (t.breakout_vol_ratio_threshold === undefined) {
+            el.innerHTML = '불러오지 못했습니다.';
+            return;
+        }
+        el.innerHTML = `
+            <div>① <b>돌파(breakout_4h)</b>: 최근 4시간봉 거래량이 직전 ${t.breakout_vol_lookback}개 평균 대비
+                <b>${t.breakout_vol_ratio_threshold}배 이상</b> 급증 AND 그 캔들 상승률이 <b>${t.breakout_rate_threshold}% 이상</b>
+                AND 직전 캔들은 거래량 급증이 아니었음("처음" 돌파만 인정)</div>
+            <div>② <b>200선 근접(near_ma200) AND 구름 위(above_cloud)</b>: 종가가 200이동평균선과
+                <b>±${t.ma200_near_pct}% 이내</b>로 근접 <b>AND</b> 일목균형표 구름대 위</div>
+        `;
+    }
+
+    function candDomId(ticker) {
+        return ticker.replace(/[^A-Za-z0-9_-]/g, '_'); // 'KRW-BTC' 같은 티커를 안전한 DOM id 조각으로
+    }
+
+    function conditionLabel(conditionKey) {
+        const found = latestConditions.find(c => c.condition_key === conditionKey);
+        return found ? found.label : conditionKey;
+    }
+
+    function candidateDetailHtml(c) {
+        const rows = [];
+        // 4시간봉 스크리닝 근거(coin_screening_daily) 원본 지표 — candidate_reason이 뭘 보고 골랐는지 상세
+        rows.push(`<div style="font-weight:700; margin-bottom:4px">📊 스크리닝 근거 (4시간봉)</div>`);
+        rows.push(`<div>돌파(breakout_4h): ${c.breakout_4h ? '✅' : '❌'}`
+            + (c.breakout_4h ? ` (거래량비 ${c.breakout_vol_ratio ?? '—'}배, 캔들 상승률 ${c.breakout_candle_rate ?? '—'}%)` : '') + `</div>`);
+        rows.push(`<div>200선 근접(near_ma200): ${c.near_ma200 ? '✅' : '❌'} (200선과 거리 ${c.ma200_dist_pct ?? '—'}%)</div>`);
+        rows.push(`<div>구름 위(above_cloud): ${c.above_cloud ? '✅' : '❌'}</div>`);
+
+        rows.push(`<div style="font-weight:700; margin:8px 0 4px">🧪 정밀 매수조건</div>`);
+        if (!c.condition_watch) {
+            rows.push(`<div class="empty-val">정밀검사 미설정 (매매 대상 코인 표에서 체크박스를 켜면 적용됩니다)</div>`);
+        } else if (!c.condition_detail || !Object.keys(c.condition_detail).length) {
+            rows.push(`<div class="empty-val">⏳ 검사 대기 중 (python main.py condition_check 프로세스의 다음 검사 주기를 기다리는 중)</div>`);
+        } else {
+            for (const [key, detail] of Object.entries(c.condition_detail)) {
+                rows.push(`<div>${detail.passed ? '✅' : '❌'} <b>${conditionLabel(key)}</b> — ${detail.message || ''}</div>`);
+            }
+            rows.push(`<div class="text-muted" style="font-size:0.68rem; margin-top:4px">검사 시각: ${c.condition_checked_at || '—'}</div>`);
+        }
+        return `<div style="font-size:0.76rem; padding:8px 4px; line-height:1.6">${rows.join('')}</div>`;
+    }
+
+    function toggleCandidateDetail(ticker) {
+        const domId = candDomId(ticker);
+        const row = document.getElementById(`detail-${domId}`);
+        const icon = document.getElementById(`toggle-icon-${domId}`);
+        if (!row) return;
+        const show = row.style.display === 'none';
+        row.style.display = show ? 'table-row' : 'none';
+        if (icon) icon.textContent = show ? '▾' : '▸';
+    }
+
+    function conditionStatusBadge(c) {
+        if (!c.condition_watch) return '<span class="empty-val">—</span>';
+        if (c.condition_passed === null || c.condition_passed === undefined) {
+            return '<span class="status-badge status-dca_pending">⏳ 검사 대기</span>';
+        }
+        return c.condition_passed
+            ? '<span class="status-badge status-dca_done">✅ 조건 충족</span>'
+            : '<span class="status-badge status-stop_pending">❌ 미충족</span>';
     }
 
     function coinLink(ticker, label) {
@@ -287,7 +469,6 @@
 
     async function load() {
         const posBody = document.getElementById('positionsBody');
-        const ordBody = document.getElementById('ordersBody');
         const candBody = document.getElementById('candidatesBody');
         try {
             const res = await fetch('api/auto-trade/summary');
@@ -296,7 +477,6 @@
 
             const account = json.account || {};
             const positions = json.positions || [];
-            const orders = json.orders || [];
             const candidates = json.candidates || [];
 
             const evalTotal = positions.reduce((sum, p) => sum + (p.eval_amount || 0), 0);
@@ -318,9 +498,15 @@
             engineStatusText.className = 'engine-status-text ' + (json.engine_enabled ? 'engine-status-on' : 'engine-status-off');
 
             populateSettingsInputs(json.settings || {});
+            renderConditions(json.conditions || []);
+            renderScreeningThresholds(json.screening_thresholds || {});
 
             if (positions.length) {
-                posBody.innerHTML = positions.map(p => `
+                const dcaMaxCount = (json.settings && json.settings.dca_max_count) || 1;
+                posBody.innerHTML = positions.map(p => {
+                    const dcaCount = p.dca_count || 0;
+                    const dcaExhausted = dcaCount >= dcaMaxCount;
+                    return `
                     <tr>
                         <td>${coinLink(p.ticker, p.ticker)}</td>
                         <td>${fmtQty(p.qty)}</td>
@@ -329,15 +515,16 @@
                         <td>${fmtKrw(p.peak_price)}</td>
                         <td>${fmtKrw(p.eval_amount)}</td>
                         <td>${pnlSpan(p.pnl_krw, p.pnl_pct)}</td>
-                        <td style="text-align:center">${positionStatusBadge(p)}</td>
+                        <td style="text-align:center">${positionStatusBadge(p, dcaMaxCount)}</td>
                         <td style="text-align:center">
-                            <input type="checkbox" ${p.dca_enabled ? 'checked' : ''} ${p.dca_used ? 'disabled' : ''}
-                                   title="${p.dca_used ? '이미 1회 물타기를 완료해 더 켤 수 없습니다' : '체크하면 손절 직전 물타기 트리거까지 대기 후 1회 추가매수'}"
+                            <input type="checkbox" ${p.dca_enabled ? 'checked' : ''} ${dcaExhausted ? 'disabled' : ''}
+                                   title="${dcaExhausted ? `이미 최대 ${dcaMaxCount}회 물타기를 완료해 더 켤 수 없습니다` : `체크하면 손절 직전 물타기 트리거까지 대기 후 추가매수 (현재 ${dcaCount}/${dcaMaxCount}회)`}"
                                    onchange="toggleDca('${p.ticker}', this)">
                         </td>
                         <td>${p.entry_at || '—'}</td>
                     </tr>
-                `).join('');
+                `;
+                }).join('');
             } else {
                 posBody.innerHTML = '<tr class="loading-row"><td colspan="10">보유 중인 포지션이 없습니다.</td></tr>';
             }
@@ -350,10 +537,15 @@
                 candBody.innerHTML = candidates.map(c => {
                     const changeCls = c.change_rate > 0 ? 'pnl-pos' : (c.change_rate < 0 ? 'pnl-neg' : '');
                     const changeSign = c.change_rate > 0 ? '+' : '';
+                    const domId = candDomId(c.ticker);
                     return `
                         <tr>
                             <td style="text-align:center">
                                 <input type="checkbox" ${c.approved ? 'checked' : ''} onchange="toggleCandidateApproval('${c.ticker}', this)">
+                            </td>
+                            <td style="text-align:center">
+                                <input type="checkbox" ${c.condition_watch ? 'checked' : ''} onchange="toggleCandidateConditionWatch('${c.ticker}', this)"
+                                       title="켜면 위 '정밀 매수조건'에서 설정한 조건들을 이 종목에도 추가로 요구합니다">
                             </td>
                             <td>
                                 <div style="font-weight:600">${coinLink(c.ticker, c.name || c.ticker)}</div>
@@ -361,41 +553,31 @@
                             </td>
                             <td>${fmtKrw(c.price)}</td>
                             <td class="${changeCls}">${changeSign}${c.change_rate}%</td>
-                            <td>${c.candidate_reason}</td>
+                            <td>${fmtEok(c.trade_value)}</td>
+                            <td>
+                                <span class="detail-toggle" onclick="toggleCandidateDetail('${c.ticker}')">
+                                    ${c.candidate_reason} ${conditionStatusBadge(c)} <span id="toggle-icon-${domId}">▸</span>
+                                </span>
+                            </td>
                             <td style="text-align:center">${heldBadge(c.already_held)}</td>
                             <td>${c.updated_at || '—'}</td>
                         </tr>
-                    `;
+                        <tr class="cand-detail-row" id="detail-${domId}" style="display:none">
+                            <td colspan="9">${candidateDetailHtml(c)}</td>
+                        </tr>`;
                 }).join('');
             } else {
                 document.getElementById('candidatesUpdatedAt').textContent = '';
-                candBody.innerHTML = '<tr class="loading-row"><td colspan="7">현재 조건을 만족하는 진입 후보가 없습니다. (coin_screening_daily가 비어있다면 `python main.py coin_analysis`를 먼저 실행하세요)</td></tr>';
+                candBody.innerHTML = '<tr class="loading-row"><td colspan="9">현재 조건을 만족하는 진입 후보가 없습니다. (coin_screening_daily가 비어있다면 `python main.py coin_analysis`를 먼저 실행하세요)</td></tr>';
             }
 
-            if (orders.length) {
-                ordBody.innerHTML = orders.map(o => `
-                    <tr>
-                        <td>${o.created_at || '—'}</td>
-                        <td>${coinLink(o.ticker, o.ticker)}</td>
-                        <td style="text-align:center">${decisionBadge(o.decision)}</td>
-                        <td>${o.reason || '—'}</td>
-                        <td>${fmtKrw(o.price)}</td>
-                        <td>${fmtQty(o.qty)}</td>
-                        <td>${fmtKrw(o.amount_krw)}</td>
-                        <td>${pnlSpan(o.pnl_krw, o.pnl_pct)}</td>
-                    </tr>
-                `).join('');
-            } else {
-                ordBody.innerHTML = '<tr class="loading-row"><td colspan="8">아직 기록된 매매 판단이 없습니다. `python main.py trade`가 실행 중인지 확인하세요.</td></tr>';
-            }
         } catch (e) {
             posBody.innerHTML = `<tr class="loading-row"><td colspan="10" class="text-danger">오류: ${e.message}</td></tr>`;
-            candBody.innerHTML = `<tr class="loading-row"><td colspan="7" class="text-danger">오류: ${e.message}</td></tr>`;
-            ordBody.innerHTML = `<tr class="loading-row"><td colspan="8" class="text-danger">오류: ${e.message}</td></tr>`;
+            candBody.innerHTML = `<tr class="loading-row"><td colspan="9" class="text-danger">오류: ${e.message}</td></tr>`;
         }
     }
 
-    const SETTINGS_INPUT_IDS = ['setMaxPosition', 'setMaxPositions', 'setStopLoss', 'setTakeProfit', 'setLoopInterval', 'setStopConfirm', 'setDcaTrigger'];
+    const SETTINGS_INPUT_IDS = ['setMaxPosition', 'setMaxPositions', 'setStopLoss', 'setTakeProfit', 'setLoopInterval', 'setStopConfirm', 'setDcaTrigger', 'setDcaMaxCount', 'setConditionCheckInterval'];
 
     function populateSettingsInputs(settings) {
         // 사용자가 입력창 하나를 타이핑 중인 동안엔 이번 새로고침으로 값을 덮어쓰지 않음
@@ -407,6 +589,8 @@
         document.getElementById('setLoopInterval').value = settings.loop_interval_sec ?? '';
         document.getElementById('setStopConfirm').value = settings.stop_loss_confirm_cycles ?? '';
         document.getElementById('setDcaTrigger').value = settings.dca_trigger_pct ?? '';
+        document.getElementById('setDcaMaxCount').value = settings.dca_max_count ?? '';
+        document.getElementById('setConditionCheckInterval').value = settings.condition_check_interval_sec ?? '';
     }
 
     async function saveStrategySettings() {
@@ -418,6 +602,8 @@
             loop_interval_sec: Number(document.getElementById('setLoopInterval').value),
             stop_loss_confirm_cycles: Number(document.getElementById('setStopConfirm').value),
             dca_trigger_pct: Number(document.getElementById('setDcaTrigger').value),
+            dca_max_count: Number(document.getElementById('setDcaMaxCount').value),
+            condition_check_interval_sec: Number(document.getElementById('setConditionCheckInterval').value),
         };
         const msg = document.getElementById('settingsSavedMsg');
         msg.textContent = '저장 중...';
@@ -435,6 +621,142 @@
         } catch (e) {
             msg.textContent = '저장 실패: ' + e.message;
             msg.className = 'text-danger';
+        }
+    }
+
+    // 조건별 파라미터 입력 필드 정의 — key는 entry_conditions.py의 CONDITION_SPECS/params와 일치해야 함
+    const CONDITION_PARAM_FIELDS = {
+        daily_above_ma: [{ key: 'ma_period', label: 'N일', step: 1, width: 70 }],
+        m5_ma_support: [
+            { key: 'ma_period', label: 'N선', step: 1, width: 70 },
+            { key: 'touch_tolerance_pct', label: '근접허용%', step: 0.1, width: 80 },
+        ],
+        m1_bb_breakout_volume: [
+            { key: 'bb_period', label: '밴드기간', step: 1, width: 70 },
+            { key: 'bb_mult', label: '표준편차배수', step: 0.1, width: 80 },
+            { key: 'vol_lookback', label: '거래량평균기간', step: 1, width: 70 },
+            { key: 'vol_ratio_threshold', label: '거래량배수', step: 0.1, width: 80 },
+        ],
+    };
+
+    let latestConditions = [];
+
+    function renderConditions(conditions) {
+        // 사용자가 파라미터 입력창을 타이핑 중이면 이번 새로고침으로 덮어쓰지 않음
+        if (document.activeElement && document.activeElement.closest('#conditionsBody')) return;
+        latestConditions = conditions;
+        const body = document.getElementById('conditionsBody');
+        if (!conditions.length) {
+            body.innerHTML = '<tr class="loading-row"><td colspan="4">조건 설정을 불러오지 못했습니다.</td></tr>';
+            return;
+        }
+        body.innerHTML = conditions.map(c => {
+            const fields = CONDITION_PARAM_FIELDS[c.condition_key] || [];
+            const paramInputs = fields.map(f => `
+                <span style="margin-right:10px; white-space:nowrap">
+                    <label style="font-size:0.7rem; color:#94a3b8">${f.label}</label>
+                    <input type="number" class="form-control form-control-sm d-inline-block"
+                           style="width:${f.width}px" step="${f.step}"
+                           data-condition="${c.condition_key}" data-param="${f.key}"
+                           value="${c.params?.[f.key] ?? ''}">
+                </span>
+            `).join('');
+            return `
+                <tr>
+                    <td style="text-align:center">
+                        <input type="checkbox" ${c.enabled ? 'checked' : ''} data-condition="${c.condition_key}" data-role="enabled">
+                    </td>
+                    <td>${c.label || c.condition_key}</td>
+                    <td style="text-align:center">
+                        <select class="form-select form-select-sm" style="width:110px; display:inline-block"
+                                data-condition="${c.condition_key}" data-role="logic_group">
+                            <option value="AND" ${c.logic_group === 'AND' ? 'selected' : ''}>필수(AND)</option>
+                            <option value="OR" ${c.logic_group === 'OR' ? 'selected' : ''}>택일(OR)</option>
+                        </select>
+                    </td>
+                    <td>${paramInputs}</td>
+                </tr>
+            `;
+        }).join('');
+    }
+
+    async function saveConditionSettings() {
+        const msg = document.getElementById('conditionsSavedMsg');
+        msg.textContent = '저장 중...';
+        msg.className = 'text-muted';
+        try {
+            const conditions = latestConditions.map(c => {
+                const enabledEl = document.querySelector(`#conditionsBody input[data-role="enabled"][data-condition="${c.condition_key}"]`);
+                const logicEl = document.querySelector(`#conditionsBody select[data-role="logic_group"][data-condition="${c.condition_key}"]`);
+                const paramEls = document.querySelectorAll(`#conditionsBody input[data-param][data-condition="${c.condition_key}"]`);
+                const params = {};
+                paramEls.forEach(el => { if (el.value !== '') params[el.dataset.param] = Number(el.value); });
+                return {
+                    condition_key: c.condition_key,
+                    enabled: enabledEl ? enabledEl.checked : c.enabled,
+                    logic_group: logicEl ? logicEl.value : c.logic_group,
+                    params,
+                };
+            });
+            const res = await fetch('api/auto-trade/conditions/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ conditions }),
+            });
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+            msg.textContent = '저장됨';
+            msg.className = 'engine-status-text engine-status-on';
+            await load();
+        } catch (e) {
+            msg.textContent = '저장 실패: ' + e.message;
+            msg.className = 'text-danger';
+        }
+    }
+
+    async function toggleCandidateConditionWatch(ticker, checkbox) {
+        const nextEnabled = checkbox.checked;
+        checkbox.disabled = true;
+        try {
+            const res = await fetch('api/auto-trade/candidates/condition-watch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ticker, enabled: nextEnabled }),
+            });
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+            await load();
+        } catch (e) {
+            alert('정밀검사 설정 저장 실패: ' + e.message);
+            checkbox.checked = !nextEnabled;
+        } finally {
+            checkbox.disabled = false;
+        }
+    }
+
+    async function forceBuy() {
+        const input = document.getElementById('forceBuyTicker');
+        const btn = document.getElementById('forceBuyBtn');
+        const ticker = input.value.trim().toUpperCase();
+        if (!ticker) { alert('티커를 입력하세요 (예: KRW-BTC)'); return; }
+        if (!confirm(`${ticker}를 조건 검사 없이 지금 즉시 매수(모의)할까요?`)) return;
+        btn.disabled = true;
+        const msg = document.getElementById('runNowMsg');
+        try {
+            const res = await fetch('api/auto-trade/force-buy', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ticker }),
+            });
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+            msg.textContent = `⚡ 강제 매수 완료 — ${ticker} ${json.qty?.toFixed(6)}개 @ ${Math.round(json.price).toLocaleString()}원`;
+            input.value = '';
+            await load();
+        } catch (e) {
+            msg.textContent = `❌ 강제 매수 실패: ${e.message}`;
+        } finally {
+            btn.disabled = false;
         }
     }
 
@@ -497,6 +819,26 @@
             engineToggle.checked = !nextEnabled; // 실패 시 원상복구
         } finally {
             engineToggle.disabled = false;
+        }
+    }
+
+    async function runNow() {
+        const btn = document.getElementById('runNowBtn');
+        const msg = document.getElementById('runNowMsg');
+        btn.disabled = true;
+        btn.textContent = '⏳ 실행 중...';
+        msg.textContent = '';
+        try {
+            const res = await fetch('api/auto-trade/run-now', { method: 'POST' });
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+            msg.textContent = `✅ 즉시 실행 완료 — 청산 판단 ${json.exit_decisions}건, 진입 판단 ${json.entry_decisions}건 (${new Date().toLocaleTimeString()})`;
+            await load(); // 계좌/포지션/로그를 방금 실행 결과로 새로고침
+        } catch (e) {
+            msg.textContent = `❌ 즉시 실행 실패: ${e.message}`;
+        } finally {
+            btn.disabled = false;
+            btn.textContent = '▶ 지금 즉시 실행';
         }
     }
 

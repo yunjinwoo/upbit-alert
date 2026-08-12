@@ -6,6 +6,7 @@ from app.core.upbit_monitor import run_upbit_monitor
 from app.core.stock_monitor import run_stock_monitor
 from app.core.upbit_market_analysis import run_coin_screening_loop
 from app.core.auto_trader import run_auto_trade_loop
+from app.core.entry_condition_checker import run_condition_check_loop
 from app.utils.logger import get_logger
 
 logger = get_logger()
@@ -33,10 +34,13 @@ if __name__ == "__main__":
     multiprocessing.freeze_support()
     
     parser = argparse.ArgumentParser(description="Upbit & Stock Alert System")
-    parser.add_argument("mode", nargs="?", choices=["all", "api", "upbit", "stock", "coin_analysis", "trade"], default="all",
-                        help="Mode to run: all (default), api, upbit, stock, coin_analysis, or trade")
-    # trade(자동매매 1단계: 업비트 모의매매)는 의도적으로 all/start_all()에 포함하지 않음 —
-    # 알림/모니터링 프로세스와 장애를 격리하기 위해 `python main.py trade`로 독립 실행할 것.
+    parser.add_argument("mode", nargs="?",
+                        choices=["all", "api", "upbit", "stock", "coin_analysis", "trade", "condition_check"],
+                        default="all",
+                        help="Mode to run: all (default), api, upbit, stock, coin_analysis, trade, or condition_check")
+    # trade(자동매매 1단계: 업비트 모의매매)/condition_check(정밀 매수조건 검사)는 의도적으로
+    # all/start_all()에 포함하지 않음 — 알림/모니터링 프로세스와 장애를 격리하기 위해
+    # `python main.py trade` / `python main.py condition_check`로 각각 독립 실행할 것.
 
     args = parser.parse_args()
 
@@ -52,3 +56,5 @@ if __name__ == "__main__":
         run_coin_screening_loop()
     elif args.mode == "trade":
         run_auto_trade_loop()
+    elif args.mode == "condition_check":
+        run_condition_check_loop()

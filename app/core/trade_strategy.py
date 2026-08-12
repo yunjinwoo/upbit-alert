@@ -8,12 +8,12 @@
     2) 트레일링 손절: 진입가가 아니라 "보유 중 최고가(peak_price)" 대비 하락률이 stop_loss_pct
        이상이면 손절 조건 성립. 이 조건이 stop_loss_confirm_cycles회 연속으로 유지돼야 실제로
        매도한다(1캔들 노이즈로 바로 잘리는 걸 완화) — 그 전까지는 HOLD로 "대기 중" 상태만 기록.
-    3) 연속 확인까지 끝났는데 그 포지션에 물타기(dca_enabled)가 켜져 있고 아직 한 번도 물을
-       안 탔으면(dca_used=False), 곧바로 손절하지 않고 평단 대비 -dca_trigger_pct(기본 -10%)까지
-       한 번 더 기다린다. 거기 도달하면 매도 대신 "매매기준(포지션당 매수금액)"으로 추가매수
+    3) 연속 확인까지 끝났는데 그 포지션에 물타기(dca_enabled)가 켜져 있고 아직 남은 물타기 횟수가
+       있으면(dca_count < dca_max_count), 곧바로 손절하지 않고 평단 대비 -dca_trigger_pct(기본 -10%)
+       까지 한 번 더 기다린다. 거기 도달하면 매도 대신 "매매기준(포지션당 매수금액)"으로 추가매수
        (DCA_BUY)해서 평단을 낮추고, 트레일링 기준점(peak_price)과 연속 카운트를 리셋해 그 새
        평단 기준으로 손절/익절 판단을 다시 시작한다.
-       (물타기는 포지션당 1회만 — dca_used가 이미 True면 일반 손절과 동일하게 동작하는
+       (물타기는 포지션당 dca_max_count회까지만 — 그 횟수에 도달하면 일반 손절과 동일하게 동작하는
        안전장치. 무제한으로 계속 물타면 하락장에서 손실이 무한정 커질 수 있기 때문)
 """
 from dataclasses import dataclass
@@ -49,7 +49,8 @@ def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional
         avg_price = pos['avg_buy_price']
         streak = pos.get('below_stop_streak') or 0
         dca_enabled = bool(pos.get('dca_enabled'))
-        dca_used = bool(pos.get('dca_used'))
+        dca_count = pos.get('dca_count') or 0
+        dca_max_count = getattr(cfg, 'TRADE_DCA_MAX_COUNT', 1)
 
         price = get_price_fn(ticker)
         if not price:
@@ -88,18 +89,19 @@ def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional
             ))
             continue
 
-        # ④ 연속 확인까지 끝남 — 물타기 대상이면 -dca_trigger_pct까지 한 번 더 대기, 아니면 손절
-        if dca_enabled and not dca_used:
+        # ④ 연속 확인까지 끝남 — 물타기 대상이면(아직 dca_max_count에 안 닿았으면) -dca_trigger_pct까지
+        # 한 번 더 대기, 아니면 손절
+        if dca_enabled and dca_count < dca_max_count:
             if pnl_pct <= -cfg.TRADE_DCA_TRIGGER_PCT:
                 decisions.append(TradeDecision(
-                    ticker, 'DCA_BUY', reason=f'dca_buy(평단대비 {pnl_pct:.2f}%)',
+                    ticker, 'DCA_BUY', reason=f'dca_buy({dca_count + 1}/{dca_max_count}회, 평단대비 {pnl_pct:.2f}%)',
                     price=price, amount_krw=cfg.TRADE_MAX_POSITION_KRW,
                     pnl_krw=pnl_krw, pnl_pct=pnl_pct, peak_price=peak, streak=new_streak,
                 ))
             else:
                 decisions.append(TradeDecision(
                     ticker, 'HOLD',
-                    reason=f'dca_pending(평단대비 {pnl_pct:.2f}%, 목표 -{cfg.TRADE_DCA_TRIGGER_PCT:.2f}%)',
+                    reason=f'dca_pending({dca_count + 1}/{dca_max_count}회, 평단대비 {pnl_pct:.2f}%, 목표 -{cfg.TRADE_DCA_TRIGGER_PCT:.2f}%)',
                     price=price, qty=qty, pnl_krw=pnl_krw, pnl_pct=pnl_pct,
                     peak_price=peak, streak=new_streak, status='dca_pending',
                 ))
@@ -112,13 +114,22 @@ def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional
 
 
 def evaluate_entries(candidates: List[dict], positions: List[dict], cash_balance: float,
-                      get_price_fn: Callable[[str], Optional[float]], cfg) -> List[TradeDecision]:
+                      get_price_fn: Callable[[str], Optional[float]], cfg,
+                      condition_watch_tickers: set = None, condition_status_map: dict = None) -> List[TradeDecision]:
     """진입 후보(coin_screening_daily 필터 결과) 중 신규 매수 대상을 판단한다.
     한 사이클 안에서 여러 종목을 연속 매수할 수 있으므로, 판단 도중 보유 종목 수/가상 현금을
-    누적 반영해가며 계산한다(실제 체결은 auto_trader.py가 순차 실행)."""
+    누적 반영해가며 계산한다(실제 체결은 auto_trader.py가 순차 실행).
+
+    condition_watch_tickers: 대시보드에서 "정밀검사" 체크된 티커 집합(entry_conditions.py 참고).
+    이 집합에 없는 후보는 기존과 동일하게(추가 제약 없이) 판단한다 — 정밀조건은 opt-in.
+    condition_status_map: entry_condition_checker.py가 캐시해둔 {ticker: {passed, detail, checked_at}}.
+    watch 대상인데 아직 검사 결과가 없거나(검사 루프가 안 떠 있음) 통과 못 했으면 SKIP — DB 접근은
+    호출부(auto_trader.py)에서 이미 끝났고, 여기선 값만 읽는 순수 함수로 유지."""
     decisions = []
     held_tickers = {p['ticker'] for p in positions}
     open_count = len(positions)
+    condition_watch_tickers = condition_watch_tickers or set()
+    condition_status_map = condition_status_map or {}
 
     for cand in candidates:
         ticker = cand['ticker']
@@ -133,12 +144,22 @@ def evaluate_entries(candidates: List[dict], positions: List[dict], cash_balance
             decisions.append(TradeDecision(ticker, 'SKIP', reason='가상 현금 부족'))
             continue
 
+        if ticker in condition_watch_tickers:
+            status = condition_status_map.get(ticker)
+            if not status:
+                decisions.append(TradeDecision(ticker, 'SKIP', reason='정밀조건 검사 결과 없음(검사 루프 확인 필요)'))
+                continue
+            if not status.get('passed'):
+                decisions.append(TradeDecision(ticker, 'SKIP', reason='정밀조건 미충족'))
+                continue
+
         price = get_price_fn(ticker)
         if not price:
             decisions.append(TradeDecision(ticker, 'SKIP', reason='시세 조회 실패'))
             continue
 
-        reason = 'breakout_4h' if cand.get('breakout_4h') else 'near_ma200+above_cloud'
+        base_reason = 'breakout_4h' if cand.get('breakout_4h') else 'near_ma200+above_cloud'
+        reason = f'{base_reason}+정밀조건충족' if ticker in condition_watch_tickers else base_reason
         decisions.append(TradeDecision(
             ticker, 'BUY', reason=reason, price=price, amount_krw=cfg.TRADE_MAX_POSITION_KRW,
         ))
