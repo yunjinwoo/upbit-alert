@@ -440,6 +440,95 @@ def init_db():
         )
     ''')
 
+    # 자동매매(1단계: 업비트 모의매매 전용) — 가상 계좌 1행(broker+mode 조합당)
+    # broker/mode 컬럼을 처음부터 둬서, 향후 KIS/토스 및 실거래(live) 데이터도 같은 구조로 얹을 수 있게 함
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS paper_account (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            broker TEXT NOT NULL DEFAULT 'upbit',
+            mode TEXT NOT NULL DEFAULT 'paper',
+            cash_balance REAL NOT NULL,
+            initial_balance REAL NOT NULL,
+            updated_at TEXT,
+            UNIQUE(broker, mode)
+        )
+    ''')
+
+    # 자동매매 가상 보유 포지션 — 종목당 1행(완전 청산 시 행 삭제, 분할매수/부분청산은 1단계 범위 밖)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS paper_positions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            broker TEXT NOT NULL DEFAULT 'upbit',
+            mode TEXT NOT NULL DEFAULT 'paper',
+            ticker TEXT NOT NULL,
+            qty REAL NOT NULL,
+            avg_buy_price REAL NOT NULL,
+            entry_at TEXT,
+            updated_at TEXT,
+            UNIQUE(broker, mode, ticker)
+        )
+    ''')
+
+    # 자동매매 판단/체결 감사로그 — BUY/SELL/HOLD/SKIP 전부 기록(실주문 없음, 가상 체결만)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS trade_order_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            broker TEXT NOT NULL DEFAULT 'upbit',
+            mode TEXT NOT NULL DEFAULT 'paper',
+            ticker TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            reason TEXT,
+            price REAL,
+            qty REAL,
+            amount_krw REAL,
+            cash_balance_after REAL,
+            pnl_krw REAL,
+            pnl_pct REAL,
+            created_at TEXT
+        )
+    ''')
+
+    # 자동매매 엔진 실행 여부 토글 — 싱글톤 1행(id=1). python main.py trade 프로세스는 재시작 없이
+    # 매 사이클(TRADE_LOOP_INTERVAL_SEC)마다 이 값을 확인해 실행/일시중지를 반영한다.
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS trade_engine_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            enabled INTEGER NOT NULL DEFAULT 1,
+            updated_at TEXT
+        )
+    ''')
+
+    # 매매 전략 파라미터(포지션당 매수금액/최대 동시보유/손절·익절 기준/루프 주기) — 싱글톤 1행(id=1).
+    # app/config.py의 TRADE_* 상수는 이 테이블에 행이 없을 때만 쓰이는 기본값이고, 대시보드에서
+    # 저장하면 이 테이블 값이 우선한다. python main.py trade 프로세스는 재시작 없이 매 사이클마다
+    # 이 값을 다시 읽는다(app/core/auto_trader.py 참고).
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS trade_strategy_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            max_position_krw REAL NOT NULL,
+            max_concurrent_positions INTEGER NOT NULL,
+            stop_loss_pct REAL NOT NULL,
+            take_profit_pct REAL NOT NULL,
+            loop_interval_sec INTEGER NOT NULL,
+            updated_at TEXT
+        )
+    ''')
+
+    # 매매 대상 코인 수동 승인(체크박스) — 사용자가 후보 중 일부만 체크하면 그 종목만 진입 대상으로
+    # 좁힌다(대시보드/auto_trader.py 참고). 체크된 행이 하나도 없으면 기존처럼 전체 후보를 대상으로 함.
+    # 체크 안 한 종목은 행 자체가 없어도 되므로(기본 미승인), 실제로 한 번이라도 토글된 종목만 저장된다.
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS trade_candidate_approval (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            broker TEXT NOT NULL DEFAULT 'upbit',
+            mode TEXT NOT NULL DEFAULT 'paper',
+            ticker TEXT NOT NULL,
+            approved INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT,
+            UNIQUE(broker, mode, ticker)
+        )
+    ''')
+
     # 기존 테이블 컬럼 마이그레이션
     migrations = [
         'ALTER TABLE stock_market_cap_daily ADD COLUMN market_weight TEXT DEFAULT "0"',
@@ -3382,6 +3471,258 @@ def get_coin_screening() -> list:
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM coin_screening_daily ORDER BY trade_value DESC')
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_coin_screening_candidates() -> list:
+    """자동매매 진입 후보만 필터링 조회 (4시간봉 돌파, 또는 200선 근접이면서 구름 위)"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT * FROM coin_screening_daily
+        WHERE breakout_4h = 1 OR (near_ma200 = 1 AND above_cloud = 1)
+        ORDER BY trade_value DESC
+    ''')
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# ──────────────────────────────────────────────
+# 자동매매(1단계: 업비트 모의매매) — 가상 계좌/포지션/주문 로그
+# ──────────────────────────────────────────────
+
+def get_or_create_paper_account(broker: str, mode: str, initial_cash: float) -> dict:
+    """가상 계좌 조회 (없으면 initial_cash로 최초 생성)."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM paper_account WHERE broker = ? AND mode = ?', (broker, mode))
+    row = cursor.fetchone()
+    if row is None:
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        cursor.execute('''
+            INSERT INTO paper_account (broker, mode, cash_balance, initial_balance, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (broker, mode, initial_cash, initial_cash, timestamp))
+        conn.commit()
+        cursor.execute('SELECT * FROM paper_account WHERE broker = ? AND mode = ?', (broker, mode))
+        row = cursor.fetchone()
+    conn.close()
+    return dict(row)
+
+
+def update_paper_account_cash(broker: str, mode: str, new_cash: float):
+    """가상 계좌 현금 잔고 갱신."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('''
+        UPDATE paper_account SET cash_balance = ?, updated_at = ?
+        WHERE broker = ? AND mode = ?
+    ''', (new_cash, timestamp, broker, mode))
+    conn.commit()
+    conn.close()
+
+
+def get_paper_positions(broker: str, mode: str) -> list:
+    """가상 보유 포지션 전체 조회."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM paper_positions WHERE broker = ? AND mode = ? ORDER BY ticker', (broker, mode))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_paper_position(broker: str, mode: str, ticker: str):
+    """가상 보유 포지션 1건 조회 (없으면 None)."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM paper_positions WHERE broker = ? AND mode = ? AND ticker = ?', (broker, mode, ticker))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def upsert_paper_position(broker: str, mode: str, ticker: str, qty: float, avg_buy_price: float, entry_at: str = None):
+    """가상 포지션 upsert. 신규 진입이면 entry_at을 기록하고, 기존 보유분에 얹는 경우(추가매수)는
+    호출부(PaperBroker)에서 이미 합산한 qty/avg_buy_price를 넘겨받아 그대로 덮어쓴다."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    entry_at = entry_at or timestamp
+    cursor.execute('''
+        INSERT INTO paper_positions (broker, mode, ticker, qty, avg_buy_price, entry_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(broker, mode, ticker) DO UPDATE SET
+            qty=excluded.qty, avg_buy_price=excluded.avg_buy_price, updated_at=excluded.updated_at
+    ''', (broker, mode, ticker, qty, avg_buy_price, entry_at, timestamp))
+    conn.commit()
+    conn.close()
+
+
+def delete_paper_position(broker: str, mode: str, ticker: str):
+    """가상 포지션 완전 청산 시 행 삭제."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM paper_positions WHERE broker = ? AND mode = ? AND ticker = ?', (broker, mode, ticker))
+    conn.commit()
+    conn.close()
+
+
+def save_trade_order_log(broker: str, mode: str, ticker: str, decision: str, reason: str = None,
+                          price: float = None, qty: float = None, amount_krw: float = None,
+                          cash_balance_after: float = None, pnl_krw: float = None, pnl_pct: float = None):
+    """매매 판단(BUY/SELL/HOLD/SKIP) + 가상 체결 결과를 감사로그로 기록 (실주문 없음, 전부 시뮬레이션)."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('''
+        INSERT INTO trade_order_log
+            (broker, mode, ticker, decision, reason, price, qty, amount_krw,
+             cash_balance_after, pnl_krw, pnl_pct, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (broker, mode, ticker, decision, reason, price, qty, amount_krw,
+          cash_balance_after, pnl_krw, pnl_pct, timestamp))
+    conn.commit()
+    conn.close()
+
+
+def get_trade_engine_settings() -> dict:
+    """자동매매 엔진 실행 여부 조회. 행이 없으면(최초 실행) 기본값 실행중(enabled=True)으로 취급."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM trade_engine_settings WHERE id = 1')
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return {'enabled': True}
+    return {'enabled': bool(row['enabled'])}
+
+
+def set_trade_engine_enabled(enabled: bool) -> None:
+    """자동매매 엔진 실행 여부 저장(upsert, 싱글톤 1행)."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('''
+        INSERT INTO trade_engine_settings (id, enabled, updated_at)
+        VALUES (1, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at
+    ''', (1 if enabled else 0, timestamp))
+    conn.commit()
+    conn.close()
+
+
+def get_trade_strategy_settings() -> dict:
+    """매매 전략 파라미터(포지션당 매수금액/최대 동시보유/손절·익절 기준/루프 주기) 조회.
+    행이 없으면(최초 실행, 대시보드에서 아직 저장한 적 없음) app/config.py의 TRADE_* 기본값을 그대로 반환."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM trade_strategy_settings WHERE id = 1')
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return {
+            'max_position_krw': Config.TRADE_MAX_POSITION_KRW,
+            'max_concurrent_positions': Config.TRADE_MAX_CONCURRENT_POSITIONS,
+            'stop_loss_pct': Config.TRADE_STOP_LOSS_PCT,
+            'take_profit_pct': Config.TRADE_TAKE_PROFIT_PCT,
+            'loop_interval_sec': Config.TRADE_LOOP_INTERVAL_SEC,
+            'updated_at': None,
+        }
+    return {
+        'max_position_krw': row['max_position_krw'],
+        'max_concurrent_positions': row['max_concurrent_positions'],
+        'stop_loss_pct': row['stop_loss_pct'],
+        'take_profit_pct': row['take_profit_pct'],
+        'loop_interval_sec': row['loop_interval_sec'],
+        'updated_at': row['updated_at'],
+    }
+
+
+def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_positions: int = None,
+                                 stop_loss_pct: float = None, take_profit_pct: float = None,
+                                 loop_interval_sec: int = None) -> dict:
+    """매매 전략 파라미터 저장(upsert, 부분 갱신 — None인 필드는 기존값 유지). 저장된 값을 반환."""
+    current = get_trade_strategy_settings()
+    merged = {
+        'max_position_krw': max_position_krw if max_position_krw is not None else current['max_position_krw'],
+        'max_concurrent_positions': max_concurrent_positions if max_concurrent_positions is not None else current['max_concurrent_positions'],
+        'stop_loss_pct': stop_loss_pct if stop_loss_pct is not None else current['stop_loss_pct'],
+        'take_profit_pct': take_profit_pct if take_profit_pct is not None else current['take_profit_pct'],
+        'loop_interval_sec': loop_interval_sec if loop_interval_sec is not None else current['loop_interval_sec'],
+    }
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('''
+        INSERT INTO trade_strategy_settings
+            (id, max_position_krw, max_concurrent_positions, stop_loss_pct, take_profit_pct, loop_interval_sec, updated_at)
+        VALUES (1, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            max_position_krw=excluded.max_position_krw,
+            max_concurrent_positions=excluded.max_concurrent_positions,
+            stop_loss_pct=excluded.stop_loss_pct,
+            take_profit_pct=excluded.take_profit_pct,
+            loop_interval_sec=excluded.loop_interval_sec,
+            updated_at=excluded.updated_at
+    ''', (merged['max_position_krw'], merged['max_concurrent_positions'], merged['stop_loss_pct'],
+          merged['take_profit_pct'], merged['loop_interval_sec'], timestamp))
+    conn.commit()
+    conn.close()
+    merged['updated_at'] = timestamp
+    return merged
+
+
+def get_approved_candidate_tickers(broker: str, mode: str) -> set:
+    """수동으로 매매 승인 체크된 티커 집합 조회. 빈 집합이면 '전체 후보 대상'을 의미(호출부에서 처리)."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        'SELECT ticker FROM trade_candidate_approval WHERE broker = ? AND mode = ? AND approved = 1',
+        (broker, mode)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return {r[0] for r in rows}
+
+
+def set_candidate_approval(broker: str, mode: str, ticker: str, approved: bool) -> None:
+    """매매 대상 코인 체크박스 상태 저장(upsert)."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('''
+        INSERT INTO trade_candidate_approval (broker, mode, ticker, approved, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(broker, mode, ticker) DO UPDATE SET
+            approved=excluded.approved, updated_at=excluded.updated_at
+    ''', (broker, mode, ticker, 1 if approved else 0, timestamp))
+    conn.commit()
+    conn.close()
+
+
+def get_trade_order_log(broker: str = None, mode: str = None, limit: int = 100) -> list:
+    """매매 판단/체결 로그 최신순 조회."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    if broker and mode:
+        cursor.execute('''
+            SELECT * FROM trade_order_log WHERE broker = ? AND mode = ?
+            ORDER BY id DESC LIMIT ?
+        ''', (broker, mode, limit))
+    else:
+        cursor.execute('SELECT * FROM trade_order_log ORDER BY id DESC LIMIT ?', (limit,))
     rows = cursor.fetchall()
     conn.close()
     return [dict(r) for r in rows]

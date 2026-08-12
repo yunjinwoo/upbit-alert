@@ -5,6 +5,7 @@ from app.api.server import run_server
 from app.core.upbit_monitor import run_upbit_monitor
 from app.core.stock_monitor import run_stock_monitor
 from app.core.upbit_market_analysis import run_coin_screening_loop
+from app.core.auto_trader import run_auto_trade_loop
 from app.utils.logger import get_logger
 
 logger = get_logger()
@@ -32,8 +33,10 @@ if __name__ == "__main__":
     multiprocessing.freeze_support()
     
     parser = argparse.ArgumentParser(description="Upbit & Stock Alert System")
-    parser.add_argument("mode", nargs="?", choices=["all", "api", "upbit", "stock", "coin_analysis"], default="all",
-                        help="Mode to run: all (default), api, upbit, stock, or coin_analysis")
+    parser.add_argument("mode", nargs="?", choices=["all", "api", "upbit", "stock", "coin_analysis", "trade"], default="all",
+                        help="Mode to run: all (default), api, upbit, stock, coin_analysis, or trade")
+    # trade(자동매매 1단계: 업비트 모의매매)는 의도적으로 all/start_all()에 포함하지 않음 —
+    # 알림/모니터링 프로세스와 장애를 격리하기 위해 `python main.py trade`로 독립 실행할 것.
 
     args = parser.parse_args()
 
@@ -47,3 +50,5 @@ if __name__ == "__main__":
         run_stock_monitor()
     elif args.mode == "coin_analysis":
         run_coin_screening_loop()
+    elif args.mode == "trade":
+        run_auto_trade_loop()

@@ -62,3 +62,14 @@ class Config:
     SESSION_LIFETIME_DAYS = 30           # 로그인 유지 기간(일) — 이 기간 안엔 비밀번호 재입력 없이 세션 유지
     # 로그인 비밀번호를 어디서 발급했는지(로컬/서버)는 별도 설정값 없이 발급 시점에
     # platform.system()/platform.node()로 직접 조회함 — app/api/server.py의 _issue_new_password() 참고
+
+    # 자동매매 1단계 — 업비트 모의매매(dry-run) 전용, 실주문 절대 없음.
+    # PaperBroker(app/core/brokers/paper_broker.py)는 시세만 공개 API로 조회하고 잔고/포지션은
+    # DB 가상 원장으로 시뮬레이션하므로, 이 단계에서는 Upbit access/secret 키가 필요 없음.
+    TRADE_INITIAL_CASH_KRW = 1_000_000    # 가상 계좌 초기 자본금
+    TRADE_MAX_POSITION_KRW = 100_000      # 1종목당 매수 금액(고정 사이징, 분할매수 없음)
+    TRADE_MAX_CONCURRENT_POSITIONS = 5    # 동시 보유 가능 종목 수
+    TRADE_STOP_LOSS_PCT = 5.0             # 손절 기준(%)
+    TRADE_TAKE_PROFIT_PCT = 10.0          # 익절 기준(%)
+    TRADE_LOOP_INTERVAL_SEC = 300         # 매매 판단 루프 주기(초)
+    TRADE_SLACK_ALERT = False             # 모의 체결 시 "[모의매매]" 접두어로 Slack 알림 발송 여부 — 우선 비활성화(추후 필요 시 True로 전환)
