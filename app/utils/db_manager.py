@@ -402,6 +402,26 @@ def init_db():
         )
     ''')
 
+    # 국내주식(토스증권 Open API) 매매 후보 필터 스냅샷 — coin_screening_daily와 동일한 지표를
+    # 일봉(1d) 기준으로 계산해 저장한다(app/core/toss_market_analysis.py). ticker=6자리 종목코드.
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS stock_screening_daily (
+            ticker TEXT PRIMARY KEY,
+            name TEXT,
+            price REAL,
+            change_rate REAL,
+            trade_value REAL,
+            ma200 REAL,
+            ma200_dist_pct REAL,
+            near_ma200 INTEGER,
+            above_cloud INTEGER,
+            breakout_1d INTEGER,
+            breakout_vol_ratio REAL,
+            breakout_candle_rate REAL,
+            updated_at TEXT
+        )
+    ''')
+
     # 앱 잠금 설정 — 싱글톤 1행(id=1). 잠금 켜질 때마다 비밀번호를 새로 발급해 Slack으로 전송하고,
     # 해제될 때까지 그 비밀번호를 계속 재사용한다(매번 새 코드를 받는 방식이 아님).
     cursor.execute('''
@@ -499,26 +519,31 @@ def init_db():
         )
     ''')
 
-    # 자동매매 엔진 실행 여부 토글 — 싱글톤 1행(id=1). python main.py trade 프로세스는 재시작 없이
-    # 매 사이클(TRADE_LOOP_INTERVAL_SEC)마다 이 값을 확인해 실행/일시중지를 반영한다.
+    # 자동매매 엔진 실행 여부 토글 — 브로커('upbit'/'toss')별 1행(UNIQUE(broker)). python main.py trade
+    # (또는 toss_trade) 프로세스는 재시작 없이 매 사이클(TRADE_LOOP_INTERVAL_SEC)마다 자기 브로커의
+    # 이 값을 확인해 실행/일시중지를 반영한다. (예전엔 id=1 싱글톤이라 브로커 구분이 없었음 — 기존
+    # 배포 DB는 아래 migrations의 재생성 마이그레이션으로 이 스키마로 옮겨진다.)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS trade_engine_settings (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            broker TEXT NOT NULL DEFAULT 'upbit',
             enabled INTEGER NOT NULL DEFAULT 1,
-            updated_at TEXT
+            updated_at TEXT,
+            UNIQUE(broker)
         )
     ''')
 
-    # 매매 전략 파라미터(포지션당 매수금액/최대 동시보유/손절·익절 기준/루프 주기) — 싱글톤 1행(id=1).
-    # app/config.py의 TRADE_* 상수는 이 테이블에 행이 없을 때만 쓰이는 기본값이고, 대시보드에서
-    # 저장하면 이 테이블 값이 우선한다. python main.py trade 프로세스는 재시작 없이 매 사이클마다
-    # 이 값을 다시 읽는다(app/core/auto_trader.py 참고).
+    # 매매 전략 파라미터(포지션당 매수금액/최대 동시보유/손절·익절 기준/루프 주기) — 브로커별 1행
+    # (UNIQUE(broker), 예전엔 id=1 싱글톤). app/config.py의 TRADE_* 상수는 이 테이블에 그 브로커의
+    # 행이 없을 때만 쓰이는 기본값이고, 대시보드에서 저장하면 이 테이블 값이 우선한다.
+    # python main.py trade 프로세스는 재시작 없이 매 사이클마다 이 값을 다시 읽는다(app/core/auto_trader.py 참고).
     # stop_loss_confirm_cycles: 트레일링 손절 조건이 몇 사이클 연속으로 유지돼야 실제로 매도할지(기본 1=즉시,
     # 기존 동작과 동일). dca_trigger_pct: 물타기(추가매수) 체크된 포지션이 몇 % 하락(평단 대비)했을 때
     # 추가매수를 실행할지(기본 10%). dca_max_count: 포지션당 물타기 최대 허용 횟수(기본 2회, 무제한 방지).
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS trade_strategy_settings (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            broker TEXT NOT NULL DEFAULT 'upbit',
             max_position_krw REAL NOT NULL,
             max_concurrent_positions INTEGER NOT NULL,
             stop_loss_pct REAL NOT NULL,
@@ -527,7 +552,9 @@ def init_db():
             stop_loss_confirm_cycles INTEGER NOT NULL DEFAULT 1,
             dca_trigger_pct REAL NOT NULL DEFAULT 10.0,
             dca_max_count INTEGER NOT NULL DEFAULT 2,
-            updated_at TEXT
+            condition_check_interval_sec INTEGER NOT NULL DEFAULT 60,
+            updated_at TEXT,
+            UNIQUE(broker)
         )
     ''')
 
@@ -554,15 +581,19 @@ def init_db():
     # 조건을 계산한다. condition_key로 코드가 어떤 판단 로직을 쓸지 매칭하고, logic_group('AND'/'OR')은
     # 여러 켜진 조건을 어떻게 결합할지: AND 그룹은 전부 충족해야 하고, OR 그룹은 하나만 충족해도 됨
     # (AND 그룹 전부 충족 AND (OR 그룹이 비었거나 그중 하나 이상 충족)). params는 조건별 파라미터(JSON 문자열).
+    # condition_key는 브로커마다 같은 키를 재사용하므로(예: 'daily_above_ma') UNIQUE(broker, condition_key)
+    # 조합으로 구분한다(예전엔 condition_key 단독 UNIQUE라 브로커 구분이 없었음).
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS trade_condition_settings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            condition_key TEXT NOT NULL UNIQUE,
+            broker TEXT NOT NULL DEFAULT 'upbit',
+            condition_key TEXT NOT NULL,
             label TEXT,
             enabled INTEGER NOT NULL DEFAULT 0,
             logic_group TEXT NOT NULL DEFAULT 'AND',
             params TEXT,
-            updated_at TEXT
+            updated_at TEXT,
+            UNIQUE(broker, condition_key)
         )
     ''')
 
@@ -639,6 +670,68 @@ def init_db():
         # 정밀 매수조건(일봉/5분봉/1분봉) 검사 기능 — 기존 배포 테이블에 컬럼 추가
         'ALTER TABLE trade_candidate_approval ADD COLUMN condition_watch INTEGER NOT NULL DEFAULT 0',
         'ALTER TABLE trade_strategy_settings ADD COLUMN condition_check_interval_sec INTEGER NOT NULL DEFAULT 60',
+
+        # 토스증권 자동매매 추가: trade_engine_settings/trade_strategy_settings(예전 id=1 싱글톤)와
+        # trade_condition_settings(예전 condition_key 단독 UNIQUE)는 브로커 구분이 없어 업비트/토스가
+        # 설정을 공유하게 되므로, 브로커별로 분리한 새 스키마로 재생성한다. 이미 새 스키마인 DB에서는
+        # RENAME 대상 테이블이 없어 첫 문장이 실패(무시)하고 나머지는 조용히 스킵됨 — 여러 번 실행해도 안전.
+        'ALTER TABLE trade_engine_settings RENAME TO trade_engine_settings_v1_upbit_only',
+        '''CREATE TABLE IF NOT EXISTS trade_engine_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                broker TEXT NOT NULL DEFAULT 'upbit',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                updated_at TEXT,
+                UNIQUE(broker)
+            )''',
+        '''INSERT INTO trade_engine_settings (broker, enabled, updated_at)
+            SELECT 'upbit', enabled, updated_at FROM trade_engine_settings_v1_upbit_only
+            WHERE NOT EXISTS (SELECT 1 FROM trade_engine_settings WHERE broker = 'upbit')''',
+        'DROP TABLE IF EXISTS trade_engine_settings_v1_upbit_only',
+
+        'ALTER TABLE trade_strategy_settings RENAME TO trade_strategy_settings_v1_upbit_only',
+        '''CREATE TABLE IF NOT EXISTS trade_strategy_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                broker TEXT NOT NULL DEFAULT 'upbit',
+                max_position_krw REAL NOT NULL,
+                max_concurrent_positions INTEGER NOT NULL,
+                stop_loss_pct REAL NOT NULL,
+                take_profit_pct REAL NOT NULL,
+                loop_interval_sec INTEGER NOT NULL,
+                stop_loss_confirm_cycles INTEGER NOT NULL DEFAULT 1,
+                dca_trigger_pct REAL NOT NULL DEFAULT 10.0,
+                dca_max_count INTEGER NOT NULL DEFAULT 2,
+                condition_check_interval_sec INTEGER NOT NULL DEFAULT 60,
+                updated_at TEXT,
+                UNIQUE(broker)
+            )''',
+        '''INSERT INTO trade_strategy_settings
+                (broker, max_position_krw, max_concurrent_positions, stop_loss_pct, take_profit_pct,
+                 loop_interval_sec, stop_loss_confirm_cycles, dca_trigger_pct, dca_max_count,
+                 condition_check_interval_sec, updated_at)
+            SELECT 'upbit', max_position_krw, max_concurrent_positions, stop_loss_pct, take_profit_pct,
+                 loop_interval_sec, stop_loss_confirm_cycles, dca_trigger_pct, dca_max_count,
+                 condition_check_interval_sec, updated_at
+            FROM trade_strategy_settings_v1_upbit_only
+            WHERE NOT EXISTS (SELECT 1 FROM trade_strategy_settings WHERE broker = 'upbit')''',
+        'DROP TABLE IF EXISTS trade_strategy_settings_v1_upbit_only',
+
+        'ALTER TABLE trade_condition_settings RENAME TO trade_condition_settings_v1_upbit_only',
+        '''CREATE TABLE IF NOT EXISTS trade_condition_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                broker TEXT NOT NULL DEFAULT 'upbit',
+                condition_key TEXT NOT NULL,
+                label TEXT,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                logic_group TEXT NOT NULL DEFAULT 'AND',
+                params TEXT,
+                updated_at TEXT,
+                UNIQUE(broker, condition_key)
+            )''',
+        '''INSERT INTO trade_condition_settings (broker, condition_key, label, enabled, logic_group, params, updated_at)
+            SELECT 'upbit', condition_key, label, enabled, logic_group, params, updated_at
+            FROM trade_condition_settings_v1_upbit_only
+            WHERE NOT EXISTS (SELECT 1 FROM trade_condition_settings WHERE broker = 'upbit')''',
+        'DROP TABLE IF EXISTS trade_condition_settings_v1_upbit_only',
     ]
     for sql in migrations:
         try:
@@ -646,21 +739,24 @@ def init_db():
         except Exception:
             pass
 
-    # 정밀 매수조건 3종 기본 행 시딩(최초 1회, 이미 있으면 건드리지 않음) — 전부 기본 비활성화(enabled=0)로
-    # 시작해서, 사용자가 대시보드에서 켜기 전까진 기존 동작(4시간봉 필터만)이 그대로 유지된다.
+    # 정밀 매수조건 3종 기본 행 시딩(브로커별로 최초 1회, 이미 있으면 건드리지 않음) — 전부 기본
+    # 비활성화(enabled=0)로 시작해서, 사용자가 대시보드에서 켜기 전까진 기존 동작(스크리닝 필터만)이
+    # 그대로 유지된다. m5_ma_support는 토스는 5분봉 API가 없어 1분봉을 리샘플링해 계산한다
+    # (app/core/toss_client.py의 get_candles_resampled 참고).
     default_conditions = [
         ('daily_above_ma', '일봉 종가가 N일 이동평균 이상', '{"ma_period": 20}'),
         ('m5_ma_support', '5분봉이 N선에 지지받고 반등(저가 근접 후 종가 위 마감)', '{"ma_period": 20, "touch_tolerance_pct": 0.3}'),
         ('m1_bb_breakout_volume', '1분봉이 볼린저밴드 상단을 거래량 동반 돌파', '{"bb_period": 20, "bb_mult": 2.0, "vol_lookback": 20, "vol_ratio_threshold": 2.0}'),
     ]
-    for condition_key, label, params in default_conditions:
-        try:
-            cursor.execute('''
-                INSERT OR IGNORE INTO trade_condition_settings (condition_key, label, enabled, logic_group, params)
-                VALUES (?, ?, 0, 'AND', ?)
-            ''', (condition_key, label, params))
-        except Exception:
-            pass
+    for broker in ('upbit', 'toss'):
+        for condition_key, label, params in default_conditions:
+            try:
+                cursor.execute('''
+                    INSERT OR IGNORE INTO trade_condition_settings (broker, condition_key, label, enabled, logic_group, params)
+                    VALUES (?, ?, ?, 0, 'AND', ?)
+                ''', (broker, condition_key, label, params))
+            except Exception:
+                pass
 
     try:
         cursor.execute("UPDATE stock_memo SET updated_at = created_at WHERE updated_at IS NULL")
@@ -3578,6 +3674,63 @@ def get_coin_screening_candidates() -> list:
 
 
 # ──────────────────────────────────────────────
+# 국내주식(토스증권) 기술지표 스크리닝 — coin_screening_daily의 3개 함수와 동일 패턴, 일봉(1d) 기준
+# ──────────────────────────────────────────────
+
+def save_stock_screening(rows: list):
+    """국내주식 스크리닝(매매 후보 필터) 스냅샷 저장 (종목코드 기준 upsert — 최신 값으로 갱신)"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    for r in rows:
+        cursor.execute('''
+            INSERT INTO stock_screening_daily
+                (ticker, name, price, change_rate, trade_value,
+                 ma200, ma200_dist_pct, near_ma200, above_cloud,
+                 breakout_1d, breakout_vol_ratio, breakout_candle_rate, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(ticker) DO UPDATE SET
+                name=excluded.name, price=excluded.price, change_rate=excluded.change_rate,
+                trade_value=excluded.trade_value,
+                ma200=excluded.ma200, ma200_dist_pct=excluded.ma200_dist_pct,
+                near_ma200=excluded.near_ma200, above_cloud=excluded.above_cloud,
+                breakout_1d=excluded.breakout_1d, breakout_vol_ratio=excluded.breakout_vol_ratio,
+                breakout_candle_rate=excluded.breakout_candle_rate,
+                updated_at=excluded.updated_at
+        ''', (r['ticker'], r.get('name'), r.get('price'), r.get('change_rate'), r.get('trade_value'),
+              r.get('ma200'), r.get('ma200_dist_pct'), int(bool(r.get('near_ma200'))), int(bool(r.get('above_cloud'))),
+              int(bool(r.get('breakout_1d'))), r.get('breakout_vol_ratio'), r.get('breakout_candle_rate'), timestamp))
+    conn.commit()
+    conn.close()
+
+
+def get_stock_screening() -> list:
+    """국내주식 스크리닝 스냅샷 전체 조회 (거래대금 내림차순)"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM stock_screening_daily ORDER BY trade_value DESC')
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_stock_screening_candidates() -> list:
+    """자동매매 진입 후보만 필터링 조회 (일봉 돌파, 또는 200선 근접이면서 구름 위)"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT * FROM stock_screening_daily
+        WHERE breakout_1d = 1 OR (near_ma200 = 1 AND above_cloud = 1)
+        ORDER BY trade_value DESC
+    ''')
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# ──────────────────────────────────────────────
 # 자동매매(1단계: 업비트 모의매매) — 가상 계좌/포지션/주문 로그
 # ──────────────────────────────────────────────
 
@@ -3738,12 +3891,12 @@ def save_trade_order_log(broker: str, mode: str, ticker: str, decision: str, rea
     conn.close()
 
 
-def get_trade_engine_settings() -> dict:
-    """자동매매 엔진 실행 여부 조회. 행이 없으면(최초 실행) 기본값 실행중(enabled=True)으로 취급."""
+def get_trade_engine_settings(broker: str = 'upbit') -> dict:
+    """자동매매 엔진 실행 여부 조회(브로커별). 행이 없으면(최초 실행) 기본값 실행중(enabled=True)으로 취급."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute('SELECT * FROM trade_engine_settings WHERE id = 1')
+    cursor.execute('SELECT * FROM trade_engine_settings WHERE broker = ?', (broker,))
     row = cursor.fetchone()
     conn.close()
     if not row:
@@ -3751,27 +3904,27 @@ def get_trade_engine_settings() -> dict:
     return {'enabled': bool(row['enabled'])}
 
 
-def set_trade_engine_enabled(enabled: bool) -> None:
-    """자동매매 엔진 실행 여부 저장(upsert, 싱글톤 1행)."""
+def set_trade_engine_enabled(enabled: bool, broker: str = 'upbit') -> None:
+    """자동매매 엔진 실행 여부 저장(upsert, 브로커당 1행)."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     cursor.execute('''
-        INSERT INTO trade_engine_settings (id, enabled, updated_at)
-        VALUES (1, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at
-    ''', (1 if enabled else 0, timestamp))
+        INSERT INTO trade_engine_settings (broker, enabled, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(broker) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at
+    ''', (broker, 1 if enabled else 0, timestamp))
     conn.commit()
     conn.close()
 
 
-def get_trade_strategy_settings() -> dict:
-    """매매 전략 파라미터(포지션당 매수금액/최대 동시보유/손절·익절 기준/루프 주기) 조회.
+def get_trade_strategy_settings(broker: str = 'upbit') -> dict:
+    """매매 전략 파라미터(포지션당 매수금액/최대 동시보유/손절·익절 기준/루프 주기) 조회(브로커별).
     행이 없으면(최초 실행, 대시보드에서 아직 저장한 적 없음) app/config.py의 TRADE_* 기본값을 그대로 반환."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute('SELECT * FROM trade_strategy_settings WHERE id = 1')
+    cursor.execute('SELECT * FROM trade_strategy_settings WHERE broker = ?', (broker,))
     row = cursor.fetchone()
     conn.close()
     if not row:
@@ -3805,9 +3958,9 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
                                  stop_loss_pct: float = None, take_profit_pct: float = None,
                                  loop_interval_sec: int = None, stop_loss_confirm_cycles: int = None,
                                  dca_trigger_pct: float = None, dca_max_count: int = None,
-                                 condition_check_interval_sec: int = None) -> dict:
-    """매매 전략 파라미터 저장(upsert, 부분 갱신 — None인 필드는 기존값 유지). 저장된 값을 반환."""
-    current = get_trade_strategy_settings()
+                                 condition_check_interval_sec: int = None, broker: str = 'upbit') -> dict:
+    """매매 전략 파라미터 저장(upsert, 브로커별 1행, 부분 갱신 — None인 필드는 기존값 유지). 저장된 값을 반환."""
+    current = get_trade_strategy_settings(broker)
     merged = {
         'max_position_krw': max_position_krw if max_position_krw is not None else current['max_position_krw'],
         'max_concurrent_positions': max_concurrent_positions if max_concurrent_positions is not None else current['max_concurrent_positions'],
@@ -3824,11 +3977,11 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     cursor.execute('''
         INSERT INTO trade_strategy_settings
-            (id, max_position_krw, max_concurrent_positions, stop_loss_pct, take_profit_pct,
+            (broker, max_position_krw, max_concurrent_positions, stop_loss_pct, take_profit_pct,
              loop_interval_sec, stop_loss_confirm_cycles, dca_trigger_pct, dca_max_count,
              condition_check_interval_sec, updated_at)
-        VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(broker) DO UPDATE SET
             max_position_krw=excluded.max_position_krw,
             max_concurrent_positions=excluded.max_concurrent_positions,
             stop_loss_pct=excluded.stop_loss_pct,
@@ -3839,7 +3992,7 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
             dca_max_count=excluded.dca_max_count,
             condition_check_interval_sec=excluded.condition_check_interval_sec,
             updated_at=excluded.updated_at
-    ''', (merged['max_position_krw'], merged['max_concurrent_positions'], merged['stop_loss_pct'],
+    ''', (broker, merged['max_position_krw'], merged['max_concurrent_positions'], merged['stop_loss_pct'],
           merged['take_profit_pct'], merged['loop_interval_sec'], merged['stop_loss_confirm_cycles'],
           merged['dca_trigger_pct'], merged['dca_max_count'], merged['condition_check_interval_sec'], timestamp))
     conn.commit()
@@ -3905,12 +4058,12 @@ def set_candidate_condition_watch(broker: str, mode: str, ticker: str, enabled: 
     conn.close()
 
 
-def get_trade_condition_settings() -> list:
-    """정밀 매수조건(일봉/5분봉/1분봉 등) 설정 전체 조회. params는 JSON 문자열을 dict로 파싱해 반환."""
+def get_trade_condition_settings(broker: str = 'upbit') -> list:
+    """정밀 매수조건(일봉/5분봉/1분봉 등) 설정 전체 조회(브로커별). params는 JSON 문자열을 dict로 파싱해 반환."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute('SELECT * FROM trade_condition_settings ORDER BY id')
+    cursor.execute('SELECT * FROM trade_condition_settings WHERE broker = ? ORDER BY id', (broker,))
     rows = [dict(r) for r in cursor.fetchall()]
     conn.close()
     for r in rows:
@@ -3922,12 +4075,12 @@ def get_trade_condition_settings() -> list:
 
 
 def set_trade_condition_setting(condition_key: str, enabled: bool = None, logic_group: str = None,
-                                 params: dict = None) -> dict:
-    """정밀 매수조건 1건 부분 갱신(None인 필드는 기존값 유지). condition_key가 없으면 예외 발생."""
+                                 params: dict = None, broker: str = 'upbit') -> dict:
+    """정밀 매수조건 1건 부분 갱신(브로커별, None인 필드는 기존값 유지). condition_key가 없으면 예외 발생."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute('SELECT * FROM trade_condition_settings WHERE condition_key = ?', (condition_key,))
+    cursor.execute('SELECT * FROM trade_condition_settings WHERE broker = ? AND condition_key = ?', (broker, condition_key))
     current = cursor.fetchone()
     if not current:
         conn.close()
@@ -3948,8 +4101,8 @@ def set_trade_condition_setting(condition_key: str, enabled: bool = None, logic_
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     cursor.execute('''
         UPDATE trade_condition_settings SET enabled = ?, logic_group = ?, params = ?, updated_at = ?
-        WHERE condition_key = ?
-    ''', (next_enabled, next_logic_group, next_params, timestamp, condition_key))
+        WHERE broker = ? AND condition_key = ?
+    ''', (next_enabled, next_logic_group, next_params, timestamp, broker, condition_key))
     conn.commit()
     conn.close()
     result = dict(current)

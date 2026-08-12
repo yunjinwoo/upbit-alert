@@ -41,7 +41,7 @@ jobs:
             
             # 4. PM2를 이용한 프로세스 재시작
             # 기존 프로세스가 있다면 중지 후 삭제 (확실한 재시작을 위해)
-            pm2 delete upbit-bot upbit-api stock-bot coin-analysis-bot trade-bot condition-check-bot || true
+            pm2 delete upbit-bot upbit-api stock-bot coin-analysis-bot trade-bot condition-check-bot toss-analysis-bot toss-trade-bot toss-condition-check-bot || true
 
             # 가상환경 내의 python3 경로를 정확히 지정하여 실행
             pm2 start main.py --name upbit-api --interpreter ./venv/bin/python3 -- api
@@ -56,6 +56,13 @@ jobs:
             # condition-check-bot: 정밀 매수조건(일봉/5분봉/1분봉) 검사 — 대시보드에서 "정밀검사" 체크한
             # 종목만 별도 주기로 조회(trade-bot과 격리된 프로세스, 안 떠 있으면 정밀검사 켠 종목은 매수 보류됨)
             pm2 start main.py --name condition-check-bot --interpreter ./venv/bin/python3 -- condition_check
+
+            # 토스증권(국내주식) 자동매매(모의) — 업비트 3종(coin-analysis-bot/trade-bot/condition-check-bot)과
+            # 완전히 동일한 구조·이유로 격리된 프로세스 3개. 서버 .env에 TOSS_CLIENT_ID/TOSS_CLIENT_SECRET이
+            # 없으면 시세 조회가 실패해 매매 판단이 전부 SKIP으로만 기록될 뿐 에러로 죽지는 않는다.
+            pm2 start main.py --name toss-analysis-bot --interpreter ./venv/bin/python3 -- toss_analysis
+            pm2 start main.py --name toss-trade-bot --interpreter ./venv/bin/python3 -- toss_trade
+            pm2 start main.py --name toss-condition-check-bot --interpreter ./venv/bin/python3 -- toss_condition_check
 
             # 5. 설정 저장 (서버 재부팅 시 자동 실행)
             pm2 save

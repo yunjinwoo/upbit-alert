@@ -35,6 +35,14 @@ class Config:
     KIS_URL_BASE = "https://openapi.koreainvestment.com:9443"
     STOCK_VOL_AVG_LOOKBACK = 20  # 국내주식 실시간 감시 거래량 배수 계산에 쓸 평균 거래일 수(전일 대비 → 최근 N일 평균 대비)
 
+    # 토스증권(Toss Invest) Open API Settings — 자동매매(모의) 2단계용. WTS 콘솔(developers.tossinvest.com)에서
+    # 발급받은 OAuth2 Client Credentials를 .env에 TOSS_CLIENT_ID/TOSS_CLIENT_SECRET로 넣어야 동작한다.
+    # (서버 실행 환경의 아웃바운드 IP를 WTS 콘솔의 허용 IP 목록에 등록해둬야 함 — 미등록 시 403)
+    TOSS_CLIENT_ID = os.getenv("TOSS_CLIENT_ID")
+    TOSS_CLIENT_SECRET = os.getenv("TOSS_CLIENT_SECRET")
+    TOSS_API_BASE = "https://openapi.tossinvest.com"
+    TOSS_SCREENING_UNIVERSE_SIZE = 200  # 스크리닝 대상 종목 수(시가총액 상위 N, stock_market_cap_daily 재사용)
+
     # Google Sheets
     SHEET_NAME = "py-upbit-alram"
     CREDENTIALS_FILE = "credentials.json"

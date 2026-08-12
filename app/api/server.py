@@ -70,6 +70,11 @@ from app.core.stock_monitor import (
 )
 from app.core.upbit_market_analysis import run_coin_screening
 from app.core.auto_trader import get_dashboard_summary, run_trade_cycle, force_buy
+from app.core.toss_auto_trader import (
+    get_dashboard_summary as get_toss_dashboard_summary,
+    run_trade_cycle as run_toss_trade_cycle,
+    force_buy as toss_force_buy,
+)
 from app.config import Config
 import json
 import os
@@ -821,6 +826,224 @@ def set_position_dca_api():
         return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
     try:
         set_position_dca_enabled('upbit', 'paper', ticker, enabled)
+        return jsonify({'status': 'success', 'ticker': ticker, 'enabled': enabled})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+# ──────────────────────────────────────────────
+# 토스증권(국내주식) 자동매매(모의) — 위 /auto-trade* 블록(업비트)과 완전히 동일한 패턴,
+# broker만 'toss'로 고정. app/core/toss_auto_trader.py 참고.
+# ──────────────────────────────────────────────
+
+@app.route('/toss-trade')
+def toss_trade_view():
+    """토스증권 자동매매(모의) 대시보드 — 읽기 전용. 매매 판단/실행은 별도 프로세스
+    (python main.py toss_trade)에서만 발생."""
+    return render_template('toss_trade.html', active_page='toss_trade')
+
+@app.route('/toss-trade/logs')
+def toss_trade_logs_view():
+    """토스증권 매매 판단/체결 이력(BUY/SELL/HOLD/SKIP 전부) 조회 페이지."""
+    return render_template('toss_trade_logs.html', active_page='toss_trade')
+
+@app.route('/api/toss-trade/logs', methods=['GET'])
+def get_toss_trade_logs_api():
+    """매매 판단/체결 이력을 페이지네이션해서 조회. 쿼리파라미터: limit(기본 50, 최대 200),
+    offset(기본 0), ticker(선택, 예: 005930), decision(선택, BUY/SELL/HOLD/SKIP/DCA_BUY)."""
+    try:
+        limit = min(int(request.args.get('limit', 50)), 200)
+        offset = max(int(request.args.get('offset', 0)), 0)
+        ticker = (request.args.get('ticker') or '').strip() or None
+        decision = (request.args.get('decision') or '').strip() or None
+        orders = get_trade_order_log('toss', 'paper', limit=limit, offset=offset, ticker=ticker, decision=decision)
+        total = count_trade_order_log('toss', 'paper', ticker=ticker, decision=decision)
+        return jsonify({'status': 'success', 'orders': orders, 'total': total, 'limit': limit, 'offset': offset})
+    except (ValueError, TypeError) as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/toss-trade/summary', methods=['GET'])
+def get_toss_trade_summary_api():
+    """가상 계좌 잔고/보유 포지션(현재가·평가손익 포함)/진입 후보(매매 대상 종목)/엔진 실행 여부/
+    매매 전략 파라미터(settings)를 JSON으로 반환합니다 (읽기 전용, 주문 실행 없음)."""
+    try:
+        data = get_toss_dashboard_summary()
+        return jsonify({'status': 'success', **data})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/toss-trade/toggle', methods=['POST'])
+def toggle_toss_trade_api():
+    """토스 자동매매 엔진 실행/일시중지 토글. 실행 중인 `python main.py toss_trade` 프로세스가
+    다음 사이클마다 이 값을 확인해 반영하므로 재시작이 필요 없습니다."""
+    body = request.get_json(silent=True) or {}
+    enabled = bool(body.get('enabled'))
+    try:
+        set_trade_engine_enabled(enabled, broker='toss')
+        return jsonify({'status': 'success', 'enabled': enabled})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/toss-trade/run-now', methods=['POST'])
+def run_toss_trade_now_api():
+    """매매 루프의 다음 sleep을 기다리지 않고, 지금 이 요청 안에서 동기적으로 매매 판단 1사이클을
+    즉시 실행합니다. 결과는 trade_order_log/job_run_log에 'manual'로 기록됩니다."""
+    try:
+        result = run_toss_trade_cycle(trigger_type='manual')
+        return jsonify({'status': 'success', **result})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'즉시 실행 중 오류 발생: {str(e)}'}), 500
+
+@app.route('/api/toss-trade/candidates/approve', methods=['POST'])
+def set_toss_candidate_approval_api():
+    """매매 대상 종목 체크박스 상태 저장. body: {ticker: str, approved: bool}"""
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip()
+    approved = bool(body.get('approved'))
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    try:
+        set_candidate_approval('toss', 'paper', ticker, approved)
+        return jsonify({'status': 'success', 'ticker': ticker, 'approved': approved})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/toss-trade/settings', methods=['POST'])
+def set_toss_trade_strategy_settings_api():
+    """매매 전략 파라미터 저장(부분 갱신). body 필드는 업비트용(/api/auto-trade/settings)과 동일."""
+    body = request.get_json(silent=True) or {}
+    try:
+        kwargs = {}
+        if 'max_position_krw' in body:
+            v = float(body['max_position_krw'])
+            if v <= 0:
+                raise ValueError('1종목당 매수금액은 0보다 커야 합니다.')
+            kwargs['max_position_krw'] = v
+        if 'max_concurrent_positions' in body:
+            v = int(body['max_concurrent_positions'])
+            if v <= 0:
+                raise ValueError('최대 동시보유 종목수는 1 이상이어야 합니다.')
+            kwargs['max_concurrent_positions'] = v
+        if 'stop_loss_pct' in body:
+            v = float(body['stop_loss_pct'])
+            if v <= 0:
+                raise ValueError('손절 기준(%)은 0보다 커야 합니다.')
+            kwargs['stop_loss_pct'] = v
+        if 'take_profit_pct' in body:
+            v = float(body['take_profit_pct'])
+            if v <= 0:
+                raise ValueError('익절 기준(%)은 0보다 커야 합니다.')
+            kwargs['take_profit_pct'] = v
+        if 'loop_interval_sec' in body:
+            v = int(body['loop_interval_sec'])
+            if v < 10:
+                raise ValueError('매매 루프 주기는 최소 10초 이상이어야 합니다.')
+            kwargs['loop_interval_sec'] = v
+        if 'stop_loss_confirm_cycles' in body:
+            v = int(body['stop_loss_confirm_cycles'])
+            if v <= 0:
+                raise ValueError('손절 연속확인 사이클수는 1 이상이어야 합니다.')
+            kwargs['stop_loss_confirm_cycles'] = v
+        if 'dca_trigger_pct' in body:
+            v = float(body['dca_trigger_pct'])
+            if v <= 0:
+                raise ValueError('물타기 트리거(%)는 0보다 커야 합니다.')
+            kwargs['dca_trigger_pct'] = v
+        if 'dca_max_count' in body:
+            v = int(body['dca_max_count'])
+            if v <= 0:
+                raise ValueError('물타기 최대 횟수는 1 이상이어야 합니다.')
+            kwargs['dca_max_count'] = v
+        if 'condition_check_interval_sec' in body:
+            v = int(body['condition_check_interval_sec'])
+            if v < 10:
+                raise ValueError('정밀조건 검사 주기는 최소 10초 이상이어야 합니다.')
+            kwargs['condition_check_interval_sec'] = v
+
+        settings = set_trade_strategy_settings(broker='toss', **kwargs)
+        return jsonify({'status': 'success', 'settings': settings})
+    except (ValueError, TypeError) as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/toss-trade/candidates/condition-watch', methods=['POST'])
+def set_toss_candidate_condition_watch_api():
+    """"정밀조건 검사" 체크박스 상태 저장. body: {ticker: str, enabled: bool}"""
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip()
+    enabled = bool(body.get('enabled'))
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    try:
+        set_candidate_condition_watch('toss', 'paper', ticker, enabled)
+        return jsonify({'status': 'success', 'ticker': ticker, 'enabled': enabled})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/toss-trade/conditions/settings', methods=['POST'])
+def set_toss_trade_condition_settings_api():
+    """정밀 매수조건 설정 저장 — 여러 건 한 번에 부분 갱신 가능. body: {conditions: [...]}
+    (필드 구성은 업비트용 /api/auto-trade/conditions/settings와 동일)"""
+    body = request.get_json(silent=True) or {}
+    conditions = body.get('conditions')
+    if not isinstance(conditions, list) or not conditions:
+        return jsonify({'status': 'error', 'message': 'conditions 배열이 필요합니다.'}), 400
+    try:
+        updated = []
+        for c in conditions:
+            condition_key = (c.get('condition_key') or '').strip()
+            if not condition_key:
+                raise ValueError('condition_key가 필요합니다.')
+            logic_group = c.get('logic_group')
+            if logic_group is not None and logic_group not in ('AND', 'OR'):
+                raise ValueError(f'logic_group은 AND/OR만 가능합니다: {logic_group}')
+            enabled = c.get('enabled')
+            params = c.get('params')
+            if params is not None and not isinstance(params, dict):
+                raise ValueError('params는 객체여야 합니다.')
+            updated.append(set_trade_condition_setting(
+                condition_key,
+                enabled=bool(enabled) if enabled is not None else None,
+                logic_group=logic_group,
+                params=params,
+                broker='toss',
+            ))
+        return jsonify({'status': 'success', 'conditions': updated})
+    except ValueError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/toss-trade/force-buy', methods=['POST'])
+def toss_force_buy_api():
+    """대시보드 "강제 매수" — 지정한 종목을 지금 즉시 "1종목당 매수금액"만큼 시장가 매수(모의)한다.
+    body: {ticker: str} (예: '005930', 6자리 종목코드)."""
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip()
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    if not (ticker.isdigit() and len(ticker) == 6):
+        return jsonify({'status': 'error', 'message': "ticker는 '005930'과 같은 6자리 종목코드여야 합니다."}), 400
+    try:
+        result = toss_force_buy(ticker)
+        status = 'success' if result['success'] else 'error'
+        code = 200 if result['success'] else 400
+        return jsonify({'status': status, **result}), code
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'강제 매수 중 오류 발생: {str(e)}'}), 500
+
+@app.route('/api/toss-trade/positions/dca', methods=['POST'])
+def set_toss_position_dca_api():
+    """보유 포지션의 물타기(추가매수) 허용 체크박스 상태 저장. body: {ticker: str, enabled: bool}"""
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip()
+    enabled = bool(body.get('enabled'))
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    try:
+        set_position_dca_enabled('toss', 'paper', ticker, enabled)
         return jsonify({'status': 'success', 'ticker': ticker, 'enabled': enabled})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
