@@ -40,6 +40,7 @@ from app.utils.db_manager import (
     set_trade_engine_enabled,
     set_candidate_approval,
     set_trade_strategy_settings,
+    set_position_dca_enabled,
     save_powerball_rounds, get_powerball_rounds, delete_powerball_round,
     add_powerball_favorite, get_powerball_favorites, delete_powerball_favorite,
     save_lotto645_rounds, get_lotto645_rounds, delete_lotto645_round,
@@ -636,10 +637,11 @@ def set_candidate_approval_api():
 
 @app.route('/api/auto-trade/settings', methods=['POST'])
 def set_trade_strategy_settings_api():
-    """매매 전략 파라미터(1종목당 매수금액/최대 동시보유/손절·익절 기준/루프 주기) 저장.
-    실행 중인 `python main.py trade` 프로세스가 다음 사이클부터 새 값을 적용하므로 재시작이 필요 없습니다.
-    body는 아래 필드 중 바꿀 것만 보내면 됩니다(부분 갱신):
-    {max_position_krw, max_concurrent_positions, stop_loss_pct, take_profit_pct, loop_interval_sec}"""
+    """매매 전략 파라미터(1종목당 매수금액/최대 동시보유/손절·익절 기준/루프 주기/손절 연속확인
+    사이클수/물타기 트리거 %) 저장. 실행 중인 `python main.py trade` 프로세스가 다음 사이클부터
+    새 값을 적용하므로 재시작이 필요 없습니다. body는 아래 필드 중 바꿀 것만 보내면 됩니다(부분 갱신):
+    {max_position_krw, max_concurrent_positions, stop_loss_pct, take_profit_pct, loop_interval_sec,
+     stop_loss_confirm_cycles, dca_trigger_pct}"""
     body = request.get_json(silent=True) or {}
     try:
         kwargs = {}
@@ -668,11 +670,37 @@ def set_trade_strategy_settings_api():
             if v < 10:
                 raise ValueError('매매 루프 주기는 최소 10초 이상이어야 합니다.')
             kwargs['loop_interval_sec'] = v
+        if 'stop_loss_confirm_cycles' in body:
+            v = int(body['stop_loss_confirm_cycles'])
+            if v <= 0:
+                raise ValueError('손절 연속확인 사이클수는 1 이상이어야 합니다.')
+            kwargs['stop_loss_confirm_cycles'] = v
+        if 'dca_trigger_pct' in body:
+            v = float(body['dca_trigger_pct'])
+            if v <= 0:
+                raise ValueError('물타기 트리거(%)는 0보다 커야 합니다.')
+            kwargs['dca_trigger_pct'] = v
 
         settings = set_trade_strategy_settings(**kwargs)
         return jsonify({'status': 'success', 'settings': settings})
     except (ValueError, TypeError) as e:
         return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/auto-trade/positions/dca', methods=['POST'])
+def set_position_dca_api():
+    """보유 포지션의 물타기(추가매수) 허용 체크박스 상태 저장. 켜두면 트레일링 손절 연속확인이
+    끝난 뒤 곧바로 손절하지 않고 평단 대비 -dca_trigger_pct까지 한 번 더 기다렸다가 매매기준
+    (1종목당 매수금액)으로 추가매수합니다(1회 제한). body: {ticker: str, enabled: bool}"""
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip()
+    enabled = bool(body.get('enabled'))
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    try:
+        set_position_dca_enabled('upbit', 'paper', ticker, enabled)
+        return jsonify({'status': 'success', 'ticker': ticker, 'enabled': enabled})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 

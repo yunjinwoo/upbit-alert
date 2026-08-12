@@ -1,6 +1,6 @@
 # 자동매매 1단계 — 업비트 모의매매(Dry-run) 엔진
 
-- 상태: 로컬 구현·검증 완료 / 서버 배포(PM2) 등록 완료 / 실거래 전환 안 함
+- 상태: 로컬 구현·검증 완료 / 서버 배포(PM2) 등록은 PR로 다시 올리는 중(아래 "알아둘 점" 참고) / 실거래 전환 안 함
 - 날짜: 2026-08-12
 - 관련 파일: `app/core/brokers/`, `app/core/trade_strategy.py`, `app/core/auto_trader.py`,
   `app/utils/db_manager.py`, `app/config.py`, `main.py`, `app/api/server.py`,
@@ -189,9 +189,60 @@ Slack 알림을 보내는 코드(`auto_trader.py`의 `_execute()`)는 이미 있
 새로 읽으므로 HTML/JS 변경은 바로 반영됨). 토글 API처럼 Python 로직을 새로 추가한 뒤엔
 서버 프로세스를 수동으로 재시작해야 반영된다.
 
+### 알아둘 점 — PM2 배포 커밋이 한 번 유실됐었음
+
+`.github/workflows/deploy.yml`에 `coin-analysis-bot`/`trade-bot`을 추가하고 `/coin-screening`
+차트 링크를 고친 커밋을, **이미 병합되고 닫힌 PR #45 브랜치에 그대로 푸시**하는 실수가 있었다.
+그 브랜치는 다시 PR을 열지 않는 한 main에 반영되지 않으므로, 서버에는 dry-run 엔진 코드
+자체는 배포됐어도(`python main.py trade`가 존재) **`trade-bot`/`coin-analysis-bot`이 PM2에
+등록된 적이 없어 실제로 돌고 있지 않았을 가능성이 높다.** 이후 새 브랜치(`feature/upbit-auto-
+trade-trailing-dca`)로 그 커밋과 이번 트레일링/물타기 기능을 함께 다시 PR로 올림 — **PR을
+머지할 때마다 실제로 origin/main에 반영됐는지(`git merge-base --is-ancestor <커밋> origin/main`)
+확인하는 습관이 필요함.**
+
+## 트레일링 손절 + 연속 확인 + 물타기(선택)
+
+"손절 -5%가 무조건 매도라 아쉽다"는 피드백을 받고, 진입가 기준 고정 손절 대신 다음 3단계를 도입:
+
+1. **트레일링 손절** — 기준점을 진입가가 아니라 **포지션의 보유 중 최고가(`peak_price`)**로 바꿈.
+   `paper_positions.peak_price`를 매 사이클 `max(기존 peak, 현재가)`로 갱신하고, 손절 판단은
+   `(peak - 현재가) / peak >= stop_loss_pct`로 계산. 상승 추세에서 손절선이 같이 따라 올라가
+   수익을 지키면서, 눌림목에 바로 잘리는 걸 줄임.
+2. **연속 확인(`stop_loss_confirm_cycles`)** — 트레일링 손절 조건이 몇 사이클 연속으로 유지돼야
+   실제 매도할지. `paper_positions.below_stop_streak`로 추적, 조건이 깨지면(가격 회복) 0으로
+   리셋. 기본값 1(=즉시, 기존 동작과 동일)이라 안 건드리면 동작이 안 바뀜.
+3. **물타기(체크박스, `dca_enabled`)** — 연속 확인까지 끝나서 정말 매도해야 할 시점에, 이 포지션에
+   물타기가 켜져 있고 아직 한 번도 안 썼으면(`dca_used=False`) 곧바로 팔지 않고 **평단 대비
+   `-dca_trigger_pct`(기본 -10%)까지 한 번 더 대기**. 거기 도달하면 매도 대신 "1종목당 매수금액"
+   만큼 추가매수(`DCA_BUY`)해서 평단을 낮추고, `peak_price`/`below_stop_streak`를 새 평단 시점
+   으로 리셋 — 이후엔 그 새 평단 기준으로 트레일링 손절/익절을 다시 시작한다.
+   **물타기는 포지션당 딱 1회만 허용**(`dca_used` 플래그로 강제) — 무제한으로 계속 추가매수하면
+   하락장에서 손실이 끝없이 커질 수 있어서 넣은 안전장치. 두 번째로 손절 조건에 닿으면
+   `dca_enabled` 여부와 무관하게 그냥 일반 손절이 나간다.
+   익절(`take_profit_pct`)은 이 셋과 무관하게 항상 최우선으로 확인한다.
+
+`trade_strategy.py`의 `evaluate_exits()`는 여전히 DB/네트워크에 직접 접근하지 않는 순수 함수로
+유지 — `peak_price`/`below_stop_streak`/`dca_enabled`/`dca_used`는 호출부가 `positions` 딕셔너리에
+실어 넘겨주고, 판단 결과(다음 `peak_price`/`streak`)도 `TradeDecision`에 실어 반환하면
+`auto_trader.py`가 그 값을 다시 DB(`update_position_tracking`/`mark_position_dca_used`)에 쓴다.
+
+**대시보드**: `/auto-trade`의 "매매 기준 설정"에 손절 연속확인 사이클수·물타기 트리거(%) 입력칸
+추가. "보유 포지션" 표엔 최고가·상태 배지(🟡 손절 대기중 / 🔵 물타기 대기중 / 🟣 물타기 완료)·
+물타기 체크박스 열 추가. 상태 배지는 `get_dashboard_summary()`가 `evaluate_exits()`를 읽기 전용
+으로 한 번 더 돌려서(순수 함수라 부작용 없음) "다음 사이클에 실제로 어떤 판단이 내려질지"를
+미리 계산해 보여주는 것 — 실행 로직과 완전히 같은 함수를 재사용하므로 화면과 실제 동작이
+항상 일치한다.
+
+새 API: `POST /api/auto-trade/positions/dca` (`{ticker, enabled}`), 기존
+`POST /api/auto-trade/settings`에 `stop_loss_confirm_cycles`/`dca_trigger_pct` 필드 추가.
+
+신규 DB 컬럼(마이그레이션, 이미 배포된 테이블이라 `ALTER TABLE`로 추가):
+`paper_positions.peak_price/below_stop_streak/dca_enabled/dca_used`,
+`trade_strategy_settings.stop_loss_confirm_cycles/dca_trigger_pct`.
+
 ## 다음 단계 (이번 범위 밖)
 
 - Slack 알림 재활성화 여부 결정
 - KIS/토스증권 브로커 구현 — `BrokerClient` 인터페이스는 이미 확장 가능하게 설계됨
 - 실거래(live) 전환 — `UPBIT_ACCESS_KEY`/`SECRET_KEY` 추가, 실주문 브로커 구현 필요
-- 부분매매, 트레일링스탑, 다중 전략, 백테스트
+- 부분매매, 다중 전략, 백테스트

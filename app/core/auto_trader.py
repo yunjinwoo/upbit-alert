@@ -26,6 +26,8 @@ from app.utils.db_manager import (
     get_trade_engine_settings,
     get_approved_candidate_tickers,
     get_trade_strategy_settings,
+    update_position_tracking,
+    mark_position_dca_used,
 )
 
 logger = get_logger()
@@ -44,13 +46,17 @@ def _effective_strategy_config() -> SimpleNamespace:
         TRADE_MAX_CONCURRENT_POSITIONS=s['max_concurrent_positions'],
         TRADE_STOP_LOSS_PCT=s['stop_loss_pct'],
         TRADE_TAKE_PROFIT_PCT=s['take_profit_pct'],
+        TRADE_STOP_LOSS_CONFIRM_CYCLES=s['stop_loss_confirm_cycles'],
+        TRADE_DCA_TRIGGER_PCT=s['dca_trigger_pct'],
     )
 
 
 def _execute(decision, broker):
-    """판단 1건을 실행하고 결과를 trade_order_log에 기록한다. HOLD/SKIP은 주문 없이 기록만 남긴다."""
+    """판단 1건을 실행하고 결과를 trade_order_log에 기록한다. HOLD/SKIP은 주문 없이 기록만 남기되,
+    청산 판단(evaluate_exits)에서 나온 HOLD는 다음 사이클을 위한 트레일링 추적값(peak/연속카운트)을
+    DB에 갱신해야 한다."""
     result = None
-    if decision.action == 'BUY':
+    if decision.action in ('BUY', 'DCA_BUY'):
         result = broker.buy_market(decision.ticker, decision.amount_krw, reason=decision.reason)
     elif decision.action == 'SELL':
         result = broker.sell_market(decision.ticker, decision.qty, reason=decision.reason)
@@ -67,8 +73,13 @@ def _execute(decision, broker):
             cash_balance_after=cash_after, pnl_krw=decision.pnl_krw, pnl_pct=decision.pnl_pct,
         )
 
+        # 물타기 성공 시 1회 제한 표시 + 트레일링 기준점(peak)·연속카운트를 새 평단 시점으로 리셋.
+        # 실패(현금 부족 등)했으면 dca_used를 켜지 않음 — 다음 사이클에 조건이 유지되면 다시 시도됨.
+        if decision.action == 'DCA_BUY' and result.success:
+            mark_position_dca_used(broker.broker_name, broker.mode, decision.ticker, new_peak_price=result.price)
+
         if result.success and Config.TRADE_SLACK_ALERT:
-            side_label = '매수' if decision.action == 'BUY' else '매도'
+            side_label = {'BUY': '매수', 'DCA_BUY': '물타기 매수', 'SELL': '매도'}[decision.action]
             send_slack_msg(
                 f"[모의매매] {side_label} {decision.ticker} {result.qty:.6f}개 @ {result.price:,.0f}원 "
                 f"(총 {result.amount_krw:,.0f}원, {decision.reason})"
@@ -81,6 +92,13 @@ def _execute(decision, broker):
             price=decision.price, qty=decision.qty, amount_krw=decision.amount_krw,
             cash_balance_after=None, pnl_krw=decision.pnl_krw, pnl_pct=decision.pnl_pct,
         )
+        # evaluate_exits에서 나온 HOLD는 peak_price가 채워져 있음(evaluate_entries의 HOLD/SKIP은
+        # None) — 다음 사이클 트레일링 손절 판단을 위해 최고가/연속카운트를 DB에 반영
+        if decision.action == 'HOLD' and decision.peak_price is not None:
+            update_position_tracking(
+                broker.broker_name, broker.mode, decision.ticker,
+                peak_price=decision.peak_price, below_stop_streak=decision.streak or 0,
+            )
 
 
 def run_trade_cycle(broker=None) -> dict:
@@ -123,8 +141,16 @@ def get_dashboard_summary() -> dict:
     account = get_or_create_paper_account(broker.broker_name, broker.mode, Config.TRADE_INITIAL_CASH_KRW)
     positions = get_paper_positions(broker.broker_name, broker.mode)
 
+    # 시세 조회 결과를 캐싱해서 아래 evaluate_exits() 미리보기 계산에 재사용(종목당 네트워크 호출 1회로 유지)
+    price_cache = {}
+
+    def cached_price(ticker):
+        if ticker not in price_cache:
+            price_cache[ticker] = broker.get_current_price(ticker)
+        return price_cache[ticker]
+
     for pos in positions:
-        price = broker.get_current_price(pos['ticker'])
+        price = cached_price(pos['ticker'])
         pos['current_price'] = price
         if price:
             pos['eval_amount'] = price * pos['qty']
@@ -132,6 +158,17 @@ def get_dashboard_summary() -> dict:
             pos['pnl_pct'] = (price - pos['avg_buy_price']) / pos['avg_buy_price'] * 100 if pos['avg_buy_price'] else None
         else:
             pos['eval_amount'] = pos['pnl_krw'] = pos['pnl_pct'] = None
+
+    # 다음 사이클에 실제로 어떤 판단(정상 보유/손절 대기/물타기 대기/손절/익절)이 내려질지 대시보드에
+    # 미리 보여주기 위해, 실행 로직과 완전히 같은 evaluate_exits()를 읽기 전용으로 한 번 더 돌린다
+    # (순수 함수라 DB/주문에 영향 없음 — 실제 갱신은 run_trade_cycle()의 다음 실행에서만 일어남).
+    strategy_cfg = _effective_strategy_config()
+    preview_by_ticker = {d.ticker: d for d in evaluate_exits(positions, cached_price, strategy_cfg)}
+    for pos in positions:
+        preview = preview_by_ticker.get(pos['ticker'])
+        pos['next_action'] = preview.action if preview else None
+        pos['next_reason'] = preview.reason if preview else None
+        pos['next_status'] = preview.status if preview else None
 
     # 매매 대상(진입 후보) — coin_screening_daily 스냅샷 기준, 다음 사이클에 evaluate_entries()가
     # 실제로 보게 될 후보와 동일한 목록. 가격은 스크리닝 시점 값(최대 30분 전)이라 실시간 시세는 아님 —

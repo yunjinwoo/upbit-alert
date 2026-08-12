@@ -454,7 +454,10 @@ def init_db():
         )
     ''')
 
-    # 자동매매 가상 보유 포지션 — 종목당 1행(완전 청산 시 행 삭제, 분할매수/부분청산은 1단계 범위 밖)
+    # 자동매매 가상 보유 포지션 — 종목당 1행(완전 청산 시 행 삭제, 분할매도/보유기간 제한은 범위 밖).
+    # peak_price/below_stop_streak: 트레일링 손절(진입가가 아닌 "보유 중 최고가" 대비 하락률로 손절
+    # 판단) + 연속 확인(노이즈로 바로 손절되지 않게 N사이클 연속 조건 유지 확인)에 사용.
+    # dca_enabled/dca_used: 대시보드 체크박스로 켠 "물타기(추가매수)" — dca_used는 1회 제한 안전장치.
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS paper_positions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -465,6 +468,10 @@ def init_db():
             avg_buy_price REAL NOT NULL,
             entry_at TEXT,
             updated_at TEXT,
+            peak_price REAL,
+            below_stop_streak INTEGER NOT NULL DEFAULT 0,
+            dca_enabled INTEGER NOT NULL DEFAULT 0,
+            dca_used INTEGER NOT NULL DEFAULT 0,
             UNIQUE(broker, mode, ticker)
         )
     ''')
@@ -502,6 +509,9 @@ def init_db():
     # app/config.py의 TRADE_* 상수는 이 테이블에 행이 없을 때만 쓰이는 기본값이고, 대시보드에서
     # 저장하면 이 테이블 값이 우선한다. python main.py trade 프로세스는 재시작 없이 매 사이클마다
     # 이 값을 다시 읽는다(app/core/auto_trader.py 참고).
+    # stop_loss_confirm_cycles: 트레일링 손절 조건이 몇 사이클 연속으로 유지돼야 실제로 매도할지(기본 1=즉시,
+    # 기존 동작과 동일). dca_trigger_pct: 물타기(추가매수) 체크된 포지션이 몇 % 하락(평단 대비)했을 때
+    # 추가매수를 실행할지(기본 10%).
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS trade_strategy_settings (
             id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -510,6 +520,8 @@ def init_db():
             stop_loss_pct REAL NOT NULL,
             take_profit_pct REAL NOT NULL,
             loop_interval_sec INTEGER NOT NULL,
+            stop_loss_confirm_cycles INTEGER NOT NULL DEFAULT 1,
+            dca_trigger_pct REAL NOT NULL DEFAULT 10.0,
             updated_at TEXT
         )
     ''')
@@ -569,6 +581,15 @@ def init_db():
         'ALTER TABLE lottery_recommendations ADD COLUMN num5 INTEGER',
         'ALTER TABLE lottery_recommendations ADD COLUMN num6 INTEGER',
         'ALTER TABLE lottery_recommendations ADD COLUMN bonus INTEGER',
+        # 자동매매: 트레일링 손절(최고가 대비 하락률) + 연속 확인 + 물타기(추가매수) 지원을 위한 컬럼 추가
+        # (trade_strategy_settings/paper_positions는 이미 배포된 테이블이라 CREATE TABLE IF NOT EXISTS만으론
+        # 기존 행에 반영이 안 돼 마이그레이션으로 추가)
+        'ALTER TABLE paper_positions ADD COLUMN peak_price REAL',
+        'ALTER TABLE paper_positions ADD COLUMN below_stop_streak INTEGER NOT NULL DEFAULT 0',
+        'ALTER TABLE paper_positions ADD COLUMN dca_enabled INTEGER NOT NULL DEFAULT 0',
+        'ALTER TABLE paper_positions ADD COLUMN dca_used INTEGER NOT NULL DEFAULT 0',
+        'ALTER TABLE trade_strategy_settings ADD COLUMN stop_loss_confirm_cycles INTEGER NOT NULL DEFAULT 1',
+        'ALTER TABLE trade_strategy_settings ADD COLUMN dca_trigger_pct REAL NOT NULL DEFAULT 10.0',
     ]
     for sql in migrations:
         try:
@@ -3550,19 +3571,75 @@ def get_paper_position(broker: str, mode: str, ticker: str):
     return dict(row) if row else None
 
 
-def upsert_paper_position(broker: str, mode: str, ticker: str, qty: float, avg_buy_price: float, entry_at: str = None):
+def upsert_paper_position(broker: str, mode: str, ticker: str, qty: float, avg_buy_price: float,
+                           entry_at: str = None, peak_price: float = None):
     """가상 포지션 upsert. 신규 진입이면 entry_at을 기록하고, 기존 보유분에 얹는 경우(추가매수)는
-    호출부(PaperBroker)에서 이미 합산한 qty/avg_buy_price를 넘겨받아 그대로 덮어쓴다."""
+    호출부(PaperBroker)에서 이미 합산한 qty/avg_buy_price를 넘겨받아 그대로 덮어쓴다.
+    peak_price를 명시적으로 안 넘기면(None) 기존 행이 있을 때 그 값을 그대로 유지하고(트레일링
+    손절 기준점은 매수/매도로 안 건드림 — update_position_tracking()이 사이클마다 별도 갱신),
+    신규 행이면 avg_buy_price로 시작한다. dca_enabled/dca_used/below_stop_streak은 이 함수가
+    건드리지 않음(set_position_dca_enabled/mark_position_dca_used/update_position_tracking 참고)."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     entry_at = entry_at or timestamp
+
+    if peak_price is None:
+        cursor.execute(
+            'SELECT peak_price FROM paper_positions WHERE broker = ? AND mode = ? AND ticker = ?',
+            (broker, mode, ticker)
+        )
+        existing = cursor.fetchone()
+        peak_price = existing[0] if existing and existing[0] is not None else avg_buy_price
+
     cursor.execute('''
-        INSERT INTO paper_positions (broker, mode, ticker, qty, avg_buy_price, entry_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO paper_positions (broker, mode, ticker, qty, avg_buy_price, entry_at, peak_price, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(broker, mode, ticker) DO UPDATE SET
-            qty=excluded.qty, avg_buy_price=excluded.avg_buy_price, updated_at=excluded.updated_at
-    ''', (broker, mode, ticker, qty, avg_buy_price, entry_at, timestamp))
+            qty=excluded.qty, avg_buy_price=excluded.avg_buy_price,
+            peak_price=excluded.peak_price, updated_at=excluded.updated_at
+    ''', (broker, mode, ticker, qty, avg_buy_price, entry_at, peak_price, timestamp))
+    conn.commit()
+    conn.close()
+
+
+def update_position_tracking(broker: str, mode: str, ticker: str, peak_price: float, below_stop_streak: int):
+    """트레일링 손절 추적값(보유 중 최고가/손절 조건 연속 확인 횟수) 갱신. 매수/매도가 없는(HOLD)
+    사이클에도 매번 호출해서 다음 사이클 판단에 쓰일 상태를 최신화한다."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('''
+        UPDATE paper_positions SET peak_price = ?, below_stop_streak = ?, updated_at = ?
+        WHERE broker = ? AND mode = ? AND ticker = ?
+    ''', (peak_price, below_stop_streak, timestamp, broker, mode, ticker))
+    conn.commit()
+    conn.close()
+
+
+def set_position_dca_enabled(broker: str, mode: str, ticker: str, enabled: bool):
+    """대시보드 체크박스: 이 포지션에 물타기(추가매수) 허용 여부 저장."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('''
+        UPDATE paper_positions SET dca_enabled = ?, updated_at = ?
+        WHERE broker = ? AND mode = ? AND ticker = ?
+    ''', (1 if enabled else 0, timestamp, broker, mode, ticker))
+    conn.commit()
+    conn.close()
+
+
+def mark_position_dca_used(broker: str, mode: str, ticker: str, new_peak_price: float):
+    """물타기(추가매수) 실행 직후 호출 — 1회만 허용되도록 dca_used=1로 표시하고, 트레일링 손절의
+    기준점(peak_price)과 연속 확인 카운트(below_stop_streak)를 새 평단 시점 기준으로 리셋한다."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('''
+        UPDATE paper_positions SET dca_used = 1, peak_price = ?, below_stop_streak = 0, updated_at = ?
+        WHERE broker = ? AND mode = ? AND ticker = ?
+    ''', (new_peak_price, timestamp, broker, mode, ticker))
     conn.commit()
     conn.close()
 
@@ -3637,6 +3714,8 @@ def get_trade_strategy_settings() -> dict:
             'stop_loss_pct': Config.TRADE_STOP_LOSS_PCT,
             'take_profit_pct': Config.TRADE_TAKE_PROFIT_PCT,
             'loop_interval_sec': Config.TRADE_LOOP_INTERVAL_SEC,
+            'stop_loss_confirm_cycles': Config.TRADE_STOP_LOSS_CONFIRM_CYCLES,
+            'dca_trigger_pct': Config.TRADE_DCA_TRIGGER_PCT,
             'updated_at': None,
         }
     return {
@@ -3645,13 +3724,16 @@ def get_trade_strategy_settings() -> dict:
         'stop_loss_pct': row['stop_loss_pct'],
         'take_profit_pct': row['take_profit_pct'],
         'loop_interval_sec': row['loop_interval_sec'],
+        'stop_loss_confirm_cycles': row['stop_loss_confirm_cycles'],
+        'dca_trigger_pct': row['dca_trigger_pct'],
         'updated_at': row['updated_at'],
     }
 
 
 def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_positions: int = None,
                                  stop_loss_pct: float = None, take_profit_pct: float = None,
-                                 loop_interval_sec: int = None) -> dict:
+                                 loop_interval_sec: int = None, stop_loss_confirm_cycles: int = None,
+                                 dca_trigger_pct: float = None) -> dict:
     """매매 전략 파라미터 저장(upsert, 부분 갱신 — None인 필드는 기존값 유지). 저장된 값을 반환."""
     current = get_trade_strategy_settings()
     merged = {
@@ -3660,23 +3742,29 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
         'stop_loss_pct': stop_loss_pct if stop_loss_pct is not None else current['stop_loss_pct'],
         'take_profit_pct': take_profit_pct if take_profit_pct is not None else current['take_profit_pct'],
         'loop_interval_sec': loop_interval_sec if loop_interval_sec is not None else current['loop_interval_sec'],
+        'stop_loss_confirm_cycles': stop_loss_confirm_cycles if stop_loss_confirm_cycles is not None else current['stop_loss_confirm_cycles'],
+        'dca_trigger_pct': dca_trigger_pct if dca_trigger_pct is not None else current['dca_trigger_pct'],
     }
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     cursor.execute('''
         INSERT INTO trade_strategy_settings
-            (id, max_position_krw, max_concurrent_positions, stop_loss_pct, take_profit_pct, loop_interval_sec, updated_at)
-        VALUES (1, ?, ?, ?, ?, ?, ?)
+            (id, max_position_krw, max_concurrent_positions, stop_loss_pct, take_profit_pct,
+             loop_interval_sec, stop_loss_confirm_cycles, dca_trigger_pct, updated_at)
+        VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             max_position_krw=excluded.max_position_krw,
             max_concurrent_positions=excluded.max_concurrent_positions,
             stop_loss_pct=excluded.stop_loss_pct,
             take_profit_pct=excluded.take_profit_pct,
             loop_interval_sec=excluded.loop_interval_sec,
+            stop_loss_confirm_cycles=excluded.stop_loss_confirm_cycles,
+            dca_trigger_pct=excluded.dca_trigger_pct,
             updated_at=excluded.updated_at
     ''', (merged['max_position_krw'], merged['max_concurrent_positions'], merged['stop_loss_pct'],
-          merged['take_profit_pct'], merged['loop_interval_sec'], timestamp))
+          merged['take_profit_pct'], merged['loop_interval_sec'], merged['stop_loss_confirm_cycles'],
+          merged['dca_trigger_pct'], timestamp))
     conn.commit()
     conn.close()
     merged['updated_at'] = timestamp

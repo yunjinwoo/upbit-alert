@@ -50,9 +50,14 @@
         .pnl-neg { color: #1d4ed8; font-weight: 600; }
         .decision-badge { font-size: 0.7rem; font-weight: 700; padding: 2px 8px; border-radius: 10px; }
         .decision-BUY { background: #fee2e2; color: #b91c1c; }
+        .decision-DCA_BUY { background: #f3e8ff; color: #7e22ce; }
         .decision-SELL { background: #dbeafe; color: #1d4ed8; }
         .decision-HOLD { background: #f1f5f9; color: #64748b; }
         .decision-SKIP { background: #f1f5f9; color: #94a3b8; }
+        .status-badge { font-size: 0.68rem; font-weight: 700; padding: 2px 7px; border-radius: 10px; white-space: nowrap; }
+        .status-stop_pending { background: #fef3c7; color: #92400e; }
+        .status-dca_pending { background: #dbeafe; color: #1d4ed8; }
+        .status-dca_done { background: #f3e8ff; color: #7e22ce; }
         .empty-val { color: #cbd5e1; }
         .loading-row td { text-align: center; color: #94a3b8; padding: 24px; }
     </style>
@@ -101,6 +106,14 @@
                 <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">매매 루프 주기(초)</label>
                 <input type="number" id="setLoopInterval" class="form-control form-control-sm" style="width:110px" min="10" step="1">
             </div>
+            <div>
+                <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">손절 연속확인 사이클수</label>
+                <input type="number" id="setStopConfirm" class="form-control form-control-sm" style="width:110px" min="1" step="1">
+            </div>
+            <div>
+                <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">물타기 트리거(%)</label>
+                <input type="number" id="setDcaTrigger" class="form-control form-control-sm" style="width:110px" min="0.1" step="0.1">
+            </div>
             <button class="btn-search" onclick="saveStrategySettings()">저장</button>
             <span id="settingsSavedMsg" class="text-muted" style="font-size:0.76rem"></span>
         </div>
@@ -108,6 +121,11 @@
             * 저장하면 DB에 즉시 반영되고, <code>python main.py trade</code> 프로세스가 재시작 없이 다음 사이클부터
             새 값을 적용합니다(루프 주기 자체도 다음 사이클부터 바뀐 값으로 동작). 이미 보유 중인 포지션의
             손절/익절 판단에도 다음 사이클부터 새 기준이 적용됩니다.
+            <br>* <b>손절 기준은 진입가가 아니라 "보유 중 최고가" 대비 하락률(트레일링)</b>입니다.
+            <b>손절 연속확인 사이클수</b>는 그 조건이 몇 번 연속으로 유지돼야 실제 매도할지(1=즉시,
+            한 캔들 노이즈로 바로 잘리는 걸 완화하려면 2 이상). <b>물타기 트리거(%)</b>는 물타기 체크된
+            포지션이 손절 조건까지 충족된 뒤에도, 평단 대비 이 %까지는 매도 대신 대기했다가 도달 시
+            1종목당 매수금액만큼 추가매수(1회 한정)하는 기준입니다 — 아래 "보유 포지션" 표에서 종목별로 켤 수 있습니다.
         </div>
     </div>
 
@@ -129,15 +147,26 @@
                         <th>수량</th>
                         <th>평단가</th>
                         <th>현재가</th>
+                        <th>최고가</th>
                         <th>평가금액</th>
                         <th>평가손익</th>
+                        <th style="text-align:center">상태</th>
+                        <th style="text-align:center">물타기</th>
                         <th>진입시각</th>
                     </tr>
                 </thead>
                 <tbody id="positionsBody">
-                    <tr class="loading-row"><td colspan="7">로딩 중...</td></tr>
+                    <tr class="loading-row"><td colspan="10">로딩 중...</td></tr>
                 </tbody>
             </table>
+        </div>
+        <div class="mt-2 text-muted" style="font-size:0.72rem">
+            * <b>상태</b>는 다음 사이클에 실제로 어떤 판단이 내려질지 미리 계산해 보여주는 값입니다(지금 당장
+            실행되는 건 아님). 🟡 손절 대기중 = 트레일링 손절 조건은 충족했지만 연속확인 사이클이 안 채워짐 /
+            🔵 물타기 대기중 = 연속확인은 끝났지만 물타기 트리거(%)까지 대기 중 / 🟣 물타기 완료 = 이미 1회
+            추가매수해서 평단이 조정됨(더는 물타기 안 함, 이후엔 일반 손절 적용).
+            <b>물타기 체크박스</b>를 켜면 손절 직전에 곧바로 팔지 않고 한 번 추가매수를 기다립니다 — 자세한
+            내용은 상단 "매매 기준 설정" 안내 참고.
         </div>
     </div>
 
@@ -243,6 +272,15 @@
         return `https://upbit.com/exchange?code=CRIX.UPBIT.${ticker}`;
     }
 
+    function positionStatusBadge(pos) {
+        if (pos.dca_used) return '<span class="status-badge status-dca_done">🟣 물타기 완료</span>';
+        if (pos.next_status === 'stop_pending') return '<span class="status-badge status-stop_pending">🟡 손절 대기중</span>';
+        if (pos.next_status === 'dca_pending') return '<span class="status-badge status-dca_pending">🔵 물타기 대기중</span>';
+        if (pos.next_action === 'SELL') return '<span class="status-badge status-stop_pending">🔴 다음 사이클 매도 예정</span>';
+        if (pos.next_action === 'DCA_BUY') return '<span class="status-badge status-dca_pending">🔵 다음 사이클 물타기 예정</span>';
+        return '<span class="empty-val">정상</span>';
+    }
+
     function coinLink(ticker, label) {
         return `<a href="${upbitUrl(ticker)}" target="_blank" rel="noopener" style="color:inherit; text-decoration:none" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${label}</a>`;
     }
@@ -288,13 +326,20 @@
                         <td>${fmtQty(p.qty)}</td>
                         <td>${fmtKrw(p.avg_buy_price)}</td>
                         <td>${fmtKrw(p.current_price)}</td>
+                        <td>${fmtKrw(p.peak_price)}</td>
                         <td>${fmtKrw(p.eval_amount)}</td>
                         <td>${pnlSpan(p.pnl_krw, p.pnl_pct)}</td>
+                        <td style="text-align:center">${positionStatusBadge(p)}</td>
+                        <td style="text-align:center">
+                            <input type="checkbox" ${p.dca_enabled ? 'checked' : ''} ${p.dca_used ? 'disabled' : ''}
+                                   title="${p.dca_used ? '이미 1회 물타기를 완료해 더 켤 수 없습니다' : '체크하면 손절 직전 물타기 트리거까지 대기 후 1회 추가매수'}"
+                                   onchange="toggleDca('${p.ticker}', this)">
+                        </td>
                         <td>${p.entry_at || '—'}</td>
                     </tr>
                 `).join('');
             } else {
-                posBody.innerHTML = '<tr class="loading-row"><td colspan="7">보유 중인 포지션이 없습니다.</td></tr>';
+                posBody.innerHTML = '<tr class="loading-row"><td colspan="10">보유 중인 포지션이 없습니다.</td></tr>';
             }
 
             document.getElementById('selectiveModeBadge').style.display = json.candidates_filtered ? 'inline-block' : 'none';
@@ -344,13 +389,13 @@
                 ordBody.innerHTML = '<tr class="loading-row"><td colspan="8">아직 기록된 매매 판단이 없습니다. `python main.py trade`가 실행 중인지 확인하세요.</td></tr>';
             }
         } catch (e) {
-            posBody.innerHTML = `<tr class="loading-row"><td colspan="7" class="text-danger">오류: ${e.message}</td></tr>`;
+            posBody.innerHTML = `<tr class="loading-row"><td colspan="10" class="text-danger">오류: ${e.message}</td></tr>`;
             candBody.innerHTML = `<tr class="loading-row"><td colspan="7" class="text-danger">오류: ${e.message}</td></tr>`;
             ordBody.innerHTML = `<tr class="loading-row"><td colspan="8" class="text-danger">오류: ${e.message}</td></tr>`;
         }
     }
 
-    const SETTINGS_INPUT_IDS = ['setMaxPosition', 'setMaxPositions', 'setStopLoss', 'setTakeProfit', 'setLoopInterval'];
+    const SETTINGS_INPUT_IDS = ['setMaxPosition', 'setMaxPositions', 'setStopLoss', 'setTakeProfit', 'setLoopInterval', 'setStopConfirm', 'setDcaTrigger'];
 
     function populateSettingsInputs(settings) {
         // 사용자가 입력창 하나를 타이핑 중인 동안엔 이번 새로고침으로 값을 덮어쓰지 않음
@@ -360,6 +405,8 @@
         document.getElementById('setStopLoss').value = settings.stop_loss_pct ?? '';
         document.getElementById('setTakeProfit').value = settings.take_profit_pct ?? '';
         document.getElementById('setLoopInterval').value = settings.loop_interval_sec ?? '';
+        document.getElementById('setStopConfirm').value = settings.stop_loss_confirm_cycles ?? '';
+        document.getElementById('setDcaTrigger').value = settings.dca_trigger_pct ?? '';
     }
 
     async function saveStrategySettings() {
@@ -369,6 +416,8 @@
             stop_loss_pct: Number(document.getElementById('setStopLoss').value),
             take_profit_pct: Number(document.getElementById('setTakeProfit').value),
             loop_interval_sec: Number(document.getElementById('setLoopInterval').value),
+            stop_loss_confirm_cycles: Number(document.getElementById('setStopConfirm').value),
+            dca_trigger_pct: Number(document.getElementById('setDcaTrigger').value),
         };
         const msg = document.getElementById('settingsSavedMsg');
         msg.textContent = '저장 중...';
@@ -386,6 +435,25 @@
         } catch (e) {
             msg.textContent = '저장 실패: ' + e.message;
             msg.className = 'text-danger';
+        }
+    }
+
+    async function toggleDca(ticker, checkbox) {
+        const nextEnabled = checkbox.checked;
+        checkbox.disabled = true;
+        try {
+            const res = await fetch('api/auto-trade/positions/dca', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ticker, enabled: nextEnabled }),
+            });
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+            await load(); // 상태 배지 등 최신화
+        } catch (e) {
+            alert('물타기 설정 저장 실패: ' + e.message);
+            checkbox.checked = !nextEnabled;
+            checkbox.disabled = false;
         }
     }
 

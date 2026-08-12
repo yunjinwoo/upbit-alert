@@ -69,7 +69,9 @@ class Config:
     TRADE_INITIAL_CASH_KRW = 1_000_000    # 가상 계좌 초기 자본금
     TRADE_MAX_POSITION_KRW = 100_000      # 1종목당 매수 금액(고정 사이징, 분할매수 없음)
     TRADE_MAX_CONCURRENT_POSITIONS = 5    # 동시 보유 가능 종목 수
-    TRADE_STOP_LOSS_PCT = 5.0             # 손절 기준(%)
-    TRADE_TAKE_PROFIT_PCT = 10.0          # 익절 기준(%)
+    TRADE_STOP_LOSS_PCT = 5.0             # 트레일링 손절 기준(%) — 진입가가 아닌 "보유 중 최고가" 대비 하락률
+    TRADE_TAKE_PROFIT_PCT = 10.0          # 익절 기준(%, 평단 대비)
     TRADE_LOOP_INTERVAL_SEC = 300         # 매매 판단 루프 주기(초)
+    TRADE_STOP_LOSS_CONFIRM_CYCLES = 1    # 트레일링 손절 조건이 몇 사이클 연속 유지돼야 실제 매도할지(1=즉시)
+    TRADE_DCA_TRIGGER_PCT = 10.0          # 물타기(추가매수, 포지션별 체크박스로 켠 경우) 트리거 — 평단 대비 하락률(%)
     TRADE_SLACK_ALERT = False             # 모의 체결 시 "[모의매매]" 접두어로 Slack 알림 발송 여부 — 우선 비활성화(추후 필요 시 True로 전환)
