@@ -37,6 +37,9 @@ from app.utils.db_manager import (
     get_top_gainers_export, sync_upsert_top_gainers,
     get_quick_links, add_quick_link, delete_quick_link,
     get_coin_screening,
+    set_trade_engine_enabled,
+    set_candidate_approval,
+    set_trade_strategy_settings,
     save_powerball_rounds, get_powerball_rounds, delete_powerball_round,
     add_powerball_favorite, get_powerball_favorites, delete_powerball_favorite,
     save_lotto645_rounds, get_lotto645_rounds, delete_lotto645_round,
@@ -61,6 +64,7 @@ from app.core.stock_monitor import (
     SECTOR_NAMES,
 )
 from app.core.upbit_market_analysis import run_coin_screening
+from app.core.auto_trader import get_dashboard_summary
 from app.config import Config
 import json
 import os
@@ -586,6 +590,91 @@ def fetch_coin_screening_api():
         return jsonify({"status": "success", "message": f"{count}개 종목 스크리닝 완료"})
     except Exception as e:
         return jsonify({"status": "error", "message": f"코인 스크리닝 수집 중 오류 발생: {str(e)}"}), 500
+
+@app.route('/auto-trade')
+def auto_trade_view():
+    """업비트 자동매매(모의) 대시보드 — 읽기 전용. 매매 판단/실행은 별도 프로세스(python main.py trade)에서만 발생."""
+    return render_template('auto_trade.html', active_page='auto_trade')
+
+@app.route('/api/auto-trade/summary', methods=['GET'])
+def get_auto_trade_summary_api():
+    """가상 계좌 잔고/보유 포지션(현재가·평가손익 포함)/진입 후보(매매 대상 코인)/최근 매매 로그/엔진 실행 여부/
+    매매 전략 파라미터(settings)를 JSON으로 반환합니다 (읽기 전용, 주문 실행 없음)."""
+    try:
+        data = get_dashboard_summary()
+        return jsonify({'status': 'success', **data})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/auto-trade/toggle', methods=['POST'])
+def toggle_auto_trade_api():
+    """자동매매 엔진 실행/일시중지 토글. 실행 중인 `python main.py trade` 프로세스가 다음 사이클(최대
+    TRADE_LOOP_INTERVAL_SEC초 이내)마다 이 값을 확인해 반영하므로 재시작이 필요 없습니다."""
+    body = request.get_json(silent=True) or {}
+    enabled = bool(body.get('enabled'))
+    try:
+        set_trade_engine_enabled(enabled)
+        return jsonify({'status': 'success', 'enabled': enabled})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/auto-trade/candidates/approve', methods=['POST'])
+def set_candidate_approval_api():
+    """매매 대상 코인 체크박스 상태 저장. 체크된 종목이 하나라도 있으면 다음 사이클부터
+    그 종목들만 신규 진입 대상이 되고(기존 보유/청산 로직에는 영향 없음), 전부 체크 해제하면
+    다시 전체 후보를 대상으로 합니다. body: {ticker: str, approved: bool}"""
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip()
+    approved = bool(body.get('approved'))
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    try:
+        set_candidate_approval('upbit', 'paper', ticker, approved)
+        return jsonify({'status': 'success', 'ticker': ticker, 'approved': approved})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/auto-trade/settings', methods=['POST'])
+def set_trade_strategy_settings_api():
+    """매매 전략 파라미터(1종목당 매수금액/최대 동시보유/손절·익절 기준/루프 주기) 저장.
+    실행 중인 `python main.py trade` 프로세스가 다음 사이클부터 새 값을 적용하므로 재시작이 필요 없습니다.
+    body는 아래 필드 중 바꿀 것만 보내면 됩니다(부분 갱신):
+    {max_position_krw, max_concurrent_positions, stop_loss_pct, take_profit_pct, loop_interval_sec}"""
+    body = request.get_json(silent=True) or {}
+    try:
+        kwargs = {}
+        if 'max_position_krw' in body:
+            v = float(body['max_position_krw'])
+            if v <= 0:
+                raise ValueError('1종목당 매수금액은 0보다 커야 합니다.')
+            kwargs['max_position_krw'] = v
+        if 'max_concurrent_positions' in body:
+            v = int(body['max_concurrent_positions'])
+            if v <= 0:
+                raise ValueError('최대 동시보유 종목수는 1 이상이어야 합니다.')
+            kwargs['max_concurrent_positions'] = v
+        if 'stop_loss_pct' in body:
+            v = float(body['stop_loss_pct'])
+            if v <= 0:
+                raise ValueError('손절 기준(%)은 0보다 커야 합니다.')
+            kwargs['stop_loss_pct'] = v
+        if 'take_profit_pct' in body:
+            v = float(body['take_profit_pct'])
+            if v <= 0:
+                raise ValueError('익절 기준(%)은 0보다 커야 합니다.')
+            kwargs['take_profit_pct'] = v
+        if 'loop_interval_sec' in body:
+            v = int(body['loop_interval_sec'])
+            if v < 10:
+                raise ValueError('매매 루프 주기는 최소 10초 이상이어야 합니다.')
+            kwargs['loop_interval_sec'] = v
+
+        settings = set_trade_strategy_settings(**kwargs)
+        return jsonify({'status': 'success', 'settings': settings})
+    except (ValueError, TypeError) as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/market-cap')
 def market_cap_view():
