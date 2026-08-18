@@ -15,6 +15,7 @@ from app.config import Config
 from app.utils.logger import get_logger
 from app.utils.slack import send_slack_msg
 from app.core.brokers.paper_broker import PaperBroker
+from app.core.brokers.upbit_account import get_real_krw_balance
 from app.core.trade_strategy import evaluate_entries, evaluate_exits
 from app.utils.db_manager import (
     get_or_create_paper_account,
@@ -252,11 +253,16 @@ def get_dashboard_summary() -> dict:
         'ma200_near_pct': Config.COIN_MA200_NEAR_PCT,
     }
 
+    # 실제 업비트 계좌 현금 잔고(읽기 전용, 참고용) — 위 account['cash_balance']는 여전히
+    # 모의매매용 가상 원장이며, 이 값은 매매 판단/사이징에 전혀 쓰이지 않는다.
+    real_krw_balance = get_real_krw_balance()
+
     return {
         'account': account, 'positions': positions,
         'candidates': candidates, 'candidates_filtered': candidates_filtered,
         'engine_enabled': engine_enabled, 'settings': strategy_settings,
         'conditions': condition_settings, 'screening_thresholds': screening_thresholds,
+        'real_krw_balance': real_krw_balance,
     }
 
 

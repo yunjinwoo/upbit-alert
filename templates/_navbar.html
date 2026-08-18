@@ -116,7 +116,10 @@
                 </ul>
             </div>
 
-            <a href="{{ url_for('logout_view') }}" class="nav-link ms-auto">로그아웃</a>
+            {% if client_ip %}
+            <span class="nav-link ms-auto text-muted" style="font-size:0.78rem" title="현재 접속 IP — 업비트/토스 Open API 키의 IP 허용 목록 등록 시 참고">🌐 {{ client_ip }}</span>
+            {% endif %}
+            <a href="{{ url_for('logout_view') }}" class="nav-link{{ '' if client_ip else ' ms-auto' }}">로그아웃</a>
         </div>
     </div>
 </nav>

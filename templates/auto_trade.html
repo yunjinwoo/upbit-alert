@@ -253,6 +253,14 @@
         <div class="stat-box"><div class="stat-label">보유 평가금액</div><div class="stat-value" id="stEval">—</div></div>
         <div class="stat-box"><div class="stat-label">총 자산</div><div class="stat-value" id="stTotal">—</div></div>
         <div class="stat-box"><div class="stat-label">누적 손익</div><div class="stat-value" id="stPnl">—</div></div>
+        <div class="stat-box" id="stRealCashBox" style="display:none">
+            <div class="stat-label">실제 업비트 현금 잔고</div>
+            <div class="stat-value" id="stRealCash">—</div>
+        </div>
+    </div>
+    <div class="mt-1 mb-2 text-muted" id="realCashHint" style="font-size:0.72rem; display:none">
+        * "실제 업비트 현금 잔고"는 .env의 업비트 키로 실계좌를 <b>조회만</b> 한 값입니다(참고용). 위 매매는 여전히
+        전부 DB 가상 원장 기준 모의매매이며, 이 값은 매매 판단/사이징에 쓰이지 않습니다.
     </div>
 
     <div class="card-panel">
@@ -489,6 +497,16 @@
             document.getElementById('stTotal').innerHTML = fmtKrw(totalAsset);
             document.getElementById('stPnl').innerHTML = pnlSpan(pnlTotal, account.initial_balance ? (pnlTotal / account.initial_balance * 100) : null);
             document.getElementById('updatedAt').textContent = account.updated_at ? `최근 갱신: ${account.updated_at}` : '';
+
+            // 실제 업비트 현금 잔고 — .env에 키가 없으면 서버가 null을 주고, 이 카드는 숨긴다.
+            if (json.real_krw_balance !== null && json.real_krw_balance !== undefined) {
+                document.getElementById('stRealCash').innerHTML = fmtKrw(json.real_krw_balance);
+                document.getElementById('stRealCashBox').style.display = '';
+                document.getElementById('realCashHint').style.display = '';
+            } else {
+                document.getElementById('stRealCashBox').style.display = 'none';
+                document.getElementById('realCashHint').style.display = 'none';
+            }
 
             const engineToggle = document.getElementById('engineToggle');
             const engineStatusText = document.getElementById('engineStatusText');

@@ -71,9 +71,14 @@ class Config:
     # 로그인 비밀번호를 어디서 발급했는지(로컬/서버)는 별도 설정값 없이 발급 시점에
     # platform.system()/platform.node()로 직접 조회함 — app/api/server.py의 _issue_new_password() 참고
 
+    # 실 계좌 현금 잔고 조회(읽기 전용, 참고용) — .env에 넣어두면 대시보드에 "실제 업비트 현금 잔고"
+    # 카드가 표시된다. 이 키로는 잔고 조회(GET) 외의 호출(주문 등)을 코드 어디에서도 하지 않는다.
+    UPBIT_ACCESS_KEY = os.getenv("UPBIT_ACCESS_KEY")
+    UPBIT_SECRET_KEY = os.getenv("UPBIT_SECRET_KEY")
+
     # 자동매매 1단계 — 업비트 모의매매(dry-run) 전용, 실주문 절대 없음.
     # PaperBroker(app/core/brokers/paper_broker.py)는 시세만 공개 API로 조회하고 잔고/포지션은
-    # DB 가상 원장으로 시뮬레이션하므로, 이 단계에서는 Upbit access/secret 키가 필요 없음.
+    # DB 가상 원장으로 시뮬레이션하므로, 매매 판단/체결 자체에는 Upbit access/secret 키가 필요 없음.
     TRADE_INITIAL_CASH_KRW = 1_000_000    # 가상 계좌 초기 자본금
     TRADE_MAX_POSITION_KRW = 100_000      # 1종목당 매수 금액(고정 사이징, 분할매수 없음)
     TRADE_MAX_CONCURRENT_POSITIONS = 5    # 동시 보유 가능 종목 수
