@@ -62,11 +62,18 @@
         <h2 class="mb-0" style="font-size:1.2rem; font-weight:700; color:#1a1a2e">
             📜 매매 이력 <span class="text-muted" style="font-size:0.8rem; font-weight:400">(BUY/SELL/HOLD/SKIP 전부 기록)</span>
         </h2>
-        <a href="/auto-trade" class="btn-back">← 대시보드로</a>
+        <a href="{{ url_for('auto_trade_view') }}" class="btn-back">← 대시보드로</a>
     </div>
 
     <div class="card-panel mb-3">
         <div class="d-flex flex-wrap align-items-end gap-3">
+            <div>
+                <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">구분</label>
+                <select id="filterMode" class="form-select form-select-sm" style="width:130px">
+                    <option value="paper">모의매매</option>
+                    <option value="live">🔴 실거래</option>
+                </select>
+            </div>
             <div>
                 <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">종목(티커)</label>
                 <input type="text" id="filterTicker" class="form-control form-control-sm" style="width:150px" placeholder="예: KRW-BTC">
@@ -152,14 +159,15 @@
 
     async function loadLogs() {
         const body = document.getElementById('logsBody');
+        const mode = document.getElementById('filterMode').value;
         const ticker = document.getElementById('filterTicker').value.trim().toUpperCase();
         const decision = document.getElementById('filterDecision').value;
-        const params = new URLSearchParams({ limit: PAGE_SIZE, offset: currentOffset });
+        const params = new URLSearchParams({ mode, limit: PAGE_SIZE, offset: currentOffset });
         if (ticker) params.set('ticker', ticker);
         if (decision) params.set('decision', decision);
 
         try {
-            const res = await fetch(`/api/auto-trade/logs?${params.toString()}`);
+            const res = await fetch(`api/auto-trade/logs?${params.toString()}`);
             const json = await res.json();
             if (json.status !== 'success') throw new Error(json.message);
 
@@ -198,6 +206,8 @@
         currentOffset = 0;
         loadLogs();
     }
+
+    document.getElementById('filterMode').addEventListener('change', applyFilter);
 
     function prevPage() {
         currentOffset = Math.max(0, currentOffset - PAGE_SIZE);

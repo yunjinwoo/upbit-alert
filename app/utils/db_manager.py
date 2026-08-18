@@ -715,6 +715,27 @@ def init_db():
             WHERE NOT EXISTS (SELECT 1 FROM trade_strategy_settings WHERE broker = 'upbit')''',
         'DROP TABLE IF EXISTS trade_strategy_settings_v1_upbit_only',
 
+        # 업비트 실거래(live) 자동매매 추가: trade_engine_settings에 mode 컬럼을 넣어 같은 브로커라도
+        # 모의(paper)/실거래(live) 실행 스위치를 독립적으로 켜고 끌 수 있게 한다(UNIQUE를 (broker, mode)로
+        # 재구성). 기존 행은 전부 mode='paper'로 이관 — 이미 새 스키마인 DB에서는 RENAME 대상이 없어
+        # 첫 문장이 실패(무시)하고 나머지는 조용히 스킵됨.
+        'ALTER TABLE trade_engine_settings RENAME TO trade_engine_settings_v2_no_mode',
+        '''CREATE TABLE IF NOT EXISTS trade_engine_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                broker TEXT NOT NULL DEFAULT 'upbit',
+                mode TEXT NOT NULL DEFAULT 'paper',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                updated_at TEXT,
+                UNIQUE(broker, mode)
+            )''',
+        '''INSERT INTO trade_engine_settings (broker, mode, enabled, updated_at)
+            SELECT broker, 'paper', enabled, updated_at FROM trade_engine_settings_v2_no_mode
+            WHERE NOT EXISTS (
+                SELECT 1 FROM trade_engine_settings t2
+                WHERE t2.broker = trade_engine_settings_v2_no_mode.broker AND t2.mode = 'paper'
+            )''',
+        'DROP TABLE IF EXISTS trade_engine_settings_v2_no_mode',
+
         'ALTER TABLE trade_condition_settings RENAME TO trade_condition_settings_v1_upbit_only',
         '''CREATE TABLE IF NOT EXISTS trade_condition_settings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3891,29 +3912,31 @@ def save_trade_order_log(broker: str, mode: str, ticker: str, decision: str, rea
     conn.close()
 
 
-def get_trade_engine_settings(broker: str = 'upbit') -> dict:
-    """자동매매 엔진 실행 여부 조회(브로커별). 행이 없으면(최초 실행) 기본값 실행중(enabled=True)으로 취급."""
+def get_trade_engine_settings(broker: str = 'upbit', mode: str = 'paper') -> dict:
+    """자동매매 엔진 실행 여부 조회(브로커+모드별). 행이 없으면(최초 실행) 모의(paper)는 기존처럼
+    기본값 실행중(enabled=True)으로 취급하지만, 실거래(live)는 반드시 기본값 정지(enabled=False)다 —
+    사용자가 화면에서 명시적으로 한 번 켜기 전까지는 실주문 루프가 저절로 도는 일이 없어야 한다."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute('SELECT * FROM trade_engine_settings WHERE broker = ?', (broker,))
+    cursor.execute('SELECT * FROM trade_engine_settings WHERE broker = ? AND mode = ?', (broker, mode))
     row = cursor.fetchone()
     conn.close()
     if not row:
-        return {'enabled': True}
+        return {'enabled': mode != 'live'}
     return {'enabled': bool(row['enabled'])}
 
 
-def set_trade_engine_enabled(enabled: bool, broker: str = 'upbit') -> None:
-    """자동매매 엔진 실행 여부 저장(upsert, 브로커당 1행)."""
+def set_trade_engine_enabled(enabled: bool, broker: str = 'upbit', mode: str = 'paper') -> None:
+    """자동매매 엔진 실행 여부 저장(upsert, 브로커+모드당 1행)."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     cursor.execute('''
-        INSERT INTO trade_engine_settings (broker, enabled, updated_at)
-        VALUES (?, ?, ?)
-        ON CONFLICT(broker) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at
-    ''', (broker, 1 if enabled else 0, timestamp))
+        INSERT INTO trade_engine_settings (broker, mode, enabled, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(broker, mode) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at
+    ''', (broker, mode, 1 if enabled else 0, timestamp))
     conn.commit()
     conn.close()
 

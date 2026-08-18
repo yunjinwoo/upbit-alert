@@ -71,10 +71,20 @@ class Config:
     # 로그인 비밀번호를 어디서 발급했는지(로컬/서버)는 별도 설정값 없이 발급 시점에
     # platform.system()/platform.node()로 직접 조회함 — app/api/server.py의 _issue_new_password() 참고
 
-    # 실 계좌 현금 잔고 조회(읽기 전용, 참고용) — .env에 넣어두면 대시보드에 "실제 업비트 현금 잔고"
-    # 카드가 표시된다. 이 키로는 잔고 조회(GET) 외의 호출(주문 등)을 코드 어디에서도 하지 않는다.
+    # 업비트 실계좌 연결(잔고 조회 + 실거래). 이 키로는 잔고 조회(GET)와 시장가 매수/매도 주문만
+    # 호출하며, 출금 등 다른 권한은 코드 어디에서도 쓰지 않는다 — 발급 시 출금 권한은 부여하지 말 것.
+    # 자세한 내용은 docs/auto-trade-upbit-live.md 참고.
     UPBIT_ACCESS_KEY = os.getenv("UPBIT_ACCESS_KEY")
     UPBIT_SECRET_KEY = os.getenv("UPBIT_SECRET_KEY")
+    # `python main.py live_balance`(CLI 진단용)에서만 쓰는 코인 필터. 대시보드(/auto-trade)의 실거래
+    # 매매 대상/실행 여부는 이제 전부 화면(DB — trade_candidate_approval mode='live',
+    # trade_engine_settings mode='live')에서 제어하며 이 값을 쓰지 않는다.
+    # 'BTC,ETH,SOL'처럼 마켓 접두어 없이 적어도 'KRW-BTC,KRW-ETH,KRW-SOL'로 정규화한다.
+    UPBIT_SELECTED_TICKERS = [
+        t if t.startswith("KRW-") else f"KRW-{t}"
+        for t in (raw.strip().upper() for raw in os.getenv("UPBIT_SELECTED_TICKERS", "").split(","))
+        if t
+    ]
 
     # 자동매매 1단계 — 업비트 모의매매(dry-run) 전용, 실주문 절대 없음.
     # PaperBroker(app/core/brokers/paper_broker.py)는 시세만 공개 API로 조회하고 잔고/포지션은
