@@ -91,6 +91,19 @@ app.config['APPLICATION_ROOT'] = Config.APP_ROOT
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 CORS(app)
 
+def _get_client_ip():
+    return request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
+
+@app.context_processor
+def inject_client_ip():
+    """모든 템플릿에서 {{ client_ip }}로 접속 IP를 쓸 수 있게 주입 — 업비트/토스 Open API 키의
+    IP 허용 목록에 등록해야 할 주소를 내비게이션 바(로그아웃 옆)에서 바로 확인하기 위함
+    (app/core/brokers/upbit_account.py의 no_authorization_ip 에러 대응)."""
+    try:
+        return {'client_ip': _get_client_ip()}
+    except Exception:
+        return {'client_ip': None}
+
 # API 프로세스는 다른 프로세스(run_stock_monitor 등)의 init_db() 호출 시점에 의존하지 않도록
 # 여기서도 명시적으로 한 번 호출(idempotent) — 특히 아래 login_settings 조회가 모듈 임포트 시점에
 # 바로 실행되므로, 테이블이 아직 없는 상태로 레이스 컨디션에 걸리는 걸 방지
@@ -634,7 +647,9 @@ def get_auto_trade_logs_api():
 def get_auto_trade_summary_api():
     """가상 계좌 잔고/보유 포지션(현재가·평가손익 포함)/진입 후보(매매 대상 코인)/엔진 실행 여부/
     매매 전략 파라미터(settings)를 JSON으로 반환합니다 (읽기 전용, 주문 실행 없음). 매매 판단 로그는
-    포함하지 않음 — /auto-trade/logs 페이지의 /api/auto-trade/logs를 따로 호출할 것."""
+    포함하지 않음 — /auto-trade/logs 페이지의 /api/auto-trade/logs를 따로 호출할 것.
+    real_krw_balance: .env에 UPBIT_ACCESS_KEY/SECRET_KEY가 설정돼 있으면 실계좌 현금 잔고(조회 전용,
+    참고용)를 함께 반환합니다 — 미설정/조회 실패 시 null."""
     try:
         data = get_dashboard_summary()
         return jsonify({'status': 'success', **data})
@@ -1757,9 +1772,6 @@ SYNC_TABLE_MAP = {
     'stock_top_interest_daily':    sync_upsert_top_interest,
     'stock_top_gainers_hourly':    sync_upsert_top_gainers,
 }
-
-def _get_client_ip():
-    return request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
 
 def _verify_sync_token(token):
     """토큰 유효성 검사 (만료 체크)"""
