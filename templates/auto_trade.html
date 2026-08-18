@@ -104,7 +104,7 @@
             <button id="runNowBtn" class="btn-search" onclick="runNow()" title="다음 사이클(최대 매매 루프 주기)을 기다리지 않고, 현재 매매 기준 그대로 지금 즉시 1회 실행">
                 ▶ 지금 즉시 실행
             </button>
-            <a href="/auto-trade/logs" class="btn-search" style="text-decoration:none; display:inline-block" title="매매 판단/체결 이력(BUY/SELL/HOLD/SKIP 전부)을 별도 페이지에서 조회">
+            <a href="{{ url_for('auto_trade_logs_view') }}" class="btn-search" style="text-decoration:none; display:inline-block" title="매매 판단/체결 이력(BUY/SELL/HOLD/SKIP 전부)을 별도 페이지에서 조회">
                 📜 매매 이력
             </a>
             <div class="engine-toggle-box">
@@ -116,6 +116,57 @@
         </div>
     </div>
     <div id="runNowMsg" class="text-end text-muted mb-2" style="font-size:0.76rem"></div>
+
+    <div class="card-panel mb-3" style="border:1px solid #fecaca">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+            <div class="section-title mb-0">🔴 실거래 (업비트 — 진짜 계좌, 실주문 발생)</div>
+            <div class="d-flex align-items-center gap-2 flex-wrap">
+                <span id="liveCashText" class="text-muted" style="font-size:0.78rem; font-weight:600"></span>
+                <input id="liveForceBuyTicker" class="form-control form-control-sm" style="width:120px" placeholder="KRW-BTC">
+                <button id="liveForceBuyBtn" class="btn-search" onclick="liveForceBuy()" title="실거래 승인/스위치와 무관하게 지정한 종목을 지금 즉시 1종목당 매수금액만큼 실매수 — 소액 테스트용">
+                    ⚡ 실거래 강제매수
+                </button>
+                <button id="liveRunNowBtn" class="btn-search" onclick="liveRunNow()" title="다음 사이클을 기다리지 않고 실거래 판단(청산→진입)을 지금 즉시 1회 실행">
+                    ▶ 지금 즉시 실행
+                </button>
+                <div class="engine-toggle-box">
+                    <div class="form-check form-switch mb-0">
+                        <input class="form-check-input" type="checkbox" id="liveEngineToggle" onchange="toggleLiveEngine()" disabled>
+                    </div>
+                    <span id="liveEngineStatusText" class="engine-status-text">확인 중...</span>
+                </div>
+                <button class="btn-search" onclick="loadLiveSummary()">🔄 새로고침</button>
+            </div>
+        </div>
+        <div id="liveRunNowMsg" class="text-end text-muted mb-2" style="font-size:0.76rem"></div>
+        <div class="table-wrap">
+            <table class="trade-table">
+                <thead>
+                    <tr>
+                        <th style="text-align:center">실거래 승인</th>
+                        <th>종목</th>
+                        <th>현재가</th>
+                        <th>보유수량</th>
+                        <th>평단가</th>
+                        <th>평가금액</th>
+                        <th>평가손익</th>
+                        <th style="text-align:center">상태</th>
+                    </tr>
+                </thead>
+                <tbody id="liveCandidatesBody">
+                    <tr class="loading-row"><td colspan="8">로딩 중...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="mt-2 text-muted" style="font-size:0.72rem">
+            * <b>실거래 승인</b> 체크박스를 켠 종목만 매매 대상입니다 — 하나도 안 켰으면 스위치를 켜도 아무 것도 사지 않습니다(안전 기본값).
+            보유 중이면 실제 잔고(수량/평단/평가손익)를, 아직 미보유면 "미보유(매수판단 대상)"으로 표시됩니다.
+            매매 기준(포지션당 매수금액/손절·익절 등)은 위 "⚙️ 매매 기준 설정"을 모의매매와 그대로 공유합니다.
+            <br>* <b>실거래 실행 스위치</b>가 켜져 있어야 <code>python main.py live_trade</code> 프로세스가 다음 사이클에 실주문을 냅니다(기본값 꺼짐).
+            프로세스 자체를 켜고 끄는 스위치가 아니라, 이미 떠 있는 프로세스가 판단/체결을 실행할지 건너뛸지를 결정합니다.
+            <br>* 실거래 매매 이력은 <a href="{{ url_for('auto_trade_logs_view') }}">📜 매매 이력</a> 페이지에서 구분(모의매매/🔴 실거래) 선택해 조회할 수 있습니다.
+        </div>
+    </div>
 
     <div class="card-panel mb-3">
         <div class="section-title mb-2">⚙️ 매매 기준 설정</div>
@@ -343,7 +394,7 @@
         <br>* 상단의 실행/일시중지 스위치는 <code>python main.py trade</code> 프로세스가 떠 있는 상태에서만 의미가 있습니다 —
         프로세스 자체를 켜고 끄는 스위치가 아니라, 이미 떠 있는 프로세스가 다음 사이클(최대 5분 이내)에
         판단/체결을 실행할지 건너뛸지를 결정하는 값입니다.
-        <br>* 매매 판단/체결 이력(BUY/SELL/HOLD/SKIP 전부)은 <a href="/auto-trade/logs">📜 매매 이력</a> 페이지에서 따로 조회할 수 있습니다.
+        <br>* 매매 판단/체결 이력(BUY/SELL/HOLD/SKIP 전부)은 <a href="{{ url_for('auto_trade_logs_view') }}">📜 매매 이력</a> 페이지에서 따로 조회할 수 있습니다.
     </div>
 </div>
 
@@ -473,6 +524,157 @@
 
     function coinLink(ticker, label) {
         return `<a href="${upbitUrl(ticker)}" target="_blank" rel="noopener" style="color:inherit; text-decoration:none" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${label}</a>`;
+    }
+
+    function liveRowHtml(ticker, row, checkboxHtml) {
+        const held = !!row.held;
+        const statusHtml = held
+            ? '<span class="decision-badge decision-HOLD">보유중</span>'
+            : (row.approved
+                ? '<span class="decision-badge decision-SKIP">미보유(매수판단 대상)</span>'
+                : '<span class="empty-val">미승인</span>');
+        return `
+            <tr>
+                <td style="text-align:center">${checkboxHtml}</td>
+                <td>${coinLink(ticker, ticker)}</td>
+                <td>${fmtKrw(row.current_price)}</td>
+                <td>${held ? fmtQty(row.qty) : '<span class="empty-val">—</span>'}</td>
+                <td>${held ? fmtKrw(row.avg_buy_price) : '<span class="empty-val">—</span>'}</td>
+                <td>${held ? fmtKrw(row.eval_amount) : '<span class="empty-val">—</span>'}</td>
+                <td>${held ? pnlSpan(row.eval_amount - row.qty * row.avg_buy_price, row.pnl_pct) : '<span class="empty-val">—</span>'}</td>
+                <td style="text-align:center">${statusHtml}</td>
+            </tr>`;
+    }
+
+    async function loadLiveSummary() {
+        const body = document.getElementById('liveCandidatesBody');
+        try {
+            const res = await fetch('api/auto-trade/live-summary');
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+
+            document.getElementById('liveCashText').textContent = `실제 KRW 현금: ${fmtKrw(json.cash_balance).replace(/<[^>]+>/g, '')}`;
+
+            const engineToggle = document.getElementById('liveEngineToggle');
+            const engineStatusText = document.getElementById('liveEngineStatusText');
+            engineToggle.checked = !!json.engine_enabled;
+            engineToggle.disabled = false;
+            engineStatusText.textContent = json.engine_enabled ? '🔴 실행 중' : '일시중지됨';
+            engineStatusText.className = 'engine-status-text ' + (json.engine_enabled ? 'engine-status-on' : 'engine-status-off');
+
+            const rows = [];
+            for (const c of (json.candidates || [])) {
+                const cb = `<input type="checkbox" ${c.approved ? 'checked' : ''} onchange="toggleLiveCandidateApproval('${c.ticker}', this)">`;
+                rows.push(liveRowHtml(c.ticker, c, cb));
+            }
+            for (const p of (json.extra_positions || [])) {
+                const cb = `<input type="checkbox" ${p.approved ? 'checked' : ''} onchange="toggleLiveCandidateApproval('${p.ticker}', this)">`;
+                rows.push(liveRowHtml(p.ticker, { ...p, held: true }, cb));
+            }
+
+            body.innerHTML = rows.length
+                ? rows.join('')
+                : '<tr class="loading-row"><td colspan="8">진입 후보가 없습니다. (`python main.py coin_analysis`로 스크리닝을 먼저 실행하세요)</td></tr>';
+        } catch (e) {
+            body.innerHTML = `<tr class="loading-row"><td colspan="8" class="text-danger">오류: ${e.message}</td></tr>`;
+        }
+    }
+
+    async function toggleLiveCandidateApproval(ticker, checkbox) {
+        const nextApproved = checkbox.checked;
+        checkbox.disabled = true;
+        try {
+            const res = await fetch('api/auto-trade/live/candidates/approve', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ticker, approved: nextApproved }),
+            });
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+            await loadLiveSummary();
+        } catch (e) {
+            alert('실거래 승인 저장 실패: ' + e.message);
+            checkbox.checked = !nextApproved;
+        } finally {
+            checkbox.disabled = false;
+        }
+    }
+
+    async function toggleLiveEngine() {
+        const engineToggle = document.getElementById('liveEngineToggle');
+        const engineStatusText = document.getElementById('liveEngineStatusText');
+        const nextEnabled = engineToggle.checked;
+        if (nextEnabled && !confirm('실거래 실행 스위치를 켭니다 — 실거래 승인한 종목에 대해 실제 주문이 나갈 수 있습니다. 계속할까요?')) {
+            engineToggle.checked = false;
+            return;
+        }
+        engineToggle.disabled = true;
+        try {
+            const res = await fetch('api/auto-trade/live/toggle', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: nextEnabled }),
+            });
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+            engineStatusText.textContent = json.enabled ? '🔴 실행 중' : '일시중지됨';
+            engineStatusText.className = 'engine-status-text ' + (json.enabled ? 'engine-status-on' : 'engine-status-off');
+        } catch (e) {
+            alert('토글 실패: ' + e.message);
+            engineToggle.checked = !nextEnabled;
+        } finally {
+            engineToggle.disabled = false;
+        }
+    }
+
+    async function liveForceBuy() {
+        const input = document.getElementById('liveForceBuyTicker');
+        const btn = document.getElementById('liveForceBuyBtn');
+        const ticker = input.value.trim().toUpperCase();
+        if (!ticker) { alert('티커를 입력하세요 (예: KRW-BTC)'); return; }
+        if (!confirm(`⚠️ 실거래입니다. ${ticker}를 조건 검사 없이 지금 즉시 실제로 매수할까요? (실거래 스위치가 켜져 있어야 체결됩니다)`)) return;
+        btn.disabled = true;
+        const msg = document.getElementById('liveRunNowMsg');
+        try {
+            const res = await fetch('api/auto-trade/live/force-buy', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ticker }),
+            });
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+            if (json.success) {
+                msg.textContent = `⚡ 실거래 매수 완료 — ${ticker} ${json.qty?.toFixed(6)}개 @ ${Math.round(json.price).toLocaleString()}원`;
+                input.value = '';
+            } else {
+                msg.textContent = `매수 안 됨 — ${json.message}`;
+            }
+            await loadLiveSummary();
+        } catch (e) {
+            msg.textContent = '';
+            alert('실거래 강제매수 실패: ' + e.message);
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    async function liveRunNow() {
+        const btn = document.getElementById('liveRunNowBtn');
+        btn.disabled = true;
+        const msg = document.getElementById('liveRunNowMsg');
+        msg.textContent = '실행 중...';
+        try {
+            const res = await fetch('api/auto-trade/live/run-now', { method: 'POST' });
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+            msg.textContent = `✅ 실거래 1회 실행 완료 — 청산판단 ${json.exit_decisions}건, 진입판단 ${json.entry_decisions}건`;
+            await loadLiveSummary();
+        } catch (e) {
+            msg.textContent = '';
+            alert('실거래 즉시 실행 실패: ' + e.message);
+        } finally {
+            btn.disabled = false;
+        }
     }
 
     async function load() {
@@ -861,6 +1063,7 @@
     }
 
     load();
+    loadLiveSummary();
 </script>
 </body>
 </html>

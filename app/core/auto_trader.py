@@ -15,11 +15,14 @@ from app.config import Config
 from app.utils.logger import get_logger
 from app.utils.slack import send_slack_msg
 from app.core.brokers.paper_broker import PaperBroker
+from app.core.brokers.upbit_live_broker import UpbitLiveBroker
 from app.core.brokers.upbit_account import get_real_krw_balance
 from app.core.trade_strategy import evaluate_entries, evaluate_exits
 from app.utils.db_manager import (
     get_or_create_paper_account,
     get_paper_positions,
+    upsert_paper_position,
+    delete_paper_position,
     get_coin_screening_candidates,
     save_trade_order_log,
     save_job_run_log,
@@ -105,6 +108,33 @@ def _execute(decision, broker):
             )
 
 
+def _reconcile_live_positions(broker) -> None:
+    """실거래(mode='live') 전용 — 실제 업비트 잔고 중 "봇이 관리할 종목"만 paper_positions
+    테이블(mode='live' 행)과 동기화한다.
+
+    broker.get_positions()는 실계좌에 있는 코인을 전부 반환하지만(승인 여부와 무관), 여기서는
+    그중 (a) 현재 실거래 승인 체크된 종목이거나 (b) 이미 이 봇이 사서 추적 중이던 종목만 골라서
+    반영한다 — 그래야 사용자가 이 기능과 무관하게 보유 중인 다른 코인들이 실거래 스위치를 켜는
+    순간 갑자기 손절/익절 대상이 되는 일을 막을 수 있다(대상 범위는 항상 opt-in).
+
+    paper_positions는 원래 모의매매 가상 원장이지만 (broker, mode, ticker) 단위로 저장되므로,
+    트레일링 손절 추적값(peak_price/below_stop_streak)과 물타기 상태(dca_enabled/dca_used/dca_count)를
+    실거래에도 그대로 재사용할 수 있다 — qty/avg_buy_price만 매 사이클 실제 잔고로 덮어쓰고
+    (upsert_paper_position은 peak_price를 명시하지 않으면 기존 값을 보존한다), 나머지 트래킹 필드는
+    건드리지 않는다. 전량 매도돼(수동 매도 포함) 더 이상 안 보이는 종목은 추적 행도 같이 지운다."""
+    real_positions = {p.ticker: p for p in broker.get_positions() if p.qty > 0}
+    approved_tickers = get_approved_candidate_tickers(broker.broker_name, broker.mode)
+    tracked_tickers = {row['ticker'] for row in get_paper_positions(broker.broker_name, broker.mode)}
+    in_scope = approved_tickers | tracked_tickers
+
+    for ticker in in_scope:
+        pos = real_positions.get(ticker)
+        if pos:
+            upsert_paper_position(broker.broker_name, broker.mode, ticker, pos.qty, pos.avg_buy_price)
+        else:
+            delete_paper_position(broker.broker_name, broker.mode, ticker)
+
+
 def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
     """1사이클: 보유 포지션 청산 판단 → 진입 후보 매수 판단 → 전부 실행/기록.
 
@@ -117,7 +147,11 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
     result = {'exit_decisions': 0, 'entry_decisions': 0}
     try:
         broker = broker or PaperBroker()
+        is_live = broker.mode == 'live'
         strategy_cfg = _effective_strategy_config()  # 매 사이클마다 새로 읽어 대시보드 설정 변경을 즉시 반영
+
+        if is_live:
+            _reconcile_live_positions(broker)  # 실제 잔고 → paper_positions(mode='live') 트래킹 행 동기화
 
         # ① 청산 판단 (손절/익절) — 먼저 처리해 현금을 회수한 뒤 진입 판단에 반영
         positions = get_paper_positions(broker.broker_name, broker.mode)
@@ -125,17 +159,26 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
         for decision in exit_decisions:
             _execute(decision, broker)
 
+        if is_live:
+            _reconcile_live_positions(broker)  # 방금 청산 실행분을 반영(수량 변화/전량 매도 등)
+
         # ② 진입 판단 (신규 매수) — 청산 반영된 최신 잔고/포지션으로 재조회
         positions = get_paper_positions(broker.broker_name, broker.mode)
-        account = get_or_create_paper_account(broker.broker_name, broker.mode, Config.TRADE_INITIAL_CASH_KRW)
+        if is_live:
+            account = {'cash_balance': broker.get_cash_balance()}  # 가상 원장이 아니라 실제 KRW 잔고
+        else:
+            account = get_or_create_paper_account(broker.broker_name, broker.mode, Config.TRADE_INITIAL_CASH_KRW)
         candidates = get_coin_screening_candidates()
 
         # 대시보드에서 특정 종목만 체크(수동 승인)했다면 그 종목만 진입 대상으로 좁힌다.
-        # 아무것도 체크 안 했으면(빈 집합) 기존처럼 전체 후보를 대상으로 함 — 즉 화이트리스트가
-        # "비어있으면 무제한", "하나라도 있으면 그것만"인 opt-in 필터.
+        # 모의매매는 아무것도 체크 안 했으면(빈 집합) 기존처럼 전체 후보를 대상으로 하지만,
+        # 실거래는 반대로 안전 기본값을 쓴다 — 승인한 종목이 하나도 없으면 후보가 아무리 많아도
+        # 절대 매수하지 않는다(opt-in 화이트리스트 필수, "체크 안 했는데 전체 매수"는 실거래에서 금지).
         approved_tickers = get_approved_candidate_tickers(broker.broker_name, broker.mode)
         if approved_tickers:
             candidates = [c for c in candidates if c['ticker'] in approved_tickers]
+        elif is_live:
+            candidates = []
 
         # 정밀 매수조건(일봉/5분봉/1분봉) — entry_condition_checker.py가 별도 루프로 캐시해둔 결과만
         # 읽는다(여기서 직접 캔들을 재조회하지 않음). "정밀검사" 체크된 종목만 이 결과로 추가 게이팅됨.
@@ -148,6 +191,9 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
         )
         for decision in entry_decisions:
             _execute(decision, broker)
+
+        if is_live:
+            _reconcile_live_positions(broker)  # 방금 신규 매수/물타기 체결분을 트래킹 행에 반영
 
         result = {
             'exit_decisions': len(exit_decisions),
@@ -266,6 +312,66 @@ def get_dashboard_summary() -> dict:
     }
 
 
+def get_live_dashboard_summary() -> dict:
+    """/auto-trade 대시보드의 "🔴 실거래" 패널용 읽기 전용 요약 — 진짜 업비트 계좌(UpbitLiveBroker)를
+    조회만 하고 매매 판단/주문 실행은 절대 하지 않는다. 화면에서 "실거래 승인" 체크한 후보 코인마다
+    실제로 보유 중이면 잔고(수량/평단/현재가/평가손익)를, 아직 미보유면 다음 사이클에 매수 판단
+    대상이 된다는 걸 알 수 있게 held=False로 표시한다."""
+    broker = UpbitLiveBroker()
+    cash_balance = broker.get_cash_balance()
+    real_positions = {p.ticker: p for p in broker.get_positions() if p.qty > 0}
+
+    approved_tickers = get_approved_candidate_tickers(broker.broker_name, broker.mode)
+    # 이 봇과 무관하게 보유 중인 다른 코인들(실거래 기능과 상관없이 원래 갖고 있던 코인)까지
+    # 화면에 다 나열하면 진짜 매매 대상이 뭔지 헷갈리므로, "승인했거나 이미 봇이 추적 중인" 종목만
+    # extra_positions 후보로 본다 — _reconcile_live_positions()가 관리하는 범위와 동일한 기준.
+    tracked_tickers = {row['ticker'] for row in get_paper_positions(broker.broker_name, broker.mode)}
+    in_scope_tickers = approved_tickers | tracked_tickers
+    candidates = get_coin_screening_candidates()
+    for cand in candidates:
+        ticker = cand['ticker']
+        cand['approved'] = ticker in approved_tickers
+        cand['candidate_reason'] = 'breakout_4h' if cand.get('breakout_4h') else 'near_ma200+above_cloud'
+        pos = real_positions.get(ticker)
+        if pos:
+            price = broker.get_current_price(ticker)
+            cand['held'] = True
+            cand['qty'] = pos.qty
+            cand['avg_buy_price'] = pos.avg_buy_price
+            cand['current_price'] = price
+            cand['eval_amount'] = price * pos.qty if price else None
+            cand['pnl_pct'] = (price - pos.avg_buy_price) / pos.avg_buy_price * 100 if price and pos.avg_buy_price else None
+        else:
+            cand['held'] = False
+            cand['qty'] = cand['avg_buy_price'] = cand['current_price'] = cand['eval_amount'] = cand['pnl_pct'] = None
+
+    # 승인했(었)거나 이미 봇이 추적 중인데 오늘 스크리닝 후보 목록엔 없는(예: 예전에 매수해서
+    # 계속 보유 중인) 종목도 화면에서 놓치지 않도록 별도로 붙인다. 봇과 무관한 다른 보유 코인은
+    # in_scope_tickers에 없으므로 여기 나타나지 않는다.
+    candidate_tickers = {c['ticker'] for c in candidates}
+    extra_positions = []
+    for ticker in in_scope_tickers:
+        if ticker in candidate_tickers:
+            continue
+        pos = real_positions.get(ticker)
+        if not pos:
+            continue
+        price = broker.get_current_price(ticker)
+        extra_positions.append({
+            'ticker': ticker, 'qty': pos.qty, 'avg_buy_price': pos.avg_buy_price,
+            'current_price': price, 'eval_amount': price * pos.qty if price else None,
+            'pnl_pct': (price - pos.avg_buy_price) / pos.avg_buy_price * 100 if price and pos.avg_buy_price else None,
+            'approved': ticker in approved_tickers,
+        })
+
+    return {
+        'engine_enabled': get_trade_engine_settings(broker.broker_name, broker.mode)['enabled'],
+        'cash_balance': cash_balance,
+        'candidates': candidates,
+        'extra_positions': extra_positions,
+    }
+
+
 def force_buy(ticker: str, broker=None) -> dict:
     """대시보드 "강제 매수" 버튼 — 진입 후보 여부/정밀조건/최대 동시보유 등 모든 필터를 건너뛰고
     "1종목당 매수금액" 만큼 지금 즉시 시장가 매수(모의)한다. 이미 보유 중이면 buy_market이 알아서
@@ -313,6 +419,38 @@ def run_auto_trade_loop(interval_sec: int = None):
             run_trade_cycle(trigger_type='auto')  # job_run_log 기록은 run_trade_cycle 내부에서 처리
         except Exception as e:
             logger.error(f"자동매매 루프 오류: {e}")
+
+        time.sleep(current_interval)
+
+
+def run_live_trade_loop(interval_sec: int = None):
+    """업비트 실거래 자동매매 루프 — python main.py live_trade 로 완전히 별도 프로세스로 실행.
+    run_auto_trade_loop()(모의)와 동일한 패턴이지만 broker=UpbitLiveBroker()로 실제 주문을 내고,
+    실행 on/off는 별도 스위치(trade_engine_settings, mode='live')로 모의매매와 독립적으로 제어된다."""
+    try:
+        broker = UpbitLiveBroker()
+    except RuntimeError as e:
+        logger.error(f"업비트 실거래 엔진을 시작할 수 없습니다: {e}")
+        return
+
+    fixed_interval = interval_sec
+    logger.info(
+        "🔴 업비트 실거래 자동매매 엔진 시작 — 실주문 발생 가능. "
+        "대시보드의 '실거래 실행' 스위치와 실거래 승인 체크박스로 제어."
+    )
+
+    while True:
+        current_interval = fixed_interval or get_trade_strategy_settings()['loop_interval_sec']
+
+        if not get_trade_engine_settings(broker.broker_name, broker.mode)['enabled']:
+            logger.info("⏸️ 실거래 엔진 일시중지 상태 — 이번 사이클 건너뜀 (대시보드에서 다시 켤 수 있음)")
+            time.sleep(current_interval)
+            continue
+
+        try:
+            run_trade_cycle(broker=broker, trigger_type='auto_live')
+        except Exception as e:
+            logger.error(f"실거래 루프 오류: {e}")
 
         time.sleep(current_interval)
 

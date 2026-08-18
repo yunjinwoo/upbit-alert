@@ -69,7 +69,8 @@ from app.core.stock_monitor import (
     SECTOR_NAMES,
 )
 from app.core.upbit_market_analysis import run_coin_screening
-from app.core.auto_trader import get_dashboard_summary, run_trade_cycle, force_buy
+from app.core.auto_trader import get_dashboard_summary, run_trade_cycle, force_buy, get_live_dashboard_summary
+from app.core.brokers.upbit_live_broker import UpbitLiveBroker
 from app.core.toss_auto_trader import (
     get_dashboard_summary as get_toss_dashboard_summary,
     run_trade_cycle as run_toss_trade_cycle,
@@ -629,14 +630,16 @@ def auto_trade_logs_view():
 @app.route('/api/auto-trade/logs', methods=['GET'])
 def get_auto_trade_logs_api():
     """매매 판단/체결 이력을 페이지네이션해서 조회. 쿼리파라미터: limit(기본 50, 최대 200),
-    offset(기본 0), ticker(선택, 예: KRW-BTC), decision(선택, BUY/SELL/HOLD/SKIP/DCA_BUY)."""
+    offset(기본 0), ticker(선택, 예: KRW-BTC), decision(선택, BUY/SELL/HOLD/SKIP/DCA_BUY),
+    mode(선택, 'paper'(기본)/'live' — 실거래 이력을 보려면 mode=live)."""
     try:
         limit = min(int(request.args.get('limit', 50)), 200)
         offset = max(int(request.args.get('offset', 0)), 0)
         ticker = (request.args.get('ticker') or '').strip() or None
         decision = (request.args.get('decision') or '').strip() or None
-        orders = get_trade_order_log('upbit', 'paper', limit=limit, offset=offset, ticker=ticker, decision=decision)
-        total = count_trade_order_log('upbit', 'paper', ticker=ticker, decision=decision)
+        mode = (request.args.get('mode') or 'paper').strip() or 'paper'
+        orders = get_trade_order_log('upbit', mode, limit=limit, offset=offset, ticker=ticker, decision=decision)
+        total = count_trade_order_log('upbit', mode, ticker=ticker, decision=decision)
         return jsonify({'status': 'success', 'orders': orders, 'total': total, 'limit': limit, 'offset': offset})
     except (ValueError, TypeError) as e:
         return jsonify({'status': 'error', 'message': str(e)}), 400
@@ -655,6 +658,88 @@ def get_auto_trade_summary_api():
         return jsonify({'status': 'success', **data})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/auto-trade/live-summary', methods=['GET'])
+def get_upbit_live_summary_api():
+    """업비트 실거래 패널용 읽기 전용 요약(진짜 계좌 조회, 주문 없음): 실거래 실행 스위치 상태,
+    실제 KRW 현금 잔고, 매매 대상 후보(체크박스로 "실거래 승인"한 종목은 보유 중이면 잔고를,
+    아니면 미보유(다음 사이클 매수판단 대상)임을 함께 표시). API 키가 없으면 오류를 반환합니다."""
+    if not Config.UPBIT_ACCESS_KEY or not Config.UPBIT_SECRET_KEY:
+        return jsonify({'status': 'error', 'message': '.env에 UPBIT_ACCESS_KEY/UPBIT_SECRET_KEY가 설정되어 있지 않습니다.'}), 400
+    try:
+        data = get_live_dashboard_summary()
+        return jsonify({'status': 'success', **data})
+    except RuntimeError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'실거래 요약 조회 중 오류 발생: {str(e)}'}), 500
+
+@app.route('/api/auto-trade/live/toggle', methods=['POST'])
+def toggle_live_trade_api():
+    """업비트 실거래 실행/일시중지 스위치 — 모의매매 스위치와 완전히 독립적으로 동작합니다.
+    켜져 있어야(그리고 아래 승인 체크박스에 종목이 있어야) `python main.py live_trade` 프로세스가
+    다음 사이클에 실주문을 낼 수 있습니다. 기본값은 꺼짐."""
+    body = request.get_json(silent=True) or {}
+    enabled = bool(body.get('enabled'))
+    try:
+        set_trade_engine_enabled(enabled, 'upbit', 'live')
+        return jsonify({'status': 'success', 'enabled': enabled})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/auto-trade/live/candidates/approve', methods=['POST'])
+def set_live_candidate_approval_api():
+    """실거래 매매 대상 코인 체크박스 상태 저장(모의매매 승인 체크박스와 별도 저장 — mode='live').
+    승인한 종목이 하나도 없으면 실거래 실행 스위치가 켜져 있어도 아무 것도 매수하지 않습니다
+    (실거래는 화이트리스트가 비어있다고 전체 후보를 사는 게 아니라 안전하게 아무 것도 안 삽니다).
+    body: {ticker: str, approved: bool}"""
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip()
+    approved = bool(body.get('approved'))
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    try:
+        set_candidate_approval('upbit', 'live', ticker, approved)
+        return jsonify({'status': 'success', 'ticker': ticker, 'approved': approved})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/auto-trade/live/run-now', methods=['POST'])
+def run_live_trade_now_api():
+    """실거래 1사이클(청산→진입)을 지금 이 요청 안에서 동기적으로 즉시 실행합니다. `python main.py
+    live_trade` 프로세스가 떠 있는지와 무관하게 웹 서버 프로세스에서 직접 실행하며, 실거래 실행
+    스위치가 꺼져 있어도 요청 자체는 실행되지만 UpbitLiveBroker가 주문 단계에서 다시 스위치를
+    확인해 차단합니다(그 사이클의 판단 근거는 trade_order_log에 SKIP으로 남음)."""
+    if not Config.UPBIT_ACCESS_KEY or not Config.UPBIT_SECRET_KEY:
+        return jsonify({'status': 'error', 'message': '.env에 UPBIT_ACCESS_KEY/UPBIT_SECRET_KEY가 설정되어 있지 않습니다.'}), 400
+    try:
+        result = run_trade_cycle(broker=UpbitLiveBroker(), trigger_type='manual_live')
+        return jsonify({'status': 'success', **result})
+    except RuntimeError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'즉시 실행 중 오류 발생: {str(e)}'}), 500
+
+@app.route('/api/auto-trade/live/force-buy', methods=['POST'])
+def force_buy_live_api():
+    """실거래 강제 매수 — 진입 후보 여부와 무관하게 지정한 종목을 "1종목당 매수금액"만큼 지금 즉시
+    시장가로 실매수합니다. 실거래 실행 스위치가 꺼져 있으면 UpbitLiveBroker가 차단합니다.
+    소액 end-to-end 테스트용 진입점. body: {ticker: str}"""
+    if not Config.UPBIT_ACCESS_KEY or not Config.UPBIT_SECRET_KEY:
+        return jsonify({'status': 'error', 'message': '.env에 UPBIT_ACCESS_KEY/UPBIT_SECRET_KEY가 설정되어 있지 않습니다.'}), 400
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip().upper()
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    if not ticker.startswith('KRW-'):
+        ticker = f'KRW-{ticker}'
+    try:
+        result = force_buy(ticker, broker=UpbitLiveBroker())
+        return jsonify({'status': 'success', **result})
+    except RuntimeError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'강제매수 중 오류 발생: {str(e)}'}), 500
 
 @app.route('/api/auto-trade/toggle', methods=['POST'])
 def toggle_auto_trade_api():
