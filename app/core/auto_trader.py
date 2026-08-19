@@ -87,10 +87,19 @@ def _execute(decision, broker):
 
         if result.success and Config.TRADE_SLACK_ALERT:
             side_label = {'BUY': '매수', 'DCA_BUY': '물타기 매수', 'SELL': '매도'}[decision.action]
-            send_slack_msg(
-                f"[모의매매] {side_label} {decision.ticker} {result.qty:.6f}개 @ {result.price:,.0f}원 "
-                f"(총 {result.amount_krw:,.0f}원, {decision.reason})"
-            )
+            mode_label = '🔴 실거래' if broker.mode == 'live' else '모의매매'
+            # 실거래는 주문 직후 체결 확인이 지연되면 price/qty가 아직 비어있을 수 있다
+            # (UpbitLiveBroker._wait_for_fill 타임아웃) — 그 경우 상세 수치 없이 접수 사실만 알린다.
+            if result.price is not None and result.qty is not None:
+                send_slack_msg(
+                    f"[{mode_label}] {side_label} {decision.ticker} {result.qty:.6f}개 @ {result.price:,.0f}원 "
+                    f"(총 {(result.amount_krw or 0):,.0f}원, {decision.reason})"
+                )
+            else:
+                send_slack_msg(
+                    f"[{mode_label}] {side_label} {decision.ticker} 주문 접수됨 (체결 확인 지연 — 총 "
+                    f"{(result.amount_krw or 0):,.0f}원, {decision.reason})"
+                )
     else:
         # HOLD / SKIP — 실주문 없이 판단 근거만 감사로그로 남김
         save_trade_order_log(
