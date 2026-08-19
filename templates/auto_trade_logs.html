@@ -167,7 +167,7 @@
         if (decision) params.set('decision', decision);
 
         try {
-            const res = await fetch(`api/auto-trade/logs?${params.toString()}`);
+            const res = await fetch(`{{ url_for('get_auto_trade_logs_api') }}?${params.toString()}`);
             const json = await res.json();
             if (json.status !== 'success') throw new Error(json.message);
 

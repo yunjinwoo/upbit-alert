@@ -12,6 +12,7 @@ mode='live')로 관리한다 — app/core/auto_trader.py의 get_approved_candida
 
 자세한 배경은 docs/auto-trade-upbit-live.md 참고.
 """
+import time
 from typing import List, Optional
 
 import pyupbit
@@ -106,6 +107,46 @@ class UpbitLiveBroker(BrokerClient):
             return "실거래 스위치가 꺼져 있습니다 — 대시보드의 '실거래 실행' 스위치를 켜야 주문이 나갑니다."
         return None
 
+    def _wait_for_fill(self, uuid: str, max_wait_sec: float = 8.0, poll_interval: float = 0.4) -> Optional[dict]:
+        """시장가 주문은 거의 즉시 체결되지만 주문 접수 응답 시점엔 아직 체결 정보(trades)가
+        안 실려 있을 수 있어, 상태가 'done'(또는 'cancel')이 될 때까지 최대 max_wait_sec 동안
+        폴링한다. 시간 내 못 끝나면 마지막으로 조회된 상태를 그대로 반환한다(호출부는 trades가
+        비어있으면 "체결가/체결량 확인 필요"로 처리 — 주문 자체는 이미 나간 상태이므로 실패로
+        취급하지 않는다)."""
+        deadline = time.time() + max_wait_sec
+        order = None
+        while time.time() < deadline:
+            try:
+                order = self._client.get_individual_order(uuid)
+            except Exception as e:
+                logger.error(f"주문 상태 조회 실패(uuid={uuid}): {e}")
+                order = None
+            if isinstance(order, dict) and order.get('state') in ('done', 'cancel'):
+                return order
+            time.sleep(poll_interval)
+        return order
+
+    @staticmethod
+    def _extract_fill(order: Optional[dict]):
+        """주문 조회 결과에서 (평균 체결가, 체결 수량)을 뽑는다. 미체결/조회 실패면 (None, None) —
+        이 경우 주문 자체는 이미 나갔으므로 trade_order_log에는 amount_krw(BUY)/qty(SELL)만
+        남고 price는 비어있게 된다(다음 사이클의 _reconcile_live_positions가 실제 잔고로 정정)."""
+        if not isinstance(order, dict):
+            return None, None
+        trades = order.get('trades') or []
+        try:
+            executed_volume = float(order.get('executed_volume', 0) or 0)
+        except (TypeError, ValueError):
+            executed_volume = 0.0
+        if executed_volume <= 0 or not trades:
+            return None, None
+        try:
+            total_funds = sum(float(t.get('funds', 0) or 0) for t in trades)
+        except (TypeError, ValueError):
+            return None, None
+        avg_price = total_funds / executed_volume if executed_volume else None
+        return avg_price, executed_volume
+
     def buy_market(self, ticker: str, amount_krw: float, reason: str = "") -> OrderResult:
         blocked = self._blocked_reason()
         if blocked:
@@ -117,11 +158,21 @@ class UpbitLiveBroker(BrokerClient):
             return OrderResult(False, ticker, 'BUY', message=message)
         try:
             resp = self._client.buy_market_order(ticker, amount_krw)
-            logger.info(f"[실매수] {ticker} {amount_krw:,.0f}원 — {reason} — 응답: {resp}")
-            return OrderResult(True, ticker, 'BUY', amount_krw=amount_krw, message=reason)
         except Exception as e:
             logger.error(f"[{ticker}] 실매수 주문 실패: {e}")
             return OrderResult(False, ticker, 'BUY', message=str(e))
+        if not isinstance(resp, dict) or 'uuid' not in resp:
+            logger.error(f"[실매수] {ticker} 주문 거부: {resp}")
+            return OrderResult(False, ticker, 'BUY', message=f"주문 거부됨: {resp}")
+
+        filled = self._wait_for_fill(resp['uuid'])
+        price, qty = self._extract_fill(filled)
+        if not qty:
+            logger.warning(f"[실매수] {ticker} 주문 접수됐지만 체결 확인 지연 — uuid={resp['uuid']} (다음 사이클에 실제 잔고로 반영됨)")
+            return OrderResult(True, ticker, 'BUY', amount_krw=amount_krw, message=reason)
+
+        logger.info(f"[실매수] {ticker} {qty:.8f}개 @ {price:,.0f}원 (총 {qty * price:,.0f}원) — {reason}")
+        return OrderResult(True, ticker, 'BUY', price=price, qty=qty, amount_krw=qty * price, message=reason)
 
     def sell_market(self, ticker: str, qty: float, reason: str = "") -> OrderResult:
         blocked = self._blocked_reason()
@@ -135,11 +186,21 @@ class UpbitLiveBroker(BrokerClient):
             return OrderResult(False, ticker, 'SELL', message=message)
         try:
             resp = self._client.sell_market_order(ticker, qty)
-            logger.info(f"[실매도] {ticker} {qty}개 — {reason} — 응답: {resp}")
-            return OrderResult(True, ticker, 'SELL', qty=qty, message=reason)
         except Exception as e:
             logger.error(f"[{ticker}] 실매도 주문 실패: {e}")
             return OrderResult(False, ticker, 'SELL', message=str(e))
+        if not isinstance(resp, dict) or 'uuid' not in resp:
+            logger.error(f"[실매도] {ticker} 주문 거부: {resp}")
+            return OrderResult(False, ticker, 'SELL', message=f"주문 거부됨: {resp}")
+
+        filled = self._wait_for_fill(resp['uuid'])
+        fill_price, filled_qty = self._extract_fill(filled)
+        if not filled_qty:
+            logger.warning(f"[실매도] {ticker} 주문 접수됐지만 체결 확인 지연 — uuid={resp['uuid']} (다음 사이클에 실제 잔고로 반영됨)")
+            return OrderResult(True, ticker, 'SELL', qty=qty, message=reason)
+
+        logger.info(f"[실매도] {ticker} {filled_qty:.8f}개 @ {fill_price:,.0f}원 (총 {filled_qty * fill_price:,.0f}원) — {reason}")
+        return OrderResult(True, ticker, 'SELL', price=fill_price, qty=filled_qty, amount_krw=filled_qty * fill_price, message=reason)
 
 
 def print_selected_balance():
