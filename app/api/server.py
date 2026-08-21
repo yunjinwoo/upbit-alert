@@ -758,6 +758,23 @@ def force_buy_live_api():
     except Exception as e:
         return jsonify({'status': 'error', 'message': f'강제매수 중 오류 발생: {str(e)}'}), 500
 
+@app.route('/api/auto-trade/live/positions/dca', methods=['POST'])
+def set_position_dca_live_api():
+    """실거래 보유 포지션의 물타기(추가매수) 허용 체크박스 상태 저장. 필드 구성은 모의매매의
+    /api/auto-trade/positions/dca와 동일 — 켜두면 트레일링 손절 연속확인이 끝난 뒤 곧바로
+    손절하지 않고 -dca_trigger_pct까지 한 번 더 기다렸다가 실제 추가매수합니다.
+    body: {ticker: str, enabled: bool}"""
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip()
+    enabled = bool(body.get('enabled'))
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    try:
+        set_position_dca_enabled('upbit', 'live', ticker, enabled)
+        return jsonify({'status': 'success', 'ticker': ticker, 'enabled': enabled})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
 @app.route('/api/auto-trade/toggle', methods=['POST'])
 def toggle_auto_trade_api():
     """자동매매 엔진 실행/일시중지 토글. 실행 중인 `python main.py trade` 프로세스가 다음 사이클(최대

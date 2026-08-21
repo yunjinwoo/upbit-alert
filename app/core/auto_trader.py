@@ -21,7 +21,9 @@ from app.core.trade_strategy import evaluate_entries, evaluate_exits
 from app.utils.db_manager import (
     get_or_create_paper_account,
     get_paper_positions,
+    get_paper_position,
     upsert_paper_position,
+    set_position_dca_enabled,
     delete_paper_position,
     get_coin_screening_candidates,
     save_trade_order_log,
@@ -378,6 +380,32 @@ def get_live_dashboard_summary() -> dict:
         else:
             cand['pnl_pct'] = None
 
+    # 보유 중인 종목의 손절/익절/물타기 추적 상태(peak_price/dca_enabled/dca_count)는 paper_positions
+    # 테이블(mode='live')에서 가져온다 — _reconcile_live_positions()/force_buy()가 이 행을 만들어둔다.
+    # 여기서 evaluate_exits()를 한 번 더(읽기 전용) 돌려서 다음 사이클에 실제로 어떤 판단이 내려질지
+    # 미리 보여준다(순수 함수라 DB/주문에 영향 없음).
+    strategy_cfg = _effective_strategy_config()
+    tracking_rows = {row['ticker']: row for row in get_paper_positions(broker.broker_name, broker.mode)}
+
+    def _held_extra_fields(ticker, pos):
+        tracked = tracking_rows.get(ticker)
+        return {
+            'dca_enabled': bool(tracked['dca_enabled']) if tracked else False,
+            'dca_count': tracked['dca_count'] if tracked else 0,
+            'peak_price': tracked['peak_price'] if tracked and tracked.get('peak_price') else pos.avg_buy_price,
+            'below_stop_streak': tracked['below_stop_streak'] if tracked else 0,
+        }
+
+    preview_positions = []
+    for ticker, pos in real_positions.items():
+        if ticker not in in_scope_tickers:
+            continue
+        extra = _held_extra_fields(ticker, pos)
+        preview_positions.append({
+            'ticker': ticker, 'qty': pos.qty, 'avg_buy_price': pos.avg_buy_price, **extra,
+        })
+    preview_by_ticker = {d.ticker: d for d in evaluate_exits(preview_positions, cached_price, strategy_cfg)}
+
     candidates = [c for c in all_candidates if c['ticker'] in watchlist_tickers]
     for cand in candidates:
         ticker = cand['ticker']
@@ -391,9 +419,16 @@ def get_live_dashboard_summary() -> dict:
             cand['current_price'] = price
             cand['eval_amount'] = price * pos.qty if price else None
             cand['pnl_pct'] = (price - pos.avg_buy_price) / pos.avg_buy_price * 100 if price and pos.avg_buy_price else None
+            cand.update(_held_extra_fields(ticker, pos))
+            preview = preview_by_ticker.get(ticker)
+            cand['next_action'] = preview.action if preview else None
+            cand['next_status'] = preview.status if preview else None
         else:
             cand['held'] = False
             cand['qty'] = cand['avg_buy_price'] = cand['current_price'] = cand['eval_amount'] = cand['pnl_pct'] = None
+            cand['dca_enabled'] = False
+            cand['dca_count'] = 0
+            cand['next_action'] = cand['next_status'] = None
 
     # 승인했(었)거나 이미 봇이 추적 중인데 오늘 스크리닝 후보 목록엔 없는(예: 예전에 매수해서
     # 계속 보유 중인) 종목도 화면에서 놓치지 않도록 별도로 붙인다. 봇과 무관한 다른 보유 코인은
@@ -407,11 +442,15 @@ def get_live_dashboard_summary() -> dict:
         if not pos:
             continue
         price = broker.get_current_price(ticker)
+        preview = preview_by_ticker.get(ticker)
         extra_positions.append({
             'ticker': ticker, 'qty': pos.qty, 'avg_buy_price': pos.avg_buy_price,
             'current_price': price, 'eval_amount': price * pos.qty if price else None,
             'pnl_pct': (price - pos.avg_buy_price) / pos.avg_buy_price * 100 if price and pos.avg_buy_price else None,
             'approved': ticker in approved_tickers,
+            'next_action': preview.action if preview else None,
+            'next_status': preview.status if preview else None,
+            **_held_extra_fields(ticker, pos),
         })
 
     return {
@@ -420,6 +459,7 @@ def get_live_dashboard_summary() -> dict:
         'all_candidates': all_candidates,
         'candidates': candidates,
         'extra_positions': extra_positions,
+        'dca_max_count': strategy_cfg.TRADE_DCA_MAX_COUNT,
     }
 
 
@@ -431,6 +471,18 @@ def force_buy(ticker: str, broker=None) -> dict:
     broker = broker or PaperBroker()
     settings = get_trade_strategy_settings()
     result = broker.buy_market(ticker, settings['max_position_krw'], reason='강제매수(수동)')
+
+    # 실거래는 buy_market이 실주문만 내고 DB 추적 행(paper_positions)은 안 건드린다(PaperBroker와
+    # 달리 — buy_market 자체가 이미 가상 원장인 paper와 구조가 다름). 강제매수는 승인/watchlist
+    # 여부와 무관하게 성공할 수 있는데, 추적 행이 없으면 다음 사이클의 _reconcile_live_positions()가
+    # "관리 범위 밖"으로 보고 계속 무시해서 손절/익절/물타기가 영원히 안 걸리는 사고가 난다.
+    # 그래서 성공 시 여기서 실제 잔고를 다시 조회해 즉시 추적 행을 만든다 — "직접 매수하고
+    # 손절/익절/물타기는 자동으로" 워크플로우가 실제로 동작하려면 필수.
+    if result.success and broker.mode == 'live':
+        for pos in broker.get_positions():
+            if pos.ticker == ticker:
+                upsert_paper_position(broker.broker_name, broker.mode, ticker, pos.qty, pos.avg_buy_price)
+                break
 
     final_decision = 'BUY' if result.success else 'SKIP'
     reason = result.message if result.success else f"강제매수(수동) 실패: {result.message}"
