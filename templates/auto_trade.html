@@ -132,10 +132,11 @@
                         <th>평가금액</th>
                         <th>평가손익</th>
                         <th style="text-align:center">상태</th>
+                        <th style="text-align:center">물타기</th>
                     </tr>
                 </thead>
                 <tbody id="liveCandidatesBody">
-                    <tr class="loading-row"><td colspan="8">로딩 중...</td></tr>
+                    <tr class="loading-row"><td colspan="9">로딩 중...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -338,13 +339,30 @@
         return `<a href="${upbitUrl(ticker)}" target="_blank" rel="noopener" style="color:inherit; text-decoration:none" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${label}</a>`;
     }
 
-    function liveRowHtml(ticker, row, checkboxHtml) {
-        const held = !!row.held;
-        const statusHtml = held
-            ? '<span class="decision-badge decision-HOLD">보유중</span>'
-            : (row.approved
+    function liveStatusBadge(row, dcaMaxCount) {
+        if (!row.held) {
+            return row.approved
                 ? '<span class="decision-badge decision-SKIP">미보유(매수판단 대상)</span>'
-                : '<span class="empty-val">미승인</span>');
+                : '<span class="empty-val">미승인</span>';
+        }
+        const dcaCount = row.dca_count || 0;
+        if (dcaMaxCount && dcaCount >= dcaMaxCount) return `<span class="status-badge status-dca_done">🟣 물타기 ${dcaCount}/${dcaMaxCount} 완료</span>`;
+        if (row.next_status === 'stop_pending') return '<span class="status-badge status-stop_pending">🟡 손절 대기중</span>';
+        if (row.next_status === 'dca_pending') return '<span class="status-badge status-dca_pending">🔵 물타기 대기중</span>';
+        if (row.next_action === 'SELL') return '<span class="status-badge status-stop_pending">🔴 다음 사이클 매도 예정</span>';
+        if (row.next_action === 'DCA_BUY') return '<span class="status-badge status-dca_pending">🔵 다음 사이클 물타기 예정</span>';
+        return '<span class="decision-badge decision-HOLD">정상 보유중</span>';
+    }
+
+    function liveRowHtml(ticker, row, checkboxHtml, dcaMaxCount) {
+        const held = !!row.held;
+        const dcaCount = row.dca_count || 0;
+        const dcaExhausted = dcaMaxCount && dcaCount >= dcaMaxCount;
+        const dcaCheckbox = held
+            ? `<input type="checkbox" ${row.dca_enabled ? 'checked' : ''} ${dcaExhausted ? 'disabled' : ''}
+                   title="${dcaExhausted ? `이미 최대 ${dcaMaxCount}회 물타기를 완료해 더 켤 수 없습니다` : `체크하면 손절 직전 물타기 트리거까지 대기 후 실제 추가매수 (현재 ${dcaCount}/${dcaMaxCount || 1}회)`}"
+                   onchange="toggleLiveDca('${ticker}', this)">`
+            : '<span class="empty-val">—</span>';
         return `
             <tr>
                 <td style="text-align:center">${checkboxHtml}</td>
@@ -354,7 +372,8 @@
                 <td>${held ? fmtKrw(row.avg_buy_price) : '<span class="empty-val">—</span>'}</td>
                 <td>${held ? fmtKrw(row.eval_amount) : '<span class="empty-val">—</span>'}</td>
                 <td>${held ? pnlSpan(row.eval_amount - row.qty * row.avg_buy_price, row.pnl_pct) : '<span class="empty-val">—</span>'}</td>
-                <td style="text-align:center">${statusHtml}</td>
+                <td style="text-align:center">${liveStatusBadge(row, dcaMaxCount)}</td>
+                <td style="text-align:center">${dcaCheckbox}</td>
             </tr>`;
     }
 
@@ -374,23 +393,24 @@
             engineStatusText.textContent = json.engine_enabled ? '🔴 실행 중' : '일시중지됨';
             engineStatusText.className = 'engine-status-text ' + (json.engine_enabled ? 'engine-status-on' : 'engine-status-off');
 
+            const dcaMaxCount = json.dca_max_count || 1;
             const rows = [];
             for (const c of (json.candidates || [])) {
                 const cb = `<input type="checkbox" ${c.approved ? 'checked' : ''} onchange="toggleLiveCandidateApproval('${c.ticker}', this)">`;
-                rows.push(liveRowHtml(c.ticker, c, cb));
+                rows.push(liveRowHtml(c.ticker, c, cb, dcaMaxCount));
             }
             for (const p of (json.extra_positions || [])) {
                 const cb = `<input type="checkbox" ${p.approved ? 'checked' : ''} onchange="toggleLiveCandidateApproval('${p.ticker}', this)">`;
-                rows.push(liveRowHtml(p.ticker, { ...p, held: true }, cb));
+                rows.push(liveRowHtml(p.ticker, { ...p, held: true }, cb, dcaMaxCount));
             }
 
             body.innerHTML = rows.length
                 ? rows.join('')
-                : '<tr class="loading-row"><td colspan="8">아래 "🎯 매매 대상 코인" 표에서 관심 등록을 먼저 체크하세요.</td></tr>';
+                : '<tr class="loading-row"><td colspan="9">아래 "🎯 매매 대상 코인" 표에서 관심 등록을 먼저 체크하세요.</td></tr>';
 
             renderAllCandidates(json.all_candidates || []);
         } catch (e) {
-            body.innerHTML = `<tr class="loading-row"><td colspan="8" class="text-danger">오류: ${e.message}</td></tr>`;
+            body.innerHTML = `<tr class="loading-row"><td colspan="9" class="text-danger">오류: ${e.message}</td></tr>`;
         }
     }
 
@@ -461,6 +481,25 @@
             alert('실거래 승인 저장 실패: ' + e.message);
             checkbox.checked = !nextApproved;
         } finally {
+            checkbox.disabled = false;
+        }
+    }
+
+    async function toggleLiveDca(ticker, checkbox) {
+        const nextEnabled = checkbox.checked;
+        checkbox.disabled = true;
+        try {
+            const res = await fetch('api/auto-trade/live/positions/dca', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ticker, enabled: nextEnabled }),
+            });
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+            await loadLiveSummary();
+        } catch (e) {
+            alert('물타기 설정 저장 실패: ' + e.message);
+            checkbox.checked = !nextEnabled;
             checkbox.disabled = false;
         }
     }
