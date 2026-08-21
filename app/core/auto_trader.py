@@ -28,6 +28,7 @@ from app.utils.db_manager import (
     save_job_run_log,
     get_trade_engine_settings,
     get_approved_candidate_tickers,
+    get_watchlist_tickers,
     get_trade_strategy_settings,
     update_position_tracking,
     mark_position_dca_used,
@@ -189,6 +190,14 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
         elif is_live:
             candidates = []
 
+        # 실거래 이중 안전장치: "매매 대상"(watchlist, 1단계) 체크 없이는 "실거래 승인"(approved,
+        # 2단계)이 켜져 있어도 매수하지 않는다. 화면(get_live_dashboard_summary)의 "🔴 실거래" 표
+        # 자체가 watchlist로 미리 좁혀 보여주므로 정상 사용 시 굳이 걸릴 일은 없지만, watchlist를
+        # 나중에 뺐는데 approved가 남아있는 경우(과거 승인 잔재) 등을 대비한 방어적 재확인.
+        if is_live:
+            watchlist_tickers = get_watchlist_tickers(broker.broker_name, broker.mode)
+            candidates = [c for c in candidates if c['ticker'] in watchlist_tickers]
+
         # 정밀 매수조건(일봉/5분봉/1분봉) — entry_condition_checker.py가 별도 루프로 캐시해둔 결과만
         # 읽는다(여기서 직접 캔들을 재조회하지 않음). "정밀검사" 체크된 종목만 이 결과로 추가 게이팅됨.
         condition_watch_tickers = get_condition_watch_tickers(broker.broker_name, broker.mode)
@@ -322,28 +331,60 @@ def get_dashboard_summary() -> dict:
 
 
 def get_live_dashboard_summary() -> dict:
-    """/auto-trade 대시보드의 "🔴 실거래" 패널용 읽기 전용 요약 — 진짜 업비트 계좌(UpbitLiveBroker)를
-    조회만 하고 매매 판단/주문 실행은 절대 하지 않는다. 화면에서 "실거래 승인" 체크한 후보 코인마다
-    실제로 보유 중이면 잔고(수량/평단/현재가/평가손익)를, 아직 미보유면 다음 사이클에 매수 판단
-    대상이 된다는 걸 알 수 있게 held=False로 표시한다."""
+    """/auto-trade 대시보드용 읽기 전용 요약 — 진짜 업비트 계좌(UpbitLiveBroker)를 조회만 하고
+    매매 판단/주문 실행은 절대 하지 않는다.
+
+    두 표를 위한 데이터를 함께 반환한다:
+      - all_candidates: "🎯 매매 대상 코인" 표(1단계) — 오늘 스크리닝 후보 전체(80개 안팎)에
+        watchlist(관심 등록) 체크 상태만 표시. 여기서 관심 등록해야 아래 표에 나타난다.
+      - candidates: "🔴 실거래" 표(2단계) — watchlist에 등록된 종목만 담고, 그 안에서 실제로
+        보유 중이면 잔고(수량/평단/현재가/평가손익)를, 아직 미보유면 다음 사이클에 매수 판단
+        대상이 된다는 걸 알 수 있게 held=False로 표시. approved(실거래 승인)는 이 표에서만 켤 수 있다.
+
+    (모의매매는 더 이상 화면에서 쓰지 않기로 해서 — /auto-trade 페이지에서 관련 섹션을 걷어냄 —
+    watchlist/approved 둘 다 이 페이지 단독으로 완결된다. 예전 paper 승인 여부와는 무관하게 동작.)"""
     broker = UpbitLiveBroker()
     cash_balance = broker.get_cash_balance()
     real_positions = {p.ticker: p for p in broker.get_positions() if p.qty > 0}
 
     approved_tickers = get_approved_candidate_tickers(broker.broker_name, broker.mode)
+    watchlist_tickers = get_watchlist_tickers(broker.broker_name, broker.mode)
     # 이 봇과 무관하게 보유 중인 다른 코인들(실거래 기능과 상관없이 원래 갖고 있던 코인)까지
     # 화면에 다 나열하면 진짜 매매 대상이 뭔지 헷갈리므로, "승인했거나 이미 봇이 추적 중인" 종목만
-    # extra_positions 후보로 본다 — _reconcile_live_positions()가 관리하는 범위와 동일한 기준.
+    # extra_positions 후보로 본다 — _reconcile_live_positions()가 관리하는 범위와 동일한 기준
+    # (watchlist와 무관 — 이미 산 건 관심 등록을 나중에 빼도 계속 손절/익절 관리됨).
     tracked_tickers = {row['ticker'] for row in get_paper_positions(broker.broker_name, broker.mode)}
     in_scope_tickers = approved_tickers | tracked_tickers
-    candidates = get_coin_screening_candidates()
+
+    # 보유 중인 후보(watchlist 여부와 무관 — 두 표 모두 같은 시세를 재사용하도록 캐싱)의 현재가는
+    # 종목당 네트워크 호출 1회로 유지한다.
+    price_cache = {}
+
+    def cached_price(ticker):
+        if ticker not in price_cache:
+            price_cache[ticker] = broker.get_current_price(ticker)
+        return price_cache[ticker]
+
+    all_candidates = get_coin_screening_candidates()
+    for cand in all_candidates:
+        ticker = cand['ticker']
+        cand['watchlist'] = ticker in watchlist_tickers
+        cand['candidate_reason'] = 'breakout_4h' if cand.get('breakout_4h') else 'near_ma200+above_cloud'
+        pos = real_positions.get(ticker)
+        cand['already_held'] = pos is not None
+        if pos:
+            price = cached_price(ticker)
+            cand['pnl_pct'] = (price - pos.avg_buy_price) / pos.avg_buy_price * 100 if price and pos.avg_buy_price else None
+        else:
+            cand['pnl_pct'] = None
+
+    candidates = [c for c in all_candidates if c['ticker'] in watchlist_tickers]
     for cand in candidates:
         ticker = cand['ticker']
         cand['approved'] = ticker in approved_tickers
-        cand['candidate_reason'] = 'breakout_4h' if cand.get('breakout_4h') else 'near_ma200+above_cloud'
         pos = real_positions.get(ticker)
         if pos:
-            price = broker.get_current_price(ticker)
+            price = cached_price(ticker)
             cand['held'] = True
             cand['qty'] = pos.qty
             cand['avg_buy_price'] = pos.avg_buy_price
@@ -376,6 +417,7 @@ def get_live_dashboard_summary() -> dict:
     return {
         'engine_enabled': get_trade_engine_settings(broker.broker_name, broker.mode)['enabled'],
         'cash_balance': cash_balance,
+        'all_candidates': all_candidates,
         'candidates': candidates,
         'extra_positions': extra_positions,
     }

@@ -101,4 +101,6 @@ class Config:
     TRADE_CONDITION_CHECK_INTERVAL_SEC = 60  # 정밀 매수조건(일봉/5분봉/1분봉) 검사 루프 주기(초) —
                                               # 매매 루프(TRADE_LOOP_INTERVAL_SEC)와 별개로, 대시보드에서
                                               # "정밀검사" 체크한 종목만 대상으로 이 주기로 캔들을 재조회함
-    TRADE_SLACK_ALERT = False             # 모의 체결 시 "[모의매매]" 접두어로 Slack 알림 발송 여부 — 우선 비활성화(추후 필요 시 True로 전환)
+    TRADE_SLACK_ALERT = True               # 체결(매수/매도/물타기) 시 Slack 알림 발송 여부 — "[🔴 실거래]"/"[모의매매]"
+                                            # 라벨로 구분해서 보냄(app/core/auto_trader.py의 _execute 참고). SLACK_TOKEN
+                                            # 미설정 시 send_slack_msg가 조용히 스킵하므로 켜둬도 안전함.
