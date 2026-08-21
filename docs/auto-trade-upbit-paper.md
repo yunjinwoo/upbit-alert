@@ -1,5 +1,13 @@
 # 자동매매 1단계 — 업비트 모의매매(Dry-run) 엔진
 
+> **2026-08-21 기준 중단됨.** 실거래(live) 기능(`docs/auto-trade-upbit-live.md`)이 자리잡으면서
+> 모의매매는 더 이상 화면에서 쓰지 않기로 했다 — `/auto-trade` 페이지의 모의매매 전용 섹션(가상
+> 계좌/보유 포지션/승인 표/정밀 매수조건)을 걷어냈고, 배포 PM2 목록에서도 `trade-bot`/
+> `condition-check-bot`을 뺐다. 백엔드 코드(`PaperBroker`, `app/core/auto_trader.py`의 모의매매
+> 함수, DB 테이블)는 회귀 위험을 줄이기 위해 지우지 않고 그대로 남겨뒀다 — `python main.py trade`로
+> 수동 실행하면 여전히 동작하지만, 화면(대시보드)에서는 더 이상 노출되지 않는다. 아래 내용은
+> 그 이전 시점의 설계 기록으로만 참고할 것.
+
 - 상태: 로컬 구현·검증 완료 / 서버 배포(PM2) 등록은 PR로 다시 올리는 중(아래 "알아둘 점" 참고) / 실거래 전환 안 함
 - 날짜: 2026-08-12
 - 관련 파일: `app/core/brokers/`, `app/core/trade_strategy.py`, `app/core/auto_trader.py`,

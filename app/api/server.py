@@ -39,6 +39,7 @@ from app.utils.db_manager import (
     get_coin_screening,
     set_trade_engine_enabled,
     set_candidate_approval,
+    set_candidate_watchlist,
     set_trade_strategy_settings,
     set_position_dca_enabled,
     set_candidate_condition_watch,
@@ -701,6 +702,22 @@ def set_live_candidate_approval_api():
     try:
         set_candidate_approval('upbit', 'live', ticker, approved)
         return jsonify({'status': 'success', 'ticker': ticker, 'approved': approved})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/auto-trade/live/candidates/watchlist', methods=['POST'])
+def set_live_candidate_watchlist_api():
+    """"🎯 매매 대상 코인" 표(1단계, "관심 등록" 체크박스) 상태 저장. 여기 등록해야 그 종목이
+    "🔴 실거래" 표(2단계, 실거래 승인)에 나타난다 — 등록 없이는 실거래 승인 자체를 켤 수 없다.
+    body: {ticker: str, watchlisted: bool}"""
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip()
+    watchlisted = bool(body.get('watchlisted'))
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    try:
+        set_candidate_watchlist('upbit', 'live', ticker, watchlisted)
+        return jsonify({'status': 'success', 'ticker': ticker, 'watchlisted': watchlisted})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 

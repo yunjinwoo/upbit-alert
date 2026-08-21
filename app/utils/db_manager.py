@@ -564,6 +564,9 @@ def init_db():
     # condition_watch: "정밀 매수조건 검사" 대상 여부(별도 체크박스) — approved와 독립적인 opt-in.
     # 켜진 종목만 entry_condition_checker.py가 주기적으로 일봉/5분봉/1분봉을 조회해 조건을 검사한다
     # (전체 후보를 매번 다중 시간대로 조회하면 API 호출이 너무 많아지므로, 사용자가 지정한 종목만 대상).
+    # watchlist: 실거래(live) 전용 1단계 필터 — "🎯 매매 대상 코인" 표에서 관심 등록한 종목만
+    # "🔴 실거래" 표(2단계, approved로 실제 매수 승인)에 나타난다. approved와 별개 opt-in이라
+    # watchlist 없이 approved만 켜는 건 UI상 불가능(이중 안전장치, app/core/auto_trader.py 참고).
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS trade_candidate_approval (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -572,6 +575,7 @@ def init_db():
             ticker TEXT NOT NULL,
             approved INTEGER NOT NULL DEFAULT 0,
             condition_watch INTEGER NOT NULL DEFAULT 0,
+            watchlist INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT,
             UNIQUE(broker, mode, ticker)
         )
@@ -753,6 +757,9 @@ def init_db():
             FROM trade_condition_settings_v1_upbit_only
             WHERE NOT EXISTS (SELECT 1 FROM trade_condition_settings WHERE broker = 'upbit')''',
         'DROP TABLE IF EXISTS trade_condition_settings_v1_upbit_only',
+
+        # 실거래 "매매 대상" 1단계 필터(watchlist) 추가 — 기존 배포 테이블에 컬럼만 얹는다.
+        'ALTER TABLE trade_candidate_approval ADD COLUMN watchlist INTEGER NOT NULL DEFAULT 0',
     ]
     for sql in migrations:
         try:
@@ -4077,6 +4084,35 @@ def set_candidate_condition_watch(broker: str, mode: str, ticker: str, enabled: 
         ON CONFLICT(broker, mode, ticker) DO UPDATE SET
             condition_watch=excluded.condition_watch, updated_at=excluded.updated_at
     ''', (broker, mode, ticker, 1 if enabled else 0, timestamp))
+    conn.commit()
+    conn.close()
+
+
+def get_watchlist_tickers(broker: str, mode: str) -> set:
+    """"매매 대상" 1단계 체크박스(관심 등록)가 켜진 티커 집합 조회 — 실거래(live)에서 "🔴 실거래"
+    표(2단계 승인)에 나타날 후보를 이 집합으로 먼저 좁힌다(app/core/auto_trader.py 참고)."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        'SELECT ticker FROM trade_candidate_approval WHERE broker = ? AND mode = ? AND watchlist = 1',
+        (broker, mode)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return {r[0] for r in rows}
+
+
+def set_candidate_watchlist(broker: str, mode: str, ticker: str, watchlisted: bool) -> None:
+    """"매매 대상"(관심 등록) 체크박스 상태 저장(upsert) — approved와 독립적인 컬럼."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('''
+        INSERT INTO trade_candidate_approval (broker, mode, ticker, watchlist, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(broker, mode, ticker) DO UPDATE SET
+            watchlist=excluded.watchlist, updated_at=excluded.updated_at
+    ''', (broker, mode, ticker, 1 if watchlisted else 0, timestamp))
     conn.commit()
     conn.close()
 
