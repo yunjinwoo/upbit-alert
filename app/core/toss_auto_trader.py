@@ -111,6 +111,8 @@ def _execute(decision, broker):
                 peak_price=decision.peak_price, below_stop_streak=decision.streak or 0,
             )
 
+    return result
+
 
 def _reconcile_live_positions(broker) -> None:
     """app/core/auto_trader._reconcile_live_positions()와 동일 — 실거래(mode='live') 전용, 실제
@@ -132,11 +134,14 @@ def _reconcile_live_positions(broker) -> None:
 def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
     """app/core/auto_trader.run_trade_cycle()과 동일 — 1사이클: 청산 판단 → 진입 판단 → 실행/기록.
     broker.mode == 'live'면 실제 계좌 잔고를 트래킹 행에 동기화하고, 승인(approved) + 관심등록
-    (watchlist) 둘 다 켜진 종목만 신규 진입 대상으로 삼는다(업비트 실거래와 동일한 이중 안전장치)."""
+    (watchlist) 둘 다 켜진 종목만 신규 진입 대상으로 삼는다(업비트 실거래와 동일한 이중 안전장치).
+
+    이번 사이클에 실제로 매도가 체결됐으면 진입 판단 자체를 건너뛴다(app/core/auto_trader.
+    run_trade_cycle과 동일 — 매도로 회수한 현금을 같은 사이클에 곧바로 재투입하지 않도록)."""
     start_time = datetime.now()
     success = True
     error_message = None
-    result = {'exit_decisions': 0, 'entry_decisions': 0}
+    result = {'exit_decisions': 0, 'entry_decisions': 0, 'entry_skipped_due_to_sell': False}
     try:
         broker = broker or TossBroker()
         is_live = broker.mode == 'live'
@@ -148,50 +153,61 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
         # ① 청산 판단 (손절/익절)
         positions = get_paper_positions(broker.broker_name, broker.mode)
         exit_decisions = evaluate_exits(positions, broker.get_current_price, strategy_cfg)
-        for decision in exit_decisions:
-            _execute(decision, broker)
-
-        if is_live:
-            _reconcile_live_positions(broker)
-
-        # ② 진입 판단 (신규 매수)
-        positions = get_paper_positions(broker.broker_name, broker.mode)
-        if is_live:
-            account = {'cash_balance': broker.get_cash_balance()}
-        else:
-            account = get_or_create_paper_account(broker.broker_name, broker.mode, Config.TRADE_INITIAL_CASH_KRW)
-        candidates = get_stock_screening_candidates()
-
-        # 실거래는 승인한 종목이 하나도 없으면 절대 매수하지 않는다(opt-in 화이트리스트 필수).
-        # 모의매매는 기존처럼 아무것도 안 켰으면 전체 후보를 대상으로 한다.
-        approved_tickers = get_approved_candidate_tickers(broker.broker_name, broker.mode)
-        if approved_tickers:
-            candidates = [c for c in candidates if c['ticker'] in approved_tickers]
-        elif is_live:
-            candidates = []
-
-        # 실거래 이중 안전장치: "매매 대상"(watchlist, 1단계) 없이는 "실거래 승인"(2단계)이 켜져
-        # 있어도 매수하지 않는다(app/core/auto_trader.run_trade_cycle과 동일한 방어적 재확인).
-        if is_live:
-            watchlist_tickers = get_watchlist_tickers(broker.broker_name, broker.mode)
-            candidates = [c for c in candidates if c['ticker'] in watchlist_tickers]
-
-        condition_watch_tickers = get_condition_watch_tickers(broker.broker_name, broker.mode)
-        condition_status_map = get_condition_status_map(broker.broker_name, broker.mode)
-
-        entry_decisions = evaluate_entries(
-            candidates, positions, account['cash_balance'], broker.get_current_price, strategy_cfg,
-            condition_watch_tickers=condition_watch_tickers, condition_status_map=condition_status_map,
+        exit_results = [_execute(decision, broker) for decision in exit_decisions]
+        sold_this_cycle = any(
+            d.action == 'SELL' and r is not None and r.success
+            for d, r in zip(exit_decisions, exit_results)
         )
-        for decision in entry_decisions:
-            _execute(decision, broker)
 
         if is_live:
             _reconcile_live_positions(broker)
+
+        # ② 진입 판단 (신규 매수) — 매도가 체결된 사이클이면 건너뛴다(위 docstring 참고).
+        entry_decisions = []
+        if not sold_this_cycle:
+            positions = get_paper_positions(broker.broker_name, broker.mode)
+            if is_live:
+                account = {'cash_balance': broker.get_cash_balance()}
+            else:
+                account = get_or_create_paper_account(broker.broker_name, broker.mode, Config.TRADE_INITIAL_CASH_KRW)
+            candidates = get_stock_screening_candidates()
+
+            # 실거래는 승인한 종목이 하나도 없으면 절대 매수하지 않는다(opt-in 화이트리스트 필수).
+            # 모의매매는 기존처럼 아무것도 안 켰으면 전체 후보를 대상으로 한다.
+            approved_tickers = get_approved_candidate_tickers(broker.broker_name, broker.mode)
+            if approved_tickers:
+                candidates = [c for c in candidates if c['ticker'] in approved_tickers]
+            elif is_live:
+                candidates = []
+
+            # 실거래 이중 안전장치: "매매 대상"(watchlist, 1단계) 없이는 "실거래 승인"(2단계)이 켜져
+            # 있어도 매수하지 않는다(app/core/auto_trader.run_trade_cycle과 동일한 방어적 재확인).
+            if is_live:
+                watchlist_tickers = get_watchlist_tickers(broker.broker_name, broker.mode)
+                candidates = [c for c in candidates if c['ticker'] in watchlist_tickers]
+
+            condition_watch_tickers = get_condition_watch_tickers(broker.broker_name, broker.mode)
+            condition_status_map = get_condition_status_map(broker.broker_name, broker.mode)
+
+            entry_decisions = evaluate_entries(
+                candidates, positions, account['cash_balance'], broker.get_current_price, strategy_cfg,
+                condition_watch_tickers=condition_watch_tickers, condition_status_map=condition_status_map,
+            )
+            for decision in entry_decisions:
+                _execute(decision, broker)
+
+            if is_live:
+                _reconcile_live_positions(broker)
+        else:
+            logger.info(
+                f"[{broker.broker_name}/{broker.mode}] 이번 사이클에 매도가 체결돼 신규 진입 판단은 "
+                "건너뜁니다(다음 사이클에 재평가)."
+            )
 
         result = {
             'exit_decisions': len(exit_decisions),
             'entry_decisions': len(entry_decisions),
+            'entry_skipped_due_to_sell': sold_this_cycle,
         }
     except Exception as e:
         success = False

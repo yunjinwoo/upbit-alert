@@ -872,7 +872,10 @@
             const res = await fetch('/api/toss-trade/live/run-now', { method: 'POST' });
             const json = await res.json();
             if (json.status !== 'success') throw new Error(json.message);
-            msg.textContent = `✅ 실거래 1회 실행 완료 — 청산판단 ${json.exit_decisions}건, 진입판단 ${json.entry_decisions}건`;
+            const skipNote = json.entry_skipped_due_to_sell
+                ? ' — 매도가 체결돼 진입 판단은 이번엔 건너뜀(다음 사이클에 재평가)'
+                : '';
+            msg.textContent = `✅ 실거래 1회 실행 완료 — 청산판단 ${json.exit_decisions}건, 진입판단 ${json.entry_decisions}건${skipNote}`;
             await loadTossLiveSummary();
         } catch (e) {
             msg.textContent = '';
@@ -1248,7 +1251,10 @@
             const res = await fetch('/api/toss-trade/run-now', { method: 'POST' });
             const json = await res.json();
             if (json.status !== 'success') throw new Error(json.message);
-            msg.textContent = `✅ 즉시 실행 완료 — 청산 판단 ${json.exit_decisions}건, 진입 판단 ${json.entry_decisions}건 (${new Date().toLocaleTimeString()})`;
+            const skipNote = json.entry_skipped_due_to_sell
+                ? ' — 매도가 체결돼 진입 판단은 이번엔 건너뜀(다음 사이클에 재평가)'
+                : '';
+            msg.textContent = `✅ 즉시 실행 완료 — 청산 판단 ${json.exit_decisions}건, 진입 판단 ${json.entry_decisions}건${skipNote} (${new Date().toLocaleTimeString()})`;
             await load(); // 계좌/포지션/로그를 방금 실행 결과로 새로고침
         } catch (e) {
             msg.textContent = `❌ 즉시 실행 실패: ${e.message}`;

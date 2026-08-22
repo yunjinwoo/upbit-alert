@@ -65,7 +65,8 @@ def _effective_strategy_config() -> SimpleNamespace:
 def _execute(decision, broker):
     """판단 1건을 실행하고 결과를 trade_order_log에 기록한다. HOLD/SKIP은 주문 없이 기록만 남기되,
     청산 판단(evaluate_exits)에서 나온 HOLD는 다음 사이클을 위한 트레일링 추적값(peak/연속카운트)을
-    DB에 갱신해야 한다."""
+    DB에 갱신해야 한다. 실행 결과(OrderResult, BUY/SELL이 아니면 None)를 반환한다 — 호출부가 "이번
+    사이클에 실제로 매도가 체결됐는지" 등을 판단할 때 쓴다(run_trade_cycle의 청산→진입 분리 참고)."""
     result = None
     if decision.action in ('BUY', 'DCA_BUY'):
         result = broker.buy_market(decision.ticker, decision.amount_krw, reason=decision.reason)
@@ -120,6 +121,8 @@ def _execute(decision, broker):
                 peak_price=decision.peak_price, below_stop_streak=decision.streak or 0,
             )
 
+    return result
+
 
 def _reconcile_live_positions(broker) -> None:
     """실거래(mode='live') 전용 — 실제 업비트 잔고 중 "봇이 관리할 종목"만 paper_positions
@@ -153,11 +156,16 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
 
     trigger_type을 넘기면(예: 'manual') job_run_log에도 이 사이클 실행을 기록한다(동기화 관리
     페이지에서 확인 가능). run_auto_trade_loop()는 자체적으로 'auto'를 넘겨 기존과 동일하게 기록하고,
-    대시보드의 "지금 즉시 실행" 버튼은 'manual'을 넘긴다. None이면(테스트 등) 기록을 생략한다."""
+    대시보드의 "지금 즉시 실행" 버튼은 'manual'을 넘긴다. None이면(테스트 등) 기록을 생략한다.
+
+    이번 사이클에 실제로 매도가 체결됐으면 진입 판단 자체를 건너뛴다 — 매도로 회수한 현금을
+    같은 사이클에 곧바로 다른(또는 같은) 종목 매수에 재투입하지 않도록 하기 위함(자동 루프/수동
+    "지금 즉시 실행" 둘 다 동일하게 적용, 아래 sold_this_cycle 참고). 신규 진입은 다음 사이클에
+    최신 현금/후보로 다시 판단한다."""
     start_time = datetime.now()
     success = True
     error_message = None
-    result = {'exit_decisions': 0, 'entry_decisions': 0}
+    result = {'exit_decisions': 0, 'entry_decisions': 0, 'entry_skipped_due_to_sell': False}
     try:
         broker = broker or PaperBroker()
         is_live = broker.mode == 'live'
@@ -169,56 +177,68 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
         # ① 청산 판단 (손절/익절) — 먼저 처리해 현금을 회수한 뒤 진입 판단에 반영
         positions = get_paper_positions(broker.broker_name, broker.mode)
         exit_decisions = evaluate_exits(positions, broker.get_current_price, strategy_cfg)
-        for decision in exit_decisions:
-            _execute(decision, broker)
+        exit_results = [_execute(decision, broker) for decision in exit_decisions]
+        sold_this_cycle = any(
+            d.action == 'SELL' and r is not None and r.success
+            for d, r in zip(exit_decisions, exit_results)
+        )
 
         if is_live:
             _reconcile_live_positions(broker)  # 방금 청산 실행분을 반영(수량 변화/전량 매도 등)
 
-        # ② 진입 판단 (신규 매수) — 청산 반영된 최신 잔고/포지션으로 재조회
-        positions = get_paper_positions(broker.broker_name, broker.mode)
-        if is_live:
-            account = {'cash_balance': broker.get_cash_balance()}  # 가상 원장이 아니라 실제 KRW 잔고
+        # ② 진입 판단 (신규 매수) — 매도가 체결된 사이클이면 건너뛴다(위 docstring 참고).
+        entry_decisions = []
+        if not sold_this_cycle:
+            # 청산 반영된 최신 잔고/포지션으로 재조회
+            positions = get_paper_positions(broker.broker_name, broker.mode)
+            if is_live:
+                account = {'cash_balance': broker.get_cash_balance()}  # 가상 원장이 아니라 실제 KRW 잔고
+            else:
+                account = get_or_create_paper_account(broker.broker_name, broker.mode, Config.TRADE_INITIAL_CASH_KRW)
+            candidates = get_coin_screening_candidates()
+
+            # 대시보드에서 특정 종목만 체크(수동 승인)했다면 그 종목만 진입 대상으로 좁힌다.
+            # 모의매매는 아무것도 체크 안 했으면(빈 집합) 기존처럼 전체 후보를 대상으로 하지만,
+            # 실거래는 반대로 안전 기본값을 쓴다 — 승인한 종목이 하나도 없으면 후보가 아무리 많아도
+            # 절대 매수하지 않는다(opt-in 화이트리스트 필수, "체크 안 했는데 전체 매수"는 실거래에서 금지).
+            approved_tickers = get_approved_candidate_tickers(broker.broker_name, broker.mode)
+            if approved_tickers:
+                candidates = [c for c in candidates if c['ticker'] in approved_tickers]
+            elif is_live:
+                candidates = []
+
+            # 실거래 이중 안전장치: "매매 대상"(watchlist, 1단계) 체크 없이는 "실거래 승인"(approved,
+            # 2단계)이 켜져 있어도 매수하지 않는다. 화면(get_live_dashboard_summary)의 "🔴 실거래" 표
+            # 자체가 watchlist로 미리 좁혀 보여주므로 정상 사용 시 굳이 걸릴 일은 없지만, watchlist를
+            # 나중에 뺐는데 approved가 남아있는 경우(과거 승인 잔재) 등을 대비한 방어적 재확인.
+            if is_live:
+                watchlist_tickers = get_watchlist_tickers(broker.broker_name, broker.mode)
+                candidates = [c for c in candidates if c['ticker'] in watchlist_tickers]
+
+            # 정밀 매수조건(일봉/5분봉/1분봉) — entry_condition_checker.py가 별도 루프로 캐시해둔 결과만
+            # 읽는다(여기서 직접 캔들을 재조회하지 않음). "정밀검사" 체크된 종목만 이 결과로 추가 게이팅됨.
+            condition_watch_tickers = get_condition_watch_tickers(broker.broker_name, broker.mode)
+            condition_status_map = get_condition_status_map(broker.broker_name, broker.mode)
+
+            entry_decisions = evaluate_entries(
+                candidates, positions, account['cash_balance'], broker.get_current_price, strategy_cfg,
+                condition_watch_tickers=condition_watch_tickers, condition_status_map=condition_status_map,
+            )
+            for decision in entry_decisions:
+                _execute(decision, broker)
+
+            if is_live:
+                _reconcile_live_positions(broker)  # 방금 신규 매수/물타기 체결분을 트래킹 행에 반영
         else:
-            account = get_or_create_paper_account(broker.broker_name, broker.mode, Config.TRADE_INITIAL_CASH_KRW)
-        candidates = get_coin_screening_candidates()
-
-        # 대시보드에서 특정 종목만 체크(수동 승인)했다면 그 종목만 진입 대상으로 좁힌다.
-        # 모의매매는 아무것도 체크 안 했으면(빈 집합) 기존처럼 전체 후보를 대상으로 하지만,
-        # 실거래는 반대로 안전 기본값을 쓴다 — 승인한 종목이 하나도 없으면 후보가 아무리 많아도
-        # 절대 매수하지 않는다(opt-in 화이트리스트 필수, "체크 안 했는데 전체 매수"는 실거래에서 금지).
-        approved_tickers = get_approved_candidate_tickers(broker.broker_name, broker.mode)
-        if approved_tickers:
-            candidates = [c for c in candidates if c['ticker'] in approved_tickers]
-        elif is_live:
-            candidates = []
-
-        # 실거래 이중 안전장치: "매매 대상"(watchlist, 1단계) 체크 없이는 "실거래 승인"(approved,
-        # 2단계)이 켜져 있어도 매수하지 않는다. 화면(get_live_dashboard_summary)의 "🔴 실거래" 표
-        # 자체가 watchlist로 미리 좁혀 보여주므로 정상 사용 시 굳이 걸릴 일은 없지만, watchlist를
-        # 나중에 뺐는데 approved가 남아있는 경우(과거 승인 잔재) 등을 대비한 방어적 재확인.
-        if is_live:
-            watchlist_tickers = get_watchlist_tickers(broker.broker_name, broker.mode)
-            candidates = [c for c in candidates if c['ticker'] in watchlist_tickers]
-
-        # 정밀 매수조건(일봉/5분봉/1분봉) — entry_condition_checker.py가 별도 루프로 캐시해둔 결과만
-        # 읽는다(여기서 직접 캔들을 재조회하지 않음). "정밀검사" 체크된 종목만 이 결과로 추가 게이팅됨.
-        condition_watch_tickers = get_condition_watch_tickers(broker.broker_name, broker.mode)
-        condition_status_map = get_condition_status_map(broker.broker_name, broker.mode)
-
-        entry_decisions = evaluate_entries(
-            candidates, positions, account['cash_balance'], broker.get_current_price, strategy_cfg,
-            condition_watch_tickers=condition_watch_tickers, condition_status_map=condition_status_map,
-        )
-        for decision in entry_decisions:
-            _execute(decision, broker)
-
-        if is_live:
-            _reconcile_live_positions(broker)  # 방금 신규 매수/물타기 체결분을 트래킹 행에 반영
+            logger.info(
+                f"[{broker.broker_name}/{broker.mode}] 이번 사이클에 매도가 체결돼 신규 진입 판단은 "
+                "건너뜁니다(다음 사이클에 재평가)."
+            )
 
         result = {
             'exit_decisions': len(exit_decisions),
             'entry_decisions': len(entry_decisions),
+            'entry_skipped_due_to_sell': sold_this_cycle,
         }
     except Exception as e:
         success = False

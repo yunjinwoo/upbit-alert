@@ -606,7 +606,10 @@
             const res = await fetch('api/auto-trade/live/run-now', { method: 'POST' });
             const json = await res.json();
             if (json.status !== 'success') throw new Error(json.message);
-            msg.textContent = `✅ 실거래 1회 실행 완료 — 청산판단 ${json.exit_decisions}건, 진입판단 ${json.entry_decisions}건`;
+            const skipNote = json.entry_skipped_due_to_sell
+                ? ' — 매도가 체결돼 진입 판단은 이번엔 건너뜀(다음 사이클에 재평가)'
+                : '';
+            msg.textContent = `✅ 실거래 1회 실행 완료 — 청산판단 ${json.exit_decisions}건, 진입판단 ${json.entry_decisions}건${skipNote}`;
             await loadLiveSummary();
         } catch (e) {
             msg.textContent = '';
