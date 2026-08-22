@@ -29,6 +29,7 @@ from app.utils.db_manager import (
     save_trade_order_log,
     save_job_run_log,
     get_trade_engine_settings,
+    set_engine_last_cycle_at,
     get_approved_candidate_tickers,
     get_watchlist_tickers,
     get_trade_strategy_settings,
@@ -453,8 +454,11 @@ def get_live_dashboard_summary() -> dict:
             **_held_extra_fields(ticker, pos),
         })
 
+    engine_settings = get_trade_engine_settings(broker.broker_name, broker.mode)
     return {
-        'engine_enabled': get_trade_engine_settings(broker.broker_name, broker.mode)['enabled'],
+        'engine_enabled': engine_settings['enabled'],
+        'last_cycle_at': engine_settings['last_cycle_at'],
+        'loop_interval_sec': get_trade_strategy_settings(broker.broker_name)['loop_interval_sec'],
         'cash_balance': cash_balance,
         'all_candidates': all_candidates,
         'candidates': candidates,
@@ -554,6 +558,10 @@ def run_live_trade_loop(interval_sec: int = None):
             run_trade_cycle(broker=broker, trigger_type='auto_live')
         except Exception as e:
             logger.error(f"실거래 루프 오류: {e}")
+        finally:
+            # 대시보드의 "마지막 실행/다음 실행 예정" 표시용 하트비트 — 사이클이 예외로 끝나도
+            # "이 시각에 한 번 처리를 시도했다"는 사실은 남겨야 다음 실행 예정 시각이 밀리지 않는다.
+            set_engine_last_cycle_at(broker.broker_name, broker.mode)
 
         time.sleep(current_interval)
 

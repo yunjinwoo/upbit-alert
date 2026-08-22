@@ -51,12 +51,25 @@ class UpbitLiveBroker(BrokerClient):
         ]
 
     def get_current_price(self, ticker: str) -> Optional[float]:
-        try:
-            price = pyupbit.get_current_price(ticker)
-            return float(price) if price else None
-        except Exception as e:
-            logger.error(f"[{ticker}] 시세 조회 실패: {e}")
-            return None
+        """현재가 1회 조회. 업비트 공개 API가 일시적으로 레이트리밋(429)에 걸리거나 순간
+        네트워크 오류를 내는 경우가 있어 최대 2회까지 짧게 재시도한다 — 그래도 실패하면
+        화면에는 "—"로, 평가손익 계산에는 None으로 취급된다(가짜 손익으로 잘못 표시하지 않기
+        위해 호출부에서도 None을 그대로 존중해야 함)."""
+        last_error = None
+        for attempt in range(2):
+            try:
+                price = pyupbit.get_current_price(ticker)
+                if price:
+                    return float(price)
+                logger.warning(f"[{ticker}] 시세 조회 결과가 비어있음 (attempt={attempt + 1})")
+            except Exception as e:
+                last_error = e
+                logger.error(f"[{ticker}] 시세 조회 실패 (attempt={attempt + 1}): {e}")
+            if attempt == 0:
+                time.sleep(0.3)
+        if last_error:
+            logger.error(f"[{ticker}] 시세 조회 최종 실패: {last_error}")
+        return None
 
     def get_raw_balances(self) -> List[dict]:
         """계좌 전체 잔고 원본(필터 없음). 실패 시 빈 리스트."""

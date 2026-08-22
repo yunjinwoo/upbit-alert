@@ -120,6 +120,7 @@
             </div>
         </div>
         <div id="liveRunNowMsg" class="text-end text-muted mb-2" style="font-size:0.76rem"></div>
+        <div id="liveCycleTimingText" class="text-end text-muted mb-2" style="font-size:0.76rem"></div>
         <div class="table-wrap">
             <table class="trade-table">
                 <thead>
@@ -307,6 +308,39 @@
         return `<span class="${cls}">${sign}${Math.round(krw).toLocaleString()}원${pctText}</span>`;
     }
 
+    function fmtHms(d) {
+        return d.toLocaleTimeString('ko-KR', { hour12: false });
+    }
+
+    // 실거래 루프의 "마지막 실행/다음 실행 예정" 표시. last_cycle_at은 서버가 사이클을 실제로
+    // 처리할 때마다(run_live_trade_loop) DB에 남기는 타임스탬프(서버 로컬시각, 초 단위)이고,
+    // 다음 실행 예정 = 마지막 실행 + 현재 루프 주기(loop_interval_sec) 로 근사 계산한 값이다
+    // (다음 사이클 시작 직전에 주기를 다시 읽으므로 설정을 막 바꾼 직후엔 실제와 몇 초 어긋날 수 있음).
+    function renderCycleTiming(json) {
+        const el = document.getElementById('liveCycleTimingText');
+        if (!el) return;
+        if (!json.last_cycle_at) {
+            el.textContent = '아직 실행 이력 없음 (실거래 실행 스위치를 켜면 다음 사이클부터 기록됩니다)';
+            return;
+        }
+        const last = new Date(json.last_cycle_at.replace(' ', 'T'));
+        if (isNaN(last.getTime())) { el.textContent = ''; return; }
+        let text = `마지막 실행: ${fmtHms(last)}`;
+        if (json.engine_enabled && json.loop_interval_sec) {
+            const next = new Date(last.getTime() + json.loop_interval_sec * 1000);
+            const remainMs = next.getTime() - Date.now();
+            const remainText = remainMs <= 0
+                ? '곧 실행'
+                : remainMs < 60000
+                    ? `약 ${Math.round(remainMs / 1000)}초 후`
+                    : `약 ${Math.round(remainMs / 60000)}분 후`;
+            text += ` · 다음 실행 예정: ${fmtHms(next)} (${remainText})`;
+        } else {
+            text += ' · 실거래 실행 스위치가 꺼져 있어 다음 실행 없음';
+        }
+        el.textContent = text;
+    }
+
     function upbitUrl(ticker) {
         return `https://upbit.com/exchange?code=CRIX.UPBIT.${ticker}`;
     }
@@ -371,7 +405,7 @@
                 <td>${held ? fmtQty(row.qty) : '<span class="empty-val">—</span>'}</td>
                 <td>${held ? fmtKrw(row.avg_buy_price) : '<span class="empty-val">—</span>'}</td>
                 <td>${held ? fmtKrw(row.eval_amount) : '<span class="empty-val">—</span>'}</td>
-                <td>${held ? pnlSpan(row.eval_amount - row.qty * row.avg_buy_price, row.pnl_pct) : '<span class="empty-val">—</span>'}</td>
+                <td>${held && row.eval_amount != null ? pnlSpan(row.eval_amount - row.qty * row.avg_buy_price, row.pnl_pct) : '<span class="empty-val">—</span>'}</td>
                 <td style="text-align:center">${liveStatusBadge(row, dcaMaxCount)}</td>
                 <td style="text-align:center">${dcaCheckbox}</td>
             </tr>`;
@@ -392,6 +426,7 @@
             engineToggle.disabled = false;
             engineStatusText.textContent = json.engine_enabled ? '🔴 실행 중' : '일시중지됨';
             engineStatusText.className = 'engine-status-text ' + (json.engine_enabled ? 'engine-status-on' : 'engine-status-off');
+            renderCycleTiming(json);
 
             const dcaMaxCount = json.dca_max_count || 1;
             const rows = [];
