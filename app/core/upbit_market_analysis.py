@@ -16,6 +16,36 @@ MA200_PERIOD = 200
 
 VOL_RATIO_THRESHOLD = Config.UPBIT_THRESHOLDS["minutes240"]  # 기존 거래량 급증 감시와 동일 임계값 재사용
 
+# 세 번째 후보 조건("모멘텀 컨플루언스") — 200선 위 + EMA 5/20/60 골든크로스 + RSI<70 + MACD 히스토그램
+# 양수, 4가지가 전부 같은 캔들에서 맞아야 통과. 4시간봉 기준으로 계산(기존 200선/구름 계산과 동일 캔들
+# 재사용 — 네트워크 호출을 추가로 늘리지 않기 위함). 유튜브 등에서 흔히 보는 "3중 EMA 골든크로스 +
+# RSI + MACD 확인" 스타일 진입 신호를 이 저장소의 기존 지표 계산 파이프라인에 이식한 것.
+EMA_SHORT, EMA_MID, EMA_LONG = 5, 20, 60
+RSI_PERIOD = 14
+RSI_OVERBOUGHT = 70
+MACD_FAST, MACD_SLOW, MACD_SIGNAL = 12, 26, 9
+
+
+def _ema(series: pd.Series, period: int) -> pd.Series:
+    return series.ewm(span=period, adjust=False).mean()
+
+
+def _rsi(series: pd.Series, period: int) -> pd.Series:
+    delta = series.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+    rs = avg_gain / avg_loss.replace(0, float('nan'))
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.fillna(100)  # avg_loss가 0(구간 내내 상승만)이면 RSI=100으로 취급
+
+
+def _macd_histogram(series: pd.Series, fast: int, slow: int, signal: int) -> pd.Series:
+    macd_line = _ema(series, fast) - _ema(series, slow)
+    signal_line = _ema(macd_line, signal)
+    return macd_line - signal_line
+
 
 def calc_indicators(df: pd.DataFrame) -> dict:
     """4시간봉 OHLCV DataFrame으로 돌파/구름/200선 근접 여부를 계산한다.
@@ -26,6 +56,7 @@ def calc_indicators(df: pd.DataFrame) -> dict:
         'ma200': None, 'ma200_dist_pct': None, 'near_ma200': False,
         'above_cloud': False,
         'breakout_4h': False, 'breakout_vol_ratio': None, 'breakout_candle_rate': None,
+        'momentum_confluence': False,
     }
     if n < 3:
         return result
@@ -45,6 +76,21 @@ def calc_indicators(df: pd.DataFrame) -> dict:
         result['ma200'] = round(float(ma200), 6)
         result['ma200_dist_pct'] = round(float(dist_pct), 2)
         result['near_ma200'] = bool(abs(dist_pct) <= Config.COIN_MA200_NEAR_PCT)
+
+        # ── 모멘텀 컨플루언스: 200선 위 + EMA 5/20/60 골든크로스(이번 캔들에 막 교차) + RSI<70 +
+        # MACD 히스토그램 양수. idx_now+1>=200이 이미 보장돼 있어 EMA60/RSI14/MACD(12,26,9) 워밍업은
+        # 항상 충분하다(별도 데이터량 체크 불필요).
+        ema_short = _ema(closes, EMA_SHORT)
+        ema_mid = _ema(closes, EMA_MID)
+        ema_long = _ema(closes, EMA_LONG)
+        golden_cross = bool(
+            ema_short.iloc[idx_now] > ema_mid.iloc[idx_now]
+            and ema_short.iloc[idx_now - 1] <= ema_mid.iloc[idx_now - 1]
+            and ema_mid.iloc[idx_now] > ema_long.iloc[idx_now]
+        )
+        rsi_ok = bool(_rsi(closes, RSI_PERIOD).iloc[idx_now] < RSI_OVERBOUGHT)
+        macd_ok = bool(_macd_histogram(closes, MACD_FAST, MACD_SLOW, MACD_SIGNAL).iloc[idx_now] > 0)
+        result['momentum_confluence'] = bool(close_now > ma200) and golden_cross and rsi_ok and macd_ok
 
     # ── 일목균형표 구름 위 여부 (26봉 전에 계산된 선행스팬을 지금 캔들과 비교)
     cloud_idx = idx_now - ICHIMOKU_KIJUN

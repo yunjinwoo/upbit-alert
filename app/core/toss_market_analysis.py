@@ -31,6 +31,34 @@ BREAKOUT_VOL_RATIO_THRESHOLD = 2.0
 BREAKOUT_RATE_THRESHOLD = Config.COIN_BREAKOUT_RATE_THRESHOLD
 BREAKOUT_VOL_LOOKBACK = Config.COIN_BREAKOUT_VOL_LOOKBACK
 
+# 세 번째 후보 조건("모멘텀 컨플루언스") — app/core/upbit_market_analysis.py와 동일(200선 위 + EMA
+# 5/20/60 골든크로스 + RSI<70 + MACD 히스토그램 양수), 일봉 기준으로 계산.
+EMA_SHORT, EMA_MID, EMA_LONG = 5, 20, 60
+RSI_PERIOD = 14
+RSI_OVERBOUGHT = 70
+MACD_FAST, MACD_SLOW, MACD_SIGNAL = 12, 26, 9
+
+
+def _ema(series: pd.Series, period: int) -> pd.Series:
+    return series.ewm(span=period, adjust=False).mean()
+
+
+def _rsi(series: pd.Series, period: int) -> pd.Series:
+    delta = series.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+    rs = avg_gain / avg_loss.replace(0, float('nan'))
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.fillna(100)
+
+
+def _macd_histogram(series: pd.Series, fast: int, slow: int, signal: int) -> pd.Series:
+    macd_line = _ema(series, fast) - _ema(series, slow)
+    signal_line = _ema(macd_line, signal)
+    return macd_line - signal_line
+
 
 def calc_indicators(df: pd.DataFrame) -> dict:
     """일봉 OHLCV DataFrame으로 돌파/구름/200선 근접 여부를 계산한다.
@@ -41,6 +69,7 @@ def calc_indicators(df: pd.DataFrame) -> dict:
         'ma200': None, 'ma200_dist_pct': None, 'near_ma200': False,
         'above_cloud': False,
         'breakout_1d': False, 'breakout_vol_ratio': None, 'breakout_candle_rate': None,
+        'momentum_confluence': False,
     }
     if n < 3:
         return result
@@ -60,6 +89,21 @@ def calc_indicators(df: pd.DataFrame) -> dict:
         result['ma200'] = round(float(ma200), 2)
         result['ma200_dist_pct'] = round(float(dist_pct), 2)
         result['near_ma200'] = bool(abs(dist_pct) <= Config.COIN_MA200_NEAR_PCT)
+
+        # ── 모멘텀 컨플루언스: 200선 위 + EMA 5/20/60 골든크로스(이번 캔들에 막 교차) + RSI<70 +
+        # MACD 히스토그램 양수. idx_now+1>=200이 이미 보장돼 있어 EMA60/RSI14/MACD(12,26,9) 워밍업은
+        # 항상 충분하다.
+        ema_short = _ema(closes, EMA_SHORT)
+        ema_mid = _ema(closes, EMA_MID)
+        ema_long = _ema(closes, EMA_LONG)
+        golden_cross = bool(
+            ema_short.iloc[idx_now] > ema_mid.iloc[idx_now]
+            and ema_short.iloc[idx_now - 1] <= ema_mid.iloc[idx_now - 1]
+            and ema_mid.iloc[idx_now] > ema_long.iloc[idx_now]
+        )
+        rsi_ok = bool(_rsi(closes, RSI_PERIOD).iloc[idx_now] < RSI_OVERBOUGHT)
+        macd_ok = bool(_macd_histogram(closes, MACD_FAST, MACD_SLOW, MACD_SIGNAL).iloc[idx_now] > 0)
+        result['momentum_confluence'] = bool(close_now > ma200) and golden_cross and rsi_ok and macd_ok
 
     # ── 일목균형표 구름 위 여부 (26봉 전에 계산된 선행스팬을 지금 캔들과 비교)
     cloud_idx = idx_now - ICHIMOKU_KIJUN

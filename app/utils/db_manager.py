@@ -764,6 +764,12 @@ def init_db():
         # 대시보드에 "마지막 실행/다음 실행 예정" 시각을 보여주기 위해 루프가 사이클을 처리할 때마다
         # 찍는 하트비트 컬럼 추가 — set_engine_last_cycle_at() 참고.
         'ALTER TABLE trade_engine_settings ADD COLUMN last_cycle_at TEXT',
+
+        # 스크리닝 후보 필터에 세 번째 조건(200선 위 + EMA 5/20/60 골든크로스 + RSI<70 + MACD 히스토그램
+        # 양수) 추가 — app/core/upbit_market_analysis.py, app/core/toss_market_analysis.py의
+        # calc_indicators() 참고.
+        'ALTER TABLE coin_screening_daily ADD COLUMN momentum_confluence INTEGER',
+        'ALTER TABLE stock_screening_daily ADD COLUMN momentum_confluence INTEGER',
     ]
     for sql in migrations:
         try:
@@ -3662,8 +3668,8 @@ def save_coin_screening(rows: list):
             INSERT INTO coin_screening_daily
                 (ticker, name, price, change_rate, trade_value,
                  ma200, ma200_dist_pct, near_ma200, above_cloud,
-                 breakout_4h, breakout_vol_ratio, breakout_candle_rate, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 breakout_4h, breakout_vol_ratio, breakout_candle_rate, momentum_confluence, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(ticker) DO UPDATE SET
                 name=excluded.name, price=excluded.price, change_rate=excluded.change_rate,
                 trade_value=excluded.trade_value,
@@ -3671,10 +3677,12 @@ def save_coin_screening(rows: list):
                 near_ma200=excluded.near_ma200, above_cloud=excluded.above_cloud,
                 breakout_4h=excluded.breakout_4h, breakout_vol_ratio=excluded.breakout_vol_ratio,
                 breakout_candle_rate=excluded.breakout_candle_rate,
+                momentum_confluence=excluded.momentum_confluence,
                 updated_at=excluded.updated_at
         ''', (r['ticker'], r.get('name'), r.get('price'), r.get('change_rate'), r.get('trade_value'),
               r.get('ma200'), r.get('ma200_dist_pct'), int(bool(r.get('near_ma200'))), int(bool(r.get('above_cloud'))),
-              int(bool(r.get('breakout_4h'))), r.get('breakout_vol_ratio'), r.get('breakout_candle_rate'), timestamp))
+              int(bool(r.get('breakout_4h'))), r.get('breakout_vol_ratio'), r.get('breakout_candle_rate'),
+              int(bool(r.get('momentum_confluence'))), timestamp))
     conn.commit()
     conn.close()
 
@@ -3691,13 +3699,14 @@ def get_coin_screening() -> list:
 
 
 def get_coin_screening_candidates() -> list:
-    """자동매매 진입 후보만 필터링 조회 (4시간봉 돌파, 또는 200선 근접이면서 구름 위)"""
+    """자동매매 진입 후보만 필터링 조회 (4시간봉 돌파, 200선 근접이면서 구름 위, 또는 200선 위+EMA
+    골든크로스+RSI+MACD 모멘텀 컨플루언스 중 하나)"""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute('''
         SELECT * FROM coin_screening_daily
-        WHERE breakout_4h = 1 OR (near_ma200 = 1 AND above_cloud = 1)
+        WHERE breakout_4h = 1 OR (near_ma200 = 1 AND above_cloud = 1) OR momentum_confluence = 1
         ORDER BY trade_value DESC
     ''')
     rows = cursor.fetchall()
@@ -3719,8 +3728,8 @@ def save_stock_screening(rows: list):
             INSERT INTO stock_screening_daily
                 (ticker, name, price, change_rate, trade_value,
                  ma200, ma200_dist_pct, near_ma200, above_cloud,
-                 breakout_1d, breakout_vol_ratio, breakout_candle_rate, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 breakout_1d, breakout_vol_ratio, breakout_candle_rate, momentum_confluence, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(ticker) DO UPDATE SET
                 name=excluded.name, price=excluded.price, change_rate=excluded.change_rate,
                 trade_value=excluded.trade_value,
@@ -3728,10 +3737,12 @@ def save_stock_screening(rows: list):
                 near_ma200=excluded.near_ma200, above_cloud=excluded.above_cloud,
                 breakout_1d=excluded.breakout_1d, breakout_vol_ratio=excluded.breakout_vol_ratio,
                 breakout_candle_rate=excluded.breakout_candle_rate,
+                momentum_confluence=excluded.momentum_confluence,
                 updated_at=excluded.updated_at
         ''', (r['ticker'], r.get('name'), r.get('price'), r.get('change_rate'), r.get('trade_value'),
               r.get('ma200'), r.get('ma200_dist_pct'), int(bool(r.get('near_ma200'))), int(bool(r.get('above_cloud'))),
-              int(bool(r.get('breakout_1d'))), r.get('breakout_vol_ratio'), r.get('breakout_candle_rate'), timestamp))
+              int(bool(r.get('breakout_1d'))), r.get('breakout_vol_ratio'), r.get('breakout_candle_rate'),
+              int(bool(r.get('momentum_confluence'))), timestamp))
     conn.commit()
     conn.close()
 
@@ -3748,13 +3759,14 @@ def get_stock_screening() -> list:
 
 
 def get_stock_screening_candidates() -> list:
-    """자동매매 진입 후보만 필터링 조회 (일봉 돌파, 또는 200선 근접이면서 구름 위)"""
+    """자동매매 진입 후보만 필터링 조회 (일봉 돌파, 200선 근접이면서 구름 위, 또는 200선 위+EMA
+    골든크로스+RSI+MACD 모멘텀 컨플루언스 중 하나)"""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute('''
         SELECT * FROM stock_screening_daily
-        WHERE breakout_1d = 1 OR (near_ma200 = 1 AND above_cloud = 1)
+        WHERE breakout_1d = 1 OR (near_ma200 = 1 AND above_cloud = 1) OR momentum_confluence = 1
         ORDER BY trade_value DESC
     ''')
     rows = cursor.fetchall()
