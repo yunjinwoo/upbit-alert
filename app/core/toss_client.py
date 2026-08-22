@@ -72,14 +72,19 @@ def _get_access_token() -> Optional[str]:
         return None
 
 
-def _get(path: str, params: dict = None) -> Optional[dict]:
+def _get(path: str, params: dict = None, account_seq: Optional[int] = None) -> Optional[dict]:
+    """account_seq를 넘기면 X-Tossinvest-Account 헤더를 붙인다 — 계좌/보유자산/주문 등 "본인 계좌"
+    컨텍스트가 필요한 엔드포인트(GET /api/v1/holdings, /api/v1/buying-power 등)에 필수."""
     token = _get_access_token()
     if not token:
         return None
+    headers = {"Authorization": f"Bearer {token}"}
+    if account_seq is not None:
+        headers["X-Tossinvest-Account"] = str(account_seq)
     try:
         res = requests.get(
             f"{Config.TOSS_API_BASE}{path}",
-            headers={"Authorization": f"Bearer {token}"},
+            headers=headers,
             params=params or {},
             timeout=10,
         )
@@ -94,6 +99,111 @@ def _get(path: str, params: dict = None) -> Optional[dict]:
     except Exception as e:
         logger.error(f"토스 API 요청 중 에러 [{path}]: {e}")
         return None
+
+
+def _post(path: str, body: dict, account_seq: Optional[int] = None) -> Optional[dict]:
+    """계좌 컨텍스트가 필요한 쓰기 요청(주문 생성/정정/취소)용. app/core/brokers/toss_live_broker.py
+    (실주문)에서만 쓰이고, 이 파일 자체는 여전히 "주문을 스스로 판단해서 내는" 로직을 갖지 않는다."""
+    token = _get_access_token()
+    if not token:
+        return None
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    if account_seq is not None:
+        headers["X-Tossinvest-Account"] = str(account_seq)
+    try:
+        res = requests.post(
+            f"{Config.TOSS_API_BASE}{path}",
+            headers=headers,
+            json=body,
+            timeout=10,
+        )
+        if res.status_code == 429:
+            retry_after = res.headers.get("Retry-After", "1")
+            logger.warning(f"토스 API rate limit — {retry_after}초 대기 후 재시도 필요(호출부에서 처리)")
+            return None
+        if res.status_code not in (200, 201):
+            logger.error(f"토스 API 요청 실패 [{path}]: {res.status_code} - {res.text}")
+            return None
+        return res.json()
+    except Exception as e:
+        logger.error(f"토스 API 요청 중 에러 [{path}]: {e}")
+        return None
+
+
+def create_order(
+    account_seq: int, symbol: str, side: str, quantity: float,
+    order_type: str = "MARKET", client_order_id: str = None,
+    confirm_high_value_order: bool = False,
+) -> Optional[str]:
+    """시장가/수량 기반 주문 생성 (POST /api/v1/orders). side: 'BUY'|'SELL', quantity: 정수 주(株).
+    지정가(LIMIT)는 이 저장소에서 쓰지 않으므로 price 파라미터는 받지 않는다. 성공 시 orderId,
+    실패 시 None — 체결 여부는 이 응답에 담기지 않으므로 반드시 get_order()로 별도 확인해야 한다."""
+    body = {
+        "symbol": symbol,
+        "side": side,
+        "orderType": order_type,
+        "quantity": quantity,
+        "confirmHighValueOrder": confirm_high_value_order,
+    }
+    if client_order_id:
+        body["clientOrderId"] = client_order_id
+    data = _post("/api/v1/orders", body, account_seq=account_seq)
+    if not data:
+        return None
+    result = data.get("result") or {}
+    return result.get("orderId")
+
+
+def get_order(account_seq: int, order_id: str) -> Optional[dict]:
+    """주문 상세 조회 (GET /api/v1/orders/{orderId}) — status(PENDING/PARTIAL_FILLED/FILLED/
+    CANCELED/REJECTED 등)와 execution(filledQuantity/averageFilledPrice)을 포함한다. 실패 시 None."""
+    data = _get(f"/api/v1/orders/{order_id}", account_seq=account_seq)
+    if data is None:
+        return None
+    return data.get("result") or {}
+
+
+def get_accounts() -> Optional[list]:
+    """계좌 목록 조회 (GET /api/v1/accounts, 파라미터 없음). 각 계좌의 accountSeq가 이후
+    본인 계좌 컨텍스트가 필요한 모든 API(X-Tossinvest-Account 헤더)에 쓰인다 — 최초 1회 조회해서
+    호출부(app/core/brokers/toss_live_broker.py)가 캐시해 쓸 것. 실패 시 None(빈 계좌는 [])."""
+    data = _get("/api/v1/accounts")
+    if data is None:
+        return None
+    return data.get("result") or []
+
+
+def get_buying_power(account_seq: int, currency: str = "KRW") -> Optional[float]:
+    """현금 기반 매수 가능 금액 조회 (GET /api/v1/buying-power, 미수 미발생 기준). 전체 예수금이
+    아니라 "지금 순수 현금으로 살 수 있는 금액"이지만, 토스 Open API가 별도의 예수금 전용 엔드포인트를
+    제공하지 않아 이 값을 실질적인 현금 잔고로 사용한다(업비트 get_cash_balance와 동일한 역할)."""
+    data = _get("/api/v1/buying-power", {"currency": currency}, account_seq=account_seq)
+    if not data:
+        return None
+    result = data.get("result") or {}
+    try:
+        return float(result["cashBuyingPower"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def get_buying_power_all(account_seq: int) -> dict:
+    """KRW/USD 매수 가능 금액을 한 번에 조회 — 계좌가 국내/해외 주식을 동시에 보유할 수 있어
+    (get_holdings 참고) 잔액 확인 시 통화 하나만 보면 놓칠 수 있다. 조회 실패한 통화는 None."""
+    return {
+        'KRW': get_buying_power(account_seq, 'KRW'),
+        'USD': get_buying_power(account_seq, 'USD'),
+    }
+
+
+def get_holdings(account_seq: int) -> Optional[dict]:
+    """보유 종목 조회 (GET /api/v1/holdings). 응답 원본(raw) 그대로 반환 — 필드 구조가 중첩돼 있어
+    (marketValue/profitLoss 등이 객체) 파싱은 호출부(app/core/brokers/toss_live_broker.py)에서
+    실측 응답에 맞춰 한다. 실패 시 None, 보유 종목이 없으면 items가 빈 리스트인 dict."""
+    data = _get("/api/v1/holdings", account_seq=account_seq)
+    if not data:
+        return None
+    return data.get("result") or {}
 
 
 def get_current_price(symbol: str) -> Optional[float]:

@@ -225,6 +225,13 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
         error_message = str(e)
         raise
     finally:
+        # 대시보드의 "마지막 실행/다음 실행 예정" 하트비트 — run_live_trade_loop()의 자동 사이클뿐
+        # 아니라 "지금 즉시 실행" 버튼(trigger_type='manual_live')으로 수동 실행했을 때도 "방금 실제로
+        # 한 번 처리했다"는 사실을 반영해야 하므로, 루프 쪽이 아니라 여기(모든 실거래 사이클의 공통
+        # 종료 지점)에서 기록한다. broker/is_live는 try 블록 맨 앞에서 결정되므로 예외가 나도 정의돼 있다.
+        if is_live:
+            set_engine_last_cycle_at(broker.broker_name, broker.mode)
+
         if trigger_type is not None:
             end_time = datetime.now()
             try:
@@ -555,13 +562,11 @@ def run_live_trade_loop(interval_sec: int = None):
             continue
 
         try:
+            # "마지막 실행" 하트비트는 run_trade_cycle() 자신의 finally에서 기록한다(수동 "지금 즉시
+            # 실행" 버튼과 공통 경로로 합치기 위함) — 여기서 따로 또 기록하지 않는다.
             run_trade_cycle(broker=broker, trigger_type='auto_live')
         except Exception as e:
             logger.error(f"실거래 루프 오류: {e}")
-        finally:
-            # 대시보드의 "마지막 실행/다음 실행 예정" 표시용 하트비트 — 사이클이 예외로 끝나도
-            # "이 시각에 한 번 처리를 시도했다"는 사실은 남겨야 다음 실행 예정 시각이 밀리지 않는다.
-            set_engine_last_cycle_at(broker.broker_name, broker.mode)
 
         time.sleep(current_interval)
 

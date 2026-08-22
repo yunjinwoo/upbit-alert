@@ -5,6 +5,7 @@ POST /api/v1/orders 등 주문 관련 엔드포인트를 호출하는 코드는 
 없다. 시세만 토스 Open API(읽기 전용, OAuth 토큰은 필요하지만 실주문 권한과 무관한 시세 조회 API)로
 조회하고, 잔고/포지션은 app/utils/db_manager.py의 가상 원장(broker='toss')으로 시뮬레이션한다.
 """
+import time
 from typing import List, Optional
 
 from app.config import Config
@@ -32,12 +33,23 @@ class TossBroker(BrokerClient):
         get_or_create_paper_account(self.broker_name, self.mode, Config.TRADE_INITIAL_CASH_KRW)
 
     def get_current_price(self, ticker: str) -> Optional[float]:
-        try:
-            price = toss_get_current_price(ticker)
-            return float(price) if price else None
-        except Exception as e:
-            logger.error(f"[{ticker}] 시세 조회 실패: {e}")
-            return None
+        """현재가 1회 조회. app/core/brokers/upbit_live_broker.py와 동일하게, 토스 Open API의
+        일시적 오류(레이트리밋/네트워크 순간 오류)에 대비해 최대 2회까지 짧게 재시도한다."""
+        last_error = None
+        for attempt in range(2):
+            try:
+                price = toss_get_current_price(ticker)
+                if price:
+                    return float(price)
+                logger.warning(f"[{ticker}] 시세 조회 결과가 비어있음 (attempt={attempt + 1})")
+            except Exception as e:
+                last_error = e
+                logger.error(f"[{ticker}] 시세 조회 실패 (attempt={attempt + 1}): {e}")
+            if attempt == 0:
+                time.sleep(0.3)
+        if last_error:
+            logger.error(f"[{ticker}] 시세 조회 최종 실패: {last_error}")
+        return None
 
     def get_cash_balance(self) -> float:
         account = get_or_create_paper_account(self.broker_name, self.mode, Config.TRADE_INITIAL_CASH_KRW)
