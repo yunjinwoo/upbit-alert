@@ -279,7 +279,7 @@ def get_dashboard_summary() -> dict:
     for cand in candidates:
         ticker = cand['ticker']
         cand['already_held'] = ticker in held_tickers
-        cand['candidate_reason'] = 'breakout_1d' if cand.get('breakout_1d') else 'near_ma200+above_cloud'
+        cand['candidate_reason'] = 'breakout_1d' if cand.get('breakout_1d') else ('near_ma200+above_cloud' if cand.get('near_ma200') and cand.get('above_cloud') else 'momentum_confluence')
         cand['approved'] = ticker in approved_tickers
         cand['condition_watch'] = ticker in condition_watch_tickers
         status = condition_status_map.get(ticker)
@@ -342,7 +342,7 @@ def get_live_dashboard_summary() -> dict:
     for cand in all_candidates:
         ticker = cand['ticker']
         cand['watchlist'] = ticker in watchlist_tickers
-        cand['candidate_reason'] = 'breakout_1d' if cand.get('breakout_1d') else 'near_ma200+above_cloud'
+        cand['candidate_reason'] = 'breakout_1d' if cand.get('breakout_1d') else ('near_ma200+above_cloud' if cand.get('near_ma200') and cand.get('above_cloud') else 'momentum_confluence')
         pos = real_positions.get(ticker)
         cand['already_held'] = pos is not None
         if pos:

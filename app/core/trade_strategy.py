@@ -3,14 +3,14 @@
 시세 조회는 get_price_fn(ticker) -> float|None 콜백으로 주입받는다(브로커 구현체에 의존하지 않기 위함).
 1단계는 업비트 모의매매 전용이라 규칙이 단순하다:
   - 진입: coin_screening_daily에서 걸러진 후보 중 미보유 종목을 고정 금액으로 매수
-  - 청산(트레일링 손절 + 연속 확인 + 선택적 물타기):
+  - 청산(트레일링 손절 + 연속 확인 + 항상-먼저-물타기):
     1) 익절(평단 대비 +take_profit_pct)은 항상 우선 확인 — 무조건 즉시 매도
     2) 트레일링 손절: 진입가가 아니라 "보유 중 최고가(peak_price)" 대비 하락률이 stop_loss_pct
        이상이면 손절 조건 성립. 이 조건이 stop_loss_confirm_cycles회 연속으로 유지돼야 실제로
        매도한다(1캔들 노이즈로 바로 잘리는 걸 완화) — 그 전까지는 HOLD로 "대기 중" 상태만 기록.
-    3) 연속 확인까지 끝났는데 그 포지션에 물타기(dca_enabled)가 켜져 있고 아직 남은 물타기 횟수가
-       있으면(dca_count < dca_max_count), 곧바로 손절하지 않고 평단 대비 -dca_trigger_pct(기본 -10%)
-       까지 한 번 더 기다린다. 거기 도달하면 매도 대신 "매매기준(포지션당 매수금액)"으로 추가매수
+    3) 연속 확인까지 끝났는데 그 포지션이 아직 물타기를 dca_max_count회 다 안 썼으면(종목별
+       체크박스와 무관하게 항상), 곧바로 손절하지 않고 평단 대비 -dca_trigger_pct(기본 -10%)까지
+       한 번 더 기다린다. 거기 도달하면 매도 대신 "매매기준(포지션당 매수금액)"으로 추가매수
        (DCA_BUY)해서 평단을 낮추고, 트레일링 기준점(peak_price)과 연속 카운트를 리셋해 그 새
        평단 기준으로 손절/익절 판단을 다시 시작한다.
        (물타기는 포지션당 dca_max_count회까지만 — 그 횟수에 도달하면 일반 손절과 동일하게 동작하는
@@ -41,14 +41,19 @@ class TradeDecision:
 
 
 def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional[float]], cfg) -> List[TradeDecision]:
-    """보유 포지션마다 익절/트레일링 손절(연속 확인 포함)/물타기 여부를 판단한다."""
+    """보유 포지션마다 익절/트레일링 손절(연속 확인 포함)/물타기 여부를 판단한다.
+
+    물타기는 종목별 dca_enabled 체크박스와 무관하게 항상 먼저 시도한다 — 손절 조건이 연속확인까지
+    끝나도, dca_max_count회를 아직 안 썼으면 곧바로 팔지 않고 -dca_trigger_pct까지 한 번 더
+    기다렸다가 물탄다. dca_max_count번을 다 쓴 뒤에야(또는 dca_max_count가 0이면 처음부터) 일반
+    손절이 적용된다 — "무조건 한 번은 물타 본다"는 정책. dca_enabled 필드는 더 이상 이 판단에
+    쓰이지 않는다(대시보드 체크박스는 과거 이력 표시용으로만 남아있을 수 있음)."""
     decisions = []
     for pos in positions:
         ticker = pos['ticker']
         qty = pos['qty']
         avg_price = pos['avg_buy_price']
         streak = pos.get('below_stop_streak') or 0
-        dca_enabled = bool(pos.get('dca_enabled'))
         dca_count = pos.get('dca_count') or 0
         dca_max_count = getattr(cfg, 'TRADE_DCA_MAX_COUNT', 1)
 
@@ -89,9 +94,9 @@ def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional
             ))
             continue
 
-        # ④ 연속 확인까지 끝남 — 물타기 대상이면(아직 dca_max_count에 안 닿았으면) -dca_trigger_pct까지
-        # 한 번 더 대기, 아니면 손절
-        if dca_enabled and dca_count < dca_max_count:
+        # ④ 연속 확인까지 끝남 — 아직 dca_max_count에 안 닿았으면(체크박스와 무관) -dca_trigger_pct까지
+        # 한 번 더 대기, 다 썼으면 손절
+        if dca_count < dca_max_count:
             if pnl_pct <= -cfg.TRADE_DCA_TRIGGER_PCT:
                 decisions.append(TradeDecision(
                     ticker, 'DCA_BUY', reason=f'dca_buy({dca_count + 1}/{dca_max_count}회, 평단대비 {pnl_pct:.2f}%)',
