@@ -760,6 +760,10 @@ def init_db():
 
         # 실거래 "매매 대상" 1단계 필터(watchlist) 추가 — 기존 배포 테이블에 컬럼만 얹는다.
         'ALTER TABLE trade_candidate_approval ADD COLUMN watchlist INTEGER NOT NULL DEFAULT 0',
+
+        # 대시보드에 "마지막 실행/다음 실행 예정" 시각을 보여주기 위해 루프가 사이클을 처리할 때마다
+        # 찍는 하트비트 컬럼 추가 — set_engine_last_cycle_at() 참고.
+        'ALTER TABLE trade_engine_settings ADD COLUMN last_cycle_at TEXT',
     ]
     for sql in migrations:
         try:
@@ -3930,8 +3934,8 @@ def get_trade_engine_settings(broker: str = 'upbit', mode: str = 'paper') -> dic
     row = cursor.fetchone()
     conn.close()
     if not row:
-        return {'enabled': mode != 'live'}
-    return {'enabled': bool(row['enabled'])}
+        return {'enabled': mode != 'live', 'last_cycle_at': None}
+    return {'enabled': bool(row['enabled']), 'last_cycle_at': row['last_cycle_at']}
 
 
 def set_trade_engine_enabled(enabled: bool, broker: str = 'upbit', mode: str = 'paper') -> None:
@@ -3946,6 +3950,22 @@ def set_trade_engine_enabled(enabled: bool, broker: str = 'upbit', mode: str = '
     ''', (broker, mode, 1 if enabled else 0, timestamp))
     conn.commit()
     conn.close()
+
+
+def set_engine_last_cycle_at(broker: str = 'upbit', mode: str = 'paper') -> str:
+    """루프가 사이클 1건을 실제로 처리했을 때마다 호출 — 대시보드의 "마지막 실행/다음 실행 예정"
+    표시용 하트비트만 남기고 enabled 값은 건드리지 않는다. 저장한 타임스탬프를 그대로 반환."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('''
+        INSERT INTO trade_engine_settings (broker, mode, enabled, last_cycle_at, updated_at)
+        VALUES (?, ?, 1, ?, ?)
+        ON CONFLICT(broker, mode) DO UPDATE SET last_cycle_at = excluded.last_cycle_at
+    ''', (broker, mode, timestamp, timestamp))
+    conn.commit()
+    conn.close()
+    return timestamp
 
 
 def get_trade_strategy_settings(broker: str = 'upbit') -> dict:
