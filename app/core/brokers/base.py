@@ -12,6 +12,15 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 
+class TradeCycleBusyError(Exception):
+    """run_trade_cycle()이 같은 (broker, mode)에 대해 이미 다른 실행자(백그라운드 루프 또는 다른
+    수동 요청)가 진행 중이라 실행을 건너뛸 때 던진다 — app/utils/db_manager.py의
+    try_acquire_trade_cycle_lock() 참고. 백그라운드 루프는 이걸 일반 예외처럼 로그만 남기고 다음
+    사이클로 넘어가면 되고, 대시보드 API(app/api/server.py)는 이걸 따로 잡아서 409로 응답해
+    "지금 실행 중"이라는 걸 사용자에게 명확히 알려준다."""
+    pass
+
+
 @dataclass
 class Position:
     """보유 포지션 1건."""

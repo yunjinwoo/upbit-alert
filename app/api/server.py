@@ -71,6 +71,7 @@ from app.core.stock_monitor import (
 )
 from app.core.upbit_market_analysis import run_coin_screening
 from app.core.auto_trader import get_dashboard_summary, run_trade_cycle, force_buy, get_live_dashboard_summary
+from app.core.brokers.base import TradeCycleBusyError
 from app.core.brokers.upbit_live_broker import UpbitLiveBroker
 from app.core.toss_auto_trader import (
     get_dashboard_summary as get_toss_dashboard_summary,
@@ -89,24 +90,50 @@ import subprocess
 import time as _time
 from datetime import datetime as _dt, timedelta as _timedelta
 from app.utils.slack import send_slack_msg
+from app.utils.network import get_server_outbound_ip
 
 app = Flask(__name__, template_folder='../../templates')
 app.config['APPLICATION_ROOT'] = Config.APP_ROOT
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 CORS(app)
 
+# 실거래(mode='live') 사이클 실행/강제매수는 실제 주문을 낸다. Flask가 threaded=True로 떠 있어서
+# 같은 (broker, mode)에 대해 "지금 즉시 실행"과 "강제매수" 요청이 동시에(버튼 더블클릭, 느린 응답 중
+# 재요청 등) 들어오면 서로 겹쳐 실행되며 잔고/현금을 각자 stale하게 읽어 동일 종목을 이중 매수하는
+# 사고로 이어질 수 있다. (broker, mode)별 락으로 겹치는 실행을 즉시 거절한다 — 자동 루프
+# (run_live_trade_loop, 별도 프로세스)까지 막지는 못하지만 최소한 이 웹 프로세스 안에서의 이중 실행은
+# 원천 차단한다.
+_live_trade_locks = {
+    ('upbit', 'live'): threading.Lock(),
+    ('toss', 'live'): threading.Lock(),
+}
+
+
+def _acquire_live_trade_lock(broker_name: str, mode: str = 'live'):
+    """실거래 락을 논블로킹으로 획득 시도. 이미 실행 중이면 None을 반환(호출부가 409로 응답)."""
+    lock = _live_trade_locks[(broker_name, mode)]
+    return lock if lock.acquire(blocking=False) else None
+
+
 def _get_client_ip():
     return request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
 
 @app.context_processor
 def inject_client_ip():
-    """모든 템플릿에서 {{ client_ip }}로 접속 IP를 쓸 수 있게 주입 — 업비트/토스 Open API 키의
-    IP 허용 목록에 등록해야 할 주소를 내비게이션 바(로그아웃 옆)에서 바로 확인하기 위함
-    (app/core/brokers/upbit_account.py의 no_authorization_ip 에러 대응)."""
+    """모든 템플릿에서 {{ client_ip }}(방문자 IP)와 {{ server_outbound_ip }}(이 서버가 외부로 나갈 때
+    쓰는 IP)를 쓸 수 있게 주입한다.
+
+    업비트/토스 Open API 키의 IP 허용 목록에 등록해야 할 건 server_outbound_ip다 — 서버가 실제로
+    업비트/토스 API를 호출할 때 그 API 서버가 보는 발신 IP지, 대시보드를 열어본 방문자의 브라우저
+    IP(client_ip)가 아니다. 예전엔 이 둘을 구분하지 않고 client_ip를 그 용도로 안내해서, 서버가
+    방문자와 다른 네트워크에 있을 때(예: 클라우드 VPS) 엉뚱한 IP를 등록하게 만드는 버그가 있었다
+    (app/core/brokers/upbit_account.py의 no_authorization_ip 에러 대응 기능 자체가 무력화됨).
+    client_ip는 접근 통제(app/api/server.py의 sync_start 등)에도 쓰이므로 그대로 유지."""
     try:
-        return {'client_ip': _get_client_ip()}
+        client_ip = _get_client_ip()
     except Exception:
-        return {'client_ip': None}
+        client_ip = None
+    return {'client_ip': client_ip, 'server_outbound_ip': get_server_outbound_ip()}
 
 # API 프로세스는 다른 프로세스(run_stock_monitor 등)의 init_db() 호출 시점에 의존하지 않도록
 # 여기서도 명시적으로 한 번 호출(idempotent) — 특히 아래 login_settings 조회가 모듈 임포트 시점에
@@ -731,13 +758,20 @@ def run_live_trade_now_api():
     확인해 차단합니다(그 사이클의 판단 근거는 trade_order_log에 SKIP으로 남음)."""
     if not Config.UPBIT_ACCESS_KEY or not Config.UPBIT_SECRET_KEY:
         return jsonify({'status': 'error', 'message': '.env에 UPBIT_ACCESS_KEY/UPBIT_SECRET_KEY가 설정되어 있지 않습니다.'}), 400
+    lock = _acquire_live_trade_lock('upbit')
+    if lock is None:
+        return jsonify({'status': 'error', 'message': '이미 업비트 실거래 사이클이 실행 중입니다. 잠시 후 다시 시도하세요.'}), 409
     try:
         result = run_trade_cycle(broker=UpbitLiveBroker(), trigger_type='manual_live')
         return jsonify({'status': 'success', **result})
+    except TradeCycleBusyError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 409
     except RuntimeError as e:
         return jsonify({'status': 'error', 'message': str(e)}), 400
     except Exception as e:
         return jsonify({'status': 'error', 'message': f'즉시 실행 중 오류 발생: {str(e)}'}), 500
+    finally:
+        lock.release()
 
 @app.route('/api/auto-trade/live/force-buy', methods=['POST'])
 def force_buy_live_api():
@@ -752,6 +786,9 @@ def force_buy_live_api():
         return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
     if not ticker.startswith('KRW-'):
         ticker = f'KRW-{ticker}'
+    lock = _acquire_live_trade_lock('upbit')
+    if lock is None:
+        return jsonify({'status': 'error', 'message': '이미 업비트 실거래 사이클이 실행 중입니다. 잠시 후 다시 시도하세요.'}), 409
     try:
         result = force_buy(ticker, broker=UpbitLiveBroker())
         return jsonify({'status': 'success', **result})
@@ -759,6 +796,8 @@ def force_buy_live_api():
         return jsonify({'status': 'error', 'message': str(e)}), 400
     except Exception as e:
         return jsonify({'status': 'error', 'message': f'강제매수 중 오류 발생: {str(e)}'}), 500
+    finally:
+        lock.release()
 
 @app.route('/api/auto-trade/live/positions/dca', methods=['POST'])
 def set_position_dca_live_api():
@@ -772,7 +811,9 @@ def set_position_dca_live_api():
     if not ticker:
         return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
     try:
-        set_position_dca_enabled('upbit', 'live', ticker, enabled)
+        updated = set_position_dca_enabled('upbit', 'live', ticker, enabled)
+        if not updated:
+            return jsonify({'status': 'error', 'message': f'{ticker} 추적 행이 아직 없습니다(잔고 반영 대기 중일 수 있음) — 잠시 후 다시 시도하세요.'}), 404
         return jsonify({'status': 'success', 'ticker': ticker, 'enabled': enabled})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
@@ -800,6 +841,8 @@ def run_auto_trade_now_api():
     try:
         result = run_trade_cycle(trigger_type='manual')
         return jsonify({'status': 'success', **result})
+    except TradeCycleBusyError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 409
     except Exception as e:
         return jsonify({'status': 'error', 'message': f'즉시 실행 중 오류 발생: {str(e)}'}), 500
 
@@ -961,7 +1004,9 @@ def set_position_dca_api():
     if not ticker:
         return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
     try:
-        set_position_dca_enabled('upbit', 'paper', ticker, enabled)
+        updated = set_position_dca_enabled('upbit', 'paper', ticker, enabled)
+        if not updated:
+            return jsonify({'status': 'error', 'message': f'{ticker} 보유 포지션을 찾을 수 없습니다.'}), 404
         return jsonify({'status': 'success', 'ticker': ticker, 'enabled': enabled})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
@@ -1030,6 +1075,8 @@ def run_toss_trade_now_api():
     try:
         result = run_toss_trade_cycle(trigger_type='manual')
         return jsonify({'status': 'success', **result})
+    except TradeCycleBusyError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 409
     except Exception as e:
         return jsonify({'status': 'error', 'message': f'즉시 실행 중 오류 발생: {str(e)}'}), 500
 
@@ -1181,7 +1228,9 @@ def set_toss_position_dca_api():
     if not ticker:
         return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
     try:
-        set_position_dca_enabled('toss', 'paper', ticker, enabled)
+        updated = set_position_dca_enabled('toss', 'paper', ticker, enabled)
+        if not updated:
+            return jsonify({'status': 'error', 'message': f'{ticker} 보유 포지션을 찾을 수 없습니다.'}), 404
         return jsonify({'status': 'success', 'ticker': ticker, 'enabled': enabled})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
@@ -1258,13 +1307,20 @@ def run_toss_live_trade_now_api():
     확인해 차단합니다(그 사이클의 판단 근거는 trade_order_log에 SKIP으로 남음)."""
     if not Config.TOSS_CLIENT_ID or not Config.TOSS_CLIENT_SECRET:
         return jsonify({'status': 'error', 'message': '.env에 TOSS_CLIENT_ID/TOSS_CLIENT_SECRET이 설정되어 있지 않습니다.'}), 400
+    lock = _acquire_live_trade_lock('toss')
+    if lock is None:
+        return jsonify({'status': 'error', 'message': '이미 토스증권 실거래 사이클이 실행 중입니다. 잠시 후 다시 시도하세요.'}), 409
     try:
         result = run_toss_trade_cycle(broker=TossLiveBroker(), trigger_type='manual_live')
         return jsonify({'status': 'success', **result})
+    except TradeCycleBusyError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 409
     except RuntimeError as e:
         return jsonify({'status': 'error', 'message': str(e)}), 400
     except Exception as e:
         return jsonify({'status': 'error', 'message': f'즉시 실행 중 오류 발생: {str(e)}'}), 500
+    finally:
+        lock.release()
 
 @app.route('/api/toss-trade/live/force-buy', methods=['POST'])
 def toss_force_buy_live_api():
@@ -1279,6 +1335,9 @@ def toss_force_buy_live_api():
         return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
     if not (ticker.isdigit() and len(ticker) == 6):
         return jsonify({'status': 'error', 'message': "ticker는 '005930'과 같은 6자리 종목코드여야 합니다."}), 400
+    lock = _acquire_live_trade_lock('toss')
+    if lock is None:
+        return jsonify({'status': 'error', 'message': '이미 토스증권 실거래 사이클이 실행 중입니다. 잠시 후 다시 시도하세요.'}), 409
     try:
         result = toss_force_buy(ticker, broker=TossLiveBroker())
         return jsonify({'status': 'success', **result})
@@ -1286,6 +1345,8 @@ def toss_force_buy_live_api():
         return jsonify({'status': 'error', 'message': str(e)}), 400
     except Exception as e:
         return jsonify({'status': 'error', 'message': f'강제매수 중 오류 발생: {str(e)}'}), 500
+    finally:
+        lock.release()
 
 @app.route('/api/toss-trade/live/positions/dca', methods=['POST'])
 def set_toss_position_dca_live_api():
@@ -1297,7 +1358,9 @@ def set_toss_position_dca_live_api():
     if not ticker:
         return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
     try:
-        set_position_dca_enabled('toss', 'live', ticker, enabled)
+        updated = set_position_dca_enabled('toss', 'live', ticker, enabled)
+        if not updated:
+            return jsonify({'status': 'error', 'message': f'{ticker} 추적 행이 아직 없습니다(잔고 반영 대기 중일 수 있음) — 잠시 후 다시 시도하세요.'}), 404
         return jsonify({'status': 'success', 'ticker': ticker, 'enabled': enabled})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500

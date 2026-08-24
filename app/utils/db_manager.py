@@ -6,8 +6,40 @@ import secrets
 from typing import List
 from app.config import Config
 from app.core.kis_models import MarketCapRankingItem, StockInvestorDailyItem
+from app.utils.logger import get_logger
+
+logger = get_logger()
 
 DB_PATH = Config.DB_NAME
+
+
+def _run_guarded_recreate_migration(cursor, table: str, required_column: str, statements) -> None:
+    """RENAME→CREATE TABLE(새 스키마)→INSERT...SELECT→DROP 패턴으로 테이블을 재구성하는 마이그레이션을,
+    `table`에 `required_column`이 아직 없을 때만 실행한다.
+
+    이 4단계 패턴은 "이미 새 스키마인 DB에서는 RENAME 대상이 없어 첫 문장이 실패(무시)하고 나머지는
+    조용히 스킵된다"는 가정으로 init_db() 안에서 아무 가드 없이(매 프로세스 시작마다) 반복 실행되게
+    작성돼 있었다 — 하지만 그 가정은 틀렸다. RENAME 직후 CREATE TABLE IF NOT EXISTS가 같은 이름으로
+    테이블을 곧바로 다시 만들어두기 때문에, 이미 마이그레이션된 DB에서도 다음 실행 때 RENAME은 그대로
+    다시 성공한다. 그 상태로 반복 실행되면 INSERT가 서로 다른 값(예: broker='upbit'/'toss', 또는
+    mode='paper'/'live')을 가진 여러 행을 전부 하나의(하드코딩된) 값으로 매핑하려다 UNIQUE 제약 위반으로
+    실패하고, 그 실패와 무관하게 바로 다음 DROP은 그대로 실행되어 원본 데이터가 담긴 테이블만 통째로
+    사라지는 사고로 이어진다(실제로 재현 확인 + 프로덕션 DB에서 발생한 것으로 보임). 그래서 이 함수는
+    대상 컬럼이 이미 있으면(=이미 마이그레이션 완료) 아무것도 하지 않고, 없을 때만 "딱 한 번" 이 4단계를
+    실행하도록 강제한다."""
+    try:
+        cursor.execute(f"PRAGMA table_info({table})")
+        existing_cols = {row[1] for row in cursor.fetchall()}
+    except Exception:
+        existing_cols = set()
+    if required_column in existing_cols:
+        return
+    for sql in statements:
+        try:
+            cursor.execute(sql)
+        except Exception:
+            pass
+
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -675,10 +707,20 @@ def init_db():
         'ALTER TABLE trade_candidate_approval ADD COLUMN condition_watch INTEGER NOT NULL DEFAULT 0',
         'ALTER TABLE trade_strategy_settings ADD COLUMN condition_check_interval_sec INTEGER NOT NULL DEFAULT 60',
 
-        # 토스증권 자동매매 추가: trade_engine_settings/trade_strategy_settings(예전 id=1 싱글톤)와
-        # trade_condition_settings(예전 condition_key 단독 UNIQUE)는 브로커 구분이 없어 업비트/토스가
-        # 설정을 공유하게 되므로, 브로커별로 분리한 새 스키마로 재생성한다. 이미 새 스키마인 DB에서는
-        # RENAME 대상 테이블이 없어 첫 문장이 실패(무시)하고 나머지는 조용히 스킵됨 — 여러 번 실행해도 안전.
+    ]
+    for sql in migrations:
+        try:
+            cursor.execute(sql)
+        except Exception:
+            pass
+
+    # 토스증권 자동매매 추가: trade_engine_settings/trade_strategy_settings(예전 id=1 싱글톤)와
+    # trade_condition_settings(예전 condition_key 단독 UNIQUE)는 브로커 구분이 없어 업비트/토스가
+    # 설정을 공유하게 되므로, 브로커별로 분리한 새 스키마로 재생성한다. broker 컬럼이 이미 있으면
+    # (=이미 마이그레이션 완료) _run_guarded_recreate_migration()이 아무것도 하지 않는다 — 가드 없이
+    # 반복 실행하면 브로커별로 갈라진 여러 행이 하나로 뭉개지려다 데이터가 통째로 사라지는 사고로
+    # 이어진다(자세한 이유는 그 함수의 docstring 참고 — 실제로 이 경로에서 재현/발생 확인됨).
+    _run_guarded_recreate_migration(cursor, 'trade_engine_settings', 'broker', [
         'ALTER TABLE trade_engine_settings RENAME TO trade_engine_settings_v1_upbit_only',
         '''CREATE TABLE IF NOT EXISTS trade_engine_settings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -691,7 +733,9 @@ def init_db():
             SELECT 'upbit', enabled, updated_at FROM trade_engine_settings_v1_upbit_only
             WHERE NOT EXISTS (SELECT 1 FROM trade_engine_settings WHERE broker = 'upbit')''',
         'DROP TABLE IF EXISTS trade_engine_settings_v1_upbit_only',
+    ])
 
+    _run_guarded_recreate_migration(cursor, 'trade_strategy_settings', 'broker', [
         'ALTER TABLE trade_strategy_settings RENAME TO trade_strategy_settings_v1_upbit_only',
         '''CREATE TABLE IF NOT EXISTS trade_strategy_settings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -718,11 +762,13 @@ def init_db():
             FROM trade_strategy_settings_v1_upbit_only
             WHERE NOT EXISTS (SELECT 1 FROM trade_strategy_settings WHERE broker = 'upbit')''',
         'DROP TABLE IF EXISTS trade_strategy_settings_v1_upbit_only',
+    ])
 
-        # 업비트 실거래(live) 자동매매 추가: trade_engine_settings에 mode 컬럼을 넣어 같은 브로커라도
-        # 모의(paper)/실거래(live) 실행 스위치를 독립적으로 켜고 끌 수 있게 한다(UNIQUE를 (broker, mode)로
-        # 재구성). 기존 행은 전부 mode='paper'로 이관 — 이미 새 스키마인 DB에서는 RENAME 대상이 없어
-        # 첫 문장이 실패(무시)하고 나머지는 조용히 스킵됨.
+    # 업비트 실거래(live) 자동매매 추가: trade_engine_settings에 mode 컬럼을 넣어 같은 브로커라도
+    # 모의(paper)/실거래(live) 실행 스위치를 독립적으로 켜고 끌 수 있게 한다(UNIQUE를 (broker, mode)로
+    # 재구성). 기존 행은 전부 mode='paper'로 이관. mode 컬럼이 이미 있으면 건드리지 않는다(위와 동일한
+    # 이유 — 자세한 설명은 _run_guarded_recreate_migration() docstring).
+    _run_guarded_recreate_migration(cursor, 'trade_engine_settings', 'mode', [
         'ALTER TABLE trade_engine_settings RENAME TO trade_engine_settings_v2_no_mode',
         '''CREATE TABLE IF NOT EXISTS trade_engine_settings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -739,7 +785,9 @@ def init_db():
                 WHERE t2.broker = trade_engine_settings_v2_no_mode.broker AND t2.mode = 'paper'
             )''',
         'DROP TABLE IF EXISTS trade_engine_settings_v2_no_mode',
+    ])
 
+    _run_guarded_recreate_migration(cursor, 'trade_condition_settings', 'broker', [
         'ALTER TABLE trade_condition_settings RENAME TO trade_condition_settings_v1_upbit_only',
         '''CREATE TABLE IF NOT EXISTS trade_condition_settings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -757,7 +805,9 @@ def init_db():
             FROM trade_condition_settings_v1_upbit_only
             WHERE NOT EXISTS (SELECT 1 FROM trade_condition_settings WHERE broker = 'upbit')''',
         'DROP TABLE IF EXISTS trade_condition_settings_v1_upbit_only',
+    ])
 
+    migrations = [
         # 실거래 "매매 대상" 1단계 필터(watchlist) 추가 — 기존 배포 테이블에 컬럼만 얹는다.
         'ALTER TABLE trade_candidate_approval ADD COLUMN watchlist INTEGER NOT NULL DEFAULT 0',
 
@@ -1208,15 +1258,24 @@ def save_stock_investor_daily(code: str, name: str, items: list):
 
 
 def get_stock_investor_combined(date: str, fid_input_iscd: str = "combined"):
-    """시총 순위 + 투자자 순매수 합산 조회 (특정 날짜)"""
+    """시총 순위 + 투자자 순매수 합산 조회 (특정 날짜).
+
+    fid_input_iscd='combined'(코스피+코스닥 동시 조회)일 때는 m.rank가 아니라 실제 시가총액으로
+    정렬해야 한다 — rank는 시장별로 독립적으로 매겨진 값(코스피 1~N, 코스닥 1~N이 따로 존재)이라,
+    두 시장을 한꺼번에 rank ASC로 정렬하면 시가총액이 훨씬 큰 코스피 종목이 코스닥 종목보다 뒤로
+    밀리는 등 "시총 상위 N종목" 결과가 실제 시총 순위와 어긋난다(app/core/toss_market_analysis.py의
+    스크리닝 유니버스 선정이 바로 이 결과의 [:N]을 그대로 쓴다). 단일 시장 조회는 rank가 이미 그
+    시장 안에서의 시총 순위이므로 기존 그대로 rank ASC를 쓴다."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
     if fid_input_iscd == "combined":
         iscd_list = ("0001", "1001")
+        order_by = "CAST(m.market_cap_amount AS INTEGER) DESC"
     else:
         iscd_list = (fid_input_iscd,)
+        order_by = "m.rank ASC"
 
     placeholders = ",".join("?" * len(iscd_list))
 
@@ -1233,7 +1292,7 @@ def get_stock_investor_combined(date: str, fid_input_iscd: str = "combined"):
         FROM stock_market_cap_daily m
         LEFT JOIN stock_investor_daily i ON m.date = i.date AND m.code = i.code
         WHERE m.date = ? AND m.fid_input_iscd IN ({placeholders})
-        ORDER BY m.rank ASC
+        ORDER BY {order_by}
     ''', (date, *iscd_list))
 
     rows = cursor.fetchall()
@@ -3879,8 +3938,12 @@ def update_position_tracking(broker: str, mode: str, ticker: str, peak_price: fl
     conn.close()
 
 
-def set_position_dca_enabled(broker: str, mode: str, ticker: str, enabled: bool):
-    """대시보드 체크박스: 이 포지션에 물타기(추가매수) 허용 여부 저장."""
+def set_position_dca_enabled(broker: str, mode: str, ticker: str, enabled: bool) -> bool:
+    """대시보드 체크박스: 이 포지션에 물타기(추가매수) 허용 여부 저장.
+
+    매칭되는 paper_positions 행이 아직 없으면(예: 실거래 잔고에는 잡히지만 추적 행이 아직 안
+    만들어진 종목) UPDATE는 조용히 0행에 적용되고 끝난다 — 그걸 호출부가 구분할 수 있도록 실제로
+    갱신된 행이 있었는지를 bool로 반환한다(True=저장됨, False=대상 행 없어 무시됨)."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -3888,8 +3951,10 @@ def set_position_dca_enabled(broker: str, mode: str, ticker: str, enabled: bool)
         UPDATE paper_positions SET dca_enabled = ?, updated_at = ?
         WHERE broker = ? AND mode = ? AND ticker = ?
     ''', (1 if enabled else 0, timestamp, broker, mode, ticker))
+    updated = cursor.rowcount > 0
     conn.commit()
     conn.close()
+    return updated
 
 
 def mark_position_dca_used(broker: str, mode: str, ticker: str, new_peak_price: float):
@@ -3978,6 +4043,82 @@ def set_engine_last_cycle_at(broker: str = 'upbit', mode: str = 'paper') -> str:
     conn.commit()
     conn.close()
     return timestamp
+
+
+def try_acquire_trade_cycle_lock(broker: str, mode: str, holder: str, stale_after_sec: int = 120) -> bool:
+    """(broker, mode) 단위 매매 사이클 실행 락을 논블로킹으로 시도한다. 성공하면 True, 이미 다른
+    실행자가 잡고 있으면(stale_after_sec 이내) False.
+
+    백그라운드 루프(run_live_trade_loop 등, main.py로 뜨는 별도 프로세스)와 대시보드의 "지금 즉시
+    실행"/강제매수가 같은 broker/mode에 대해 동시에 run_trade_cycle()을 돌리면, 서로 상대방이 아직
+    반영 안 한 stale한 현금/포지션 스냅샷을 보고 각자 매수/물타기를 판단해 실제로 중복 주문이 나가거나
+    dca_count가 이중으로 증가하는 사고로 이어질 수 있다. app/core/auto_trader.py의 threading.Lock은
+    같은 프로세스 안의 Flask 요청끼리만 막을 뿐, 이 별도 프로세스 간 레이스는 못 막는다 — DB 파일
+    하나로만 통신 가능한 별도 프로세스이므로 락도 여기(DB)에 둔다.
+
+    SQLite는 한 번에 하나의 쓰기 트랜잭션만 허용하므로, BEGIN IMMEDIATE로 그 쓰기 락을 먼저 잡아둔 채
+    조회+판단+갱신을 전부 같은 트랜잭션 안에서 처리하면 "조회 후 갱신" 사이에 다른 프로세스가 끼어들
+    수 없어 원자적으로 락을 얻을 수 있다. 죽은 프로세스가 release 없이 종료해 락을 놓고 간 경우를
+    대비해 stale_after_sec(기본 2분)보다 오래된 락은 무시하고 새로 가져간다 — 정상적인 사이클은
+    보통 이보다 훨씬 짧게 끝나므로 안전한 여유값."""
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute("BEGIN IMMEDIATE")
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS trade_cycle_locks (
+                broker TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                locked_at TEXT NOT NULL,
+                locked_by TEXT,
+                UNIQUE(broker, mode)
+            )
+        ''')
+        cursor.execute('SELECT locked_at FROM trade_cycle_locks WHERE broker = ? AND mode = ?', (broker, mode))
+        row = cursor.fetchone()
+        now = datetime.now()
+        if row:
+            try:
+                locked_at = datetime.strptime(row[0], '%Y-%m-%d %H:%M:%S')
+                still_fresh = (now - locked_at).total_seconds() < stale_after_sec
+            except Exception:
+                still_fresh = False
+            if still_fresh:
+                conn.execute("ROLLBACK")
+                return False
+        cursor.execute('''
+            INSERT INTO trade_cycle_locks (broker, mode, locked_at, locked_by)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(broker, mode) DO UPDATE SET locked_at = excluded.locked_at, locked_by = excluded.locked_by
+        ''', (broker, mode, now.strftime('%Y-%m-%d %H:%M:%S'), holder))
+        conn.commit()
+        return True
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        logger.error(f"trade_cycle_lock 획득 실패({broker}/{mode}): {e}")
+        return False  # 락 메커니즘 자체가 고장나면 안전하게 "실행 안 함"으로 처리(중복 실행보다 낫다)
+    finally:
+        conn.close()
+
+
+def release_trade_cycle_lock(broker: str, mode: str, holder: str) -> None:
+    """try_acquire_trade_cycle_lock()으로 잡은 락을 해제한다. holder가 일치하는 락만 지운다(자기가
+    잡은 락이 아니면 손대지 않음 — stale 판정으로 다른 실행자가 이미 가져간 경우 등)."""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute(
+            'DELETE FROM trade_cycle_locks WHERE broker = ? AND mode = ? AND locked_by = ?',
+            (broker, mode, holder)
+        )
+        conn.commit()
+    except Exception as e:
+        logger.error(f"trade_cycle_lock 해제 실패({broker}/{mode}): {e}")
+    finally:
+        conn.close()
 
 
 def get_trade_strategy_settings(broker: str = 'upbit') -> dict:
@@ -4239,13 +4380,9 @@ def get_condition_status_map(broker: str, mode: str) -> dict:
     return result
 
 
-def get_trade_order_log(broker: str = None, mode: str = None, limit: int = 100, offset: int = 0,
-                         ticker: str = None, decision: str = None) -> list:
-    """매매 판단/체결 로그 최신순 조회. offset/ticker/decision은 별도 이력 페이지(/auto-trade/logs)의
-    페이지네이션·필터용 — 기본값(offset=0, 필터 없음)이면 기존 대시보드 요약 호출과 동일하게 동작."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
+def _trade_order_log_where(broker: str = None, mode: str = None, ticker: str = None, decision: str = None):
+    """get_trade_order_log()/count_trade_order_log()가 공유하는 WHERE절 빌더 — 필터 조건이 늘어나거나
+    바뀔 때 두 곳을 따로 고치다 갈라지는 걸 막기 위해 한 곳으로 합쳤다. (where_sql, params) 튜플 반환."""
     where = []
     params = []
     if broker and mode:
@@ -4258,6 +4395,17 @@ def get_trade_order_log(broker: str = None, mode: str = None, limit: int = 100, 
         where.append('decision = ?')
         params.append(decision)
     where_sql = f"WHERE {' AND '.join(where)}" if where else ''
+    return where_sql, params
+
+
+def get_trade_order_log(broker: str = None, mode: str = None, limit: int = 100, offset: int = 0,
+                         ticker: str = None, decision: str = None) -> list:
+    """매매 판단/체결 로그 최신순 조회. offset/ticker/decision은 별도 이력 페이지(/auto-trade/logs)의
+    페이지네이션·필터용 — 기본값(offset=0, 필터 없음)이면 기존 대시보드 요약 호출과 동일하게 동작."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    where_sql, params = _trade_order_log_where(broker, mode, ticker, decision)
     cursor.execute(f'''
         SELECT * FROM trade_order_log {where_sql}
         ORDER BY id DESC LIMIT ? OFFSET ?
@@ -4271,18 +4419,7 @@ def count_trade_order_log(broker: str = None, mode: str = None, ticker: str = No
     """매매 판단/체결 로그 전체 건수(필터 적용) — 이력 페이지 페이지네이션용."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    where = []
-    params = []
-    if broker and mode:
-        where.append('broker = ? AND mode = ?')
-        params.extend([broker, mode])
-    if ticker:
-        where.append('ticker = ?')
-        params.append(ticker)
-    if decision:
-        where.append('decision = ?')
-        params.append(decision)
-    where_sql = f"WHERE {' AND '.join(where)}" if where else ''
+    where_sql, params = _trade_order_log_where(broker, mode, ticker, decision)
     cursor.execute(f'SELECT COUNT(*) FROM trade_order_log {where_sql}', params)
     count = cursor.fetchone()[0]
     conn.close()
