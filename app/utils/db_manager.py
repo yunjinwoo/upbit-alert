@@ -9,6 +9,35 @@ from app.core.kis_models import MarketCapRankingItem, StockInvestorDailyItem
 
 DB_PATH = Config.DB_NAME
 
+
+def _run_guarded_recreate_migration(cursor, table: str, required_column: str, statements) -> None:
+    """RENAME→CREATE TABLE(새 스키마)→INSERT...SELECT→DROP 패턴으로 테이블을 재구성하는 마이그레이션을,
+    `table`에 `required_column`이 아직 없을 때만 실행한다.
+
+    이 4단계 패턴은 "이미 새 스키마인 DB에서는 RENAME 대상이 없어 첫 문장이 실패(무시)하고 나머지는
+    조용히 스킵된다"는 가정으로 init_db() 안에서 아무 가드 없이(매 프로세스 시작마다) 반복 실행되게
+    작성돼 있었다 — 하지만 그 가정은 틀렸다. RENAME 직후 CREATE TABLE IF NOT EXISTS가 같은 이름으로
+    테이블을 곧바로 다시 만들어두기 때문에, 이미 마이그레이션된 DB에서도 다음 실행 때 RENAME은 그대로
+    다시 성공한다. 그 상태로 반복 실행되면 INSERT가 서로 다른 값(예: broker='upbit'/'toss', 또는
+    mode='paper'/'live')을 가진 여러 행을 전부 하나의(하드코딩된) 값으로 매핑하려다 UNIQUE 제약 위반으로
+    실패하고, 그 실패와 무관하게 바로 다음 DROP은 그대로 실행되어 원본 데이터가 담긴 테이블만 통째로
+    사라지는 사고로 이어진다(실제로 재현 확인 + 프로덕션 DB에서 발생한 것으로 보임). 그래서 이 함수는
+    대상 컬럼이 이미 있으면(=이미 마이그레이션 완료) 아무것도 하지 않고, 없을 때만 "딱 한 번" 이 4단계를
+    실행하도록 강제한다."""
+    try:
+        cursor.execute(f"PRAGMA table_info({table})")
+        existing_cols = {row[1] for row in cursor.fetchall()}
+    except Exception:
+        existing_cols = set()
+    if required_column in existing_cols:
+        return
+    for sql in statements:
+        try:
+            cursor.execute(sql)
+        except Exception:
+            pass
+
+
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -675,10 +704,20 @@ def init_db():
         'ALTER TABLE trade_candidate_approval ADD COLUMN condition_watch INTEGER NOT NULL DEFAULT 0',
         'ALTER TABLE trade_strategy_settings ADD COLUMN condition_check_interval_sec INTEGER NOT NULL DEFAULT 60',
 
-        # 토스증권 자동매매 추가: trade_engine_settings/trade_strategy_settings(예전 id=1 싱글톤)와
-        # trade_condition_settings(예전 condition_key 단독 UNIQUE)는 브로커 구분이 없어 업비트/토스가
-        # 설정을 공유하게 되므로, 브로커별로 분리한 새 스키마로 재생성한다. 이미 새 스키마인 DB에서는
-        # RENAME 대상 테이블이 없어 첫 문장이 실패(무시)하고 나머지는 조용히 스킵됨 — 여러 번 실행해도 안전.
+    ]
+    for sql in migrations:
+        try:
+            cursor.execute(sql)
+        except Exception:
+            pass
+
+    # 토스증권 자동매매 추가: trade_engine_settings/trade_strategy_settings(예전 id=1 싱글톤)와
+    # trade_condition_settings(예전 condition_key 단독 UNIQUE)는 브로커 구분이 없어 업비트/토스가
+    # 설정을 공유하게 되므로, 브로커별로 분리한 새 스키마로 재생성한다. broker 컬럼이 이미 있으면
+    # (=이미 마이그레이션 완료) _run_guarded_recreate_migration()이 아무것도 하지 않는다 — 가드 없이
+    # 반복 실행하면 브로커별로 갈라진 여러 행이 하나로 뭉개지려다 데이터가 통째로 사라지는 사고로
+    # 이어진다(자세한 이유는 그 함수의 docstring 참고 — 실제로 이 경로에서 재현/발생 확인됨).
+    _run_guarded_recreate_migration(cursor, 'trade_engine_settings', 'broker', [
         'ALTER TABLE trade_engine_settings RENAME TO trade_engine_settings_v1_upbit_only',
         '''CREATE TABLE IF NOT EXISTS trade_engine_settings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -691,7 +730,9 @@ def init_db():
             SELECT 'upbit', enabled, updated_at FROM trade_engine_settings_v1_upbit_only
             WHERE NOT EXISTS (SELECT 1 FROM trade_engine_settings WHERE broker = 'upbit')''',
         'DROP TABLE IF EXISTS trade_engine_settings_v1_upbit_only',
+    ])
 
+    _run_guarded_recreate_migration(cursor, 'trade_strategy_settings', 'broker', [
         'ALTER TABLE trade_strategy_settings RENAME TO trade_strategy_settings_v1_upbit_only',
         '''CREATE TABLE IF NOT EXISTS trade_strategy_settings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -718,11 +759,13 @@ def init_db():
             FROM trade_strategy_settings_v1_upbit_only
             WHERE NOT EXISTS (SELECT 1 FROM trade_strategy_settings WHERE broker = 'upbit')''',
         'DROP TABLE IF EXISTS trade_strategy_settings_v1_upbit_only',
+    ])
 
-        # 업비트 실거래(live) 자동매매 추가: trade_engine_settings에 mode 컬럼을 넣어 같은 브로커라도
-        # 모의(paper)/실거래(live) 실행 스위치를 독립적으로 켜고 끌 수 있게 한다(UNIQUE를 (broker, mode)로
-        # 재구성). 기존 행은 전부 mode='paper'로 이관 — 이미 새 스키마인 DB에서는 RENAME 대상이 없어
-        # 첫 문장이 실패(무시)하고 나머지는 조용히 스킵됨.
+    # 업비트 실거래(live) 자동매매 추가: trade_engine_settings에 mode 컬럼을 넣어 같은 브로커라도
+    # 모의(paper)/실거래(live) 실행 스위치를 독립적으로 켜고 끌 수 있게 한다(UNIQUE를 (broker, mode)로
+    # 재구성). 기존 행은 전부 mode='paper'로 이관. mode 컬럼이 이미 있으면 건드리지 않는다(위와 동일한
+    # 이유 — 자세한 설명은 _run_guarded_recreate_migration() docstring).
+    _run_guarded_recreate_migration(cursor, 'trade_engine_settings', 'mode', [
         'ALTER TABLE trade_engine_settings RENAME TO trade_engine_settings_v2_no_mode',
         '''CREATE TABLE IF NOT EXISTS trade_engine_settings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -739,7 +782,9 @@ def init_db():
                 WHERE t2.broker = trade_engine_settings_v2_no_mode.broker AND t2.mode = 'paper'
             )''',
         'DROP TABLE IF EXISTS trade_engine_settings_v2_no_mode',
+    ])
 
+    _run_guarded_recreate_migration(cursor, 'trade_condition_settings', 'broker', [
         'ALTER TABLE trade_condition_settings RENAME TO trade_condition_settings_v1_upbit_only',
         '''CREATE TABLE IF NOT EXISTS trade_condition_settings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -757,7 +802,9 @@ def init_db():
             FROM trade_condition_settings_v1_upbit_only
             WHERE NOT EXISTS (SELECT 1 FROM trade_condition_settings WHERE broker = 'upbit')''',
         'DROP TABLE IF EXISTS trade_condition_settings_v1_upbit_only',
+    ])
 
+    migrations = [
         # 실거래 "매매 대상" 1단계 필터(watchlist) 추가 — 기존 배포 테이블에 컬럼만 얹는다.
         'ALTER TABLE trade_candidate_approval ADD COLUMN watchlist INTEGER NOT NULL DEFAULT 0',
 
