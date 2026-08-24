@@ -7,6 +7,7 @@ PaperBroker(app/core/brokers/paper_broker.py)가 DB 가상 원장에만 반영�
 python main.py trade 로 독립 프로세스 실행. main.py의 start_all()에는 포함하지 않는다
 (알림/모니터링 프로세스와 장애를 격리하기 위함).
 """
+import secrets
 import time
 from datetime import datetime
 from types import SimpleNamespace
@@ -14,6 +15,7 @@ from types import SimpleNamespace
 from app.config import Config
 from app.utils.logger import get_logger
 from app.utils.slack import send_slack_msg
+from app.core.brokers.base import TradeCycleBusyError
 from app.core.brokers.paper_broker import PaperBroker
 from app.core.brokers.upbit_live_broker import UpbitLiveBroker
 from app.core.brokers.upbit_account import get_real_krw_balance
@@ -38,11 +40,14 @@ from app.utils.db_manager import (
     get_condition_watch_tickers,
     get_condition_status_map,
     get_trade_condition_settings,
+    try_acquire_trade_cycle_lock,
+    release_trade_cycle_lock,
 )
 
 logger = get_logger()
 
 JOB_NAME = "auto_trade_upbit_paper"
+JOB_NAME_LIVE = "auto_trade_upbit_live"
 
 
 def _effective_strategy_config() -> SimpleNamespace:
@@ -168,10 +173,22 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
     is_live = False  # finally에서 참조하므로 try 진입 전에 기본값을 잡아둔다(PaperBroker() 생성 자체가
                       # 실패하는 등 broker.mode 접근 전에 예외가 나도 UnboundLocalError로 원래 예외가
                       # 가려지는 걸 막기 위함)
+    lock_acquired = False  # 마찬가지로 finally에서 참조 — 락을 실제로 잡았을 때만 해제 시도
+    lock_holder = secrets.token_hex(8)
     result = {'exit_decisions': 0, 'entry_decisions': 0, 'entry_skipped_due_to_sell': False}
     try:
         broker = broker or PaperBroker()
         is_live = broker.mode == 'live'
+
+        # 백그라운드 루프(run_live_trade_loop/run_auto_trade_loop, 별도 프로세스)와 대시보드의 "지금
+        # 즉시 실행"/강제매수가 같은 broker/mode에 대해 동시에 사이클을 돌리면 서로 stale한 잔고를 보고
+        # 중복 매수/dca_count 이중 증가로 이어질 수 있다 — DB 락으로 겹치는 실행을 막는다(자세한 이유는
+        # try_acquire_trade_cycle_lock() docstring 참고). force_buy()는 이 락을 거치지 않는 별도
+        # 경로라 여전히 겹칠 수 있지만, force_buy 자체엔 이미 체결 확인 재시도가 있어 영향이 제한적이다.
+        if not try_acquire_trade_cycle_lock(broker.broker_name, broker.mode, lock_holder):
+            raise TradeCycleBusyError(f"{broker.broker_name}/{broker.mode} 사이클이 이미 실행 중입니다 — 이번 실행은 건너뜁니다.")
+        lock_acquired = True
+
         strategy_cfg = _effective_strategy_config()  # 매 사이클마다 새로 읽어 대시보드 설정 변경을 즉시 반영
 
         if is_live:
@@ -261,9 +278,12 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
             end_time = datetime.now()
             try:
                 save_job_run_log(
-                    job_name=JOB_NAME,
-                    description='업비트 모의매매(dry-run) 사이클',
-                    api_used='pyupbit(public)',
+                    # is_live 여부와 무관하게 항상 모의매매로 고정 기록되던 버그 수정 — 실거래 사이클도
+                    # job_name/description이 paper 사이클과 똑같이 남으면 동기화 관리 페이지에서 실거래
+                    # 엔진이 멈춰도 알아챌 방법이 없다.
+                    job_name=JOB_NAME_LIVE if is_live else JOB_NAME,
+                    description='업비트 실거래 사이클' if is_live else '업비트 모의매매(dry-run) 사이클',
+                    api_used='pyupbit(private, 실주문)' if is_live else 'pyupbit(public)',
                     start_time=start_time.strftime('%Y-%m-%d %H:%M:%S'),
                     end_time=end_time.strftime('%Y-%m-%d %H:%M:%S'),
                     success=success,
@@ -273,6 +293,9 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
                 )
             except Exception as e:
                 logger.error(f"job_run_log 기록 실패: {e}")
+
+        if lock_acquired:
+            release_trade_cycle_lock(broker.broker_name, broker.mode, lock_holder)
 
     return result
 
@@ -506,6 +529,7 @@ def force_buy(ticker: str, broker=None) -> dict:
     trade_order_log에 SKIP으로 기록 후 결과를 반환한다."""
     broker = broker or PaperBroker()
     settings = get_trade_strategy_settings()
+    was_already_held = get_paper_position(broker.broker_name, broker.mode, ticker) is not None
     result = broker.buy_market(ticker, settings['max_position_krw'], reason='강제매수(수동)')
 
     # 실거래는 buy_market이 실주문만 내고 DB 추적 행(paper_positions)은 안 건드린다(PaperBroker와
@@ -540,6 +564,20 @@ def force_buy(ticker: str, broker=None) -> dict:
             message = f"[강제매수] {ticker} 주문은 성공했지만 잔고 반영 확인 지연으로 추적 행을 못 만들었습니다 — 수동으로 확인 후 필요시 다시 강제매수하거나 관리자에게 문의하세요."
             logger.error(message)
             send_slack_msg(message)
+
+    # 이미 보유 중인 종목에 강제매수로 평단을 낮췄다면(물타기와 동일한 효과) 트레일링 손절 기준점도
+    # 새 평단으로 리셋해야 한다 — 전략이 직접 수행하는 DCA_BUY는 실행 직후 mark_position_dca_used()로
+    # peak_price/below_stop_streak을 리셋하는데, force_buy는 _execute()를 거치지 않고 여기서 직접
+    # buy_market만 부르기 때문에 그 리셋이 빠져 있었다. 리셋을 안 하면 예: 150원에 사서 peak_price=150인
+    # 채로 100원에 강제매수해 평단이 120원으로 낮아져도 peak_price는 여전히 150으로 남아, 방금 평단을
+    # 낮춘 직후인데도 "최고가 대비 -33%"로 계산되어 곧바로 손절 연속확인이 시작되는 사고로 이어진다.
+    if result.success and was_already_held:
+        updated_pos = get_paper_position(broker.broker_name, broker.mode, ticker)
+        if updated_pos and updated_pos.get('avg_buy_price'):
+            update_position_tracking(
+                broker.broker_name, broker.mode, ticker,
+                peak_price=updated_pos['avg_buy_price'], below_stop_streak=0,
+            )
 
     final_decision = 'BUY' if result.success else 'SKIP'
     reason = result.message if result.success else f"강제매수(수동) 실패: {result.message}"

@@ -6,6 +6,9 @@ import secrets
 from typing import List
 from app.config import Config
 from app.core.kis_models import MarketCapRankingItem, StockInvestorDailyItem
+from app.utils.logger import get_logger
+
+logger = get_logger()
 
 DB_PATH = Config.DB_NAME
 
@@ -1255,15 +1258,24 @@ def save_stock_investor_daily(code: str, name: str, items: list):
 
 
 def get_stock_investor_combined(date: str, fid_input_iscd: str = "combined"):
-    """시총 순위 + 투자자 순매수 합산 조회 (특정 날짜)"""
+    """시총 순위 + 투자자 순매수 합산 조회 (특정 날짜).
+
+    fid_input_iscd='combined'(코스피+코스닥 동시 조회)일 때는 m.rank가 아니라 실제 시가총액으로
+    정렬해야 한다 — rank는 시장별로 독립적으로 매겨진 값(코스피 1~N, 코스닥 1~N이 따로 존재)이라,
+    두 시장을 한꺼번에 rank ASC로 정렬하면 시가총액이 훨씬 큰 코스피 종목이 코스닥 종목보다 뒤로
+    밀리는 등 "시총 상위 N종목" 결과가 실제 시총 순위와 어긋난다(app/core/toss_market_analysis.py의
+    스크리닝 유니버스 선정이 바로 이 결과의 [:N]을 그대로 쓴다). 단일 시장 조회는 rank가 이미 그
+    시장 안에서의 시총 순위이므로 기존 그대로 rank ASC를 쓴다."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
     if fid_input_iscd == "combined":
         iscd_list = ("0001", "1001")
+        order_by = "CAST(m.market_cap_amount AS INTEGER) DESC"
     else:
         iscd_list = (fid_input_iscd,)
+        order_by = "m.rank ASC"
 
     placeholders = ",".join("?" * len(iscd_list))
 
@@ -1280,7 +1292,7 @@ def get_stock_investor_combined(date: str, fid_input_iscd: str = "combined"):
         FROM stock_market_cap_daily m
         LEFT JOIN stock_investor_daily i ON m.date = i.date AND m.code = i.code
         WHERE m.date = ? AND m.fid_input_iscd IN ({placeholders})
-        ORDER BY m.rank ASC
+        ORDER BY {order_by}
     ''', (date, *iscd_list))
 
     rows = cursor.fetchall()
@@ -4033,6 +4045,82 @@ def set_engine_last_cycle_at(broker: str = 'upbit', mode: str = 'paper') -> str:
     return timestamp
 
 
+def try_acquire_trade_cycle_lock(broker: str, mode: str, holder: str, stale_after_sec: int = 120) -> bool:
+    """(broker, mode) 단위 매매 사이클 실행 락을 논블로킹으로 시도한다. 성공하면 True, 이미 다른
+    실행자가 잡고 있으면(stale_after_sec 이내) False.
+
+    백그라운드 루프(run_live_trade_loop 등, main.py로 뜨는 별도 프로세스)와 대시보드의 "지금 즉시
+    실행"/강제매수가 같은 broker/mode에 대해 동시에 run_trade_cycle()을 돌리면, 서로 상대방이 아직
+    반영 안 한 stale한 현금/포지션 스냅샷을 보고 각자 매수/물타기를 판단해 실제로 중복 주문이 나가거나
+    dca_count가 이중으로 증가하는 사고로 이어질 수 있다. app/core/auto_trader.py의 threading.Lock은
+    같은 프로세스 안의 Flask 요청끼리만 막을 뿐, 이 별도 프로세스 간 레이스는 못 막는다 — DB 파일
+    하나로만 통신 가능한 별도 프로세스이므로 락도 여기(DB)에 둔다.
+
+    SQLite는 한 번에 하나의 쓰기 트랜잭션만 허용하므로, BEGIN IMMEDIATE로 그 쓰기 락을 먼저 잡아둔 채
+    조회+판단+갱신을 전부 같은 트랜잭션 안에서 처리하면 "조회 후 갱신" 사이에 다른 프로세스가 끼어들
+    수 없어 원자적으로 락을 얻을 수 있다. 죽은 프로세스가 release 없이 종료해 락을 놓고 간 경우를
+    대비해 stale_after_sec(기본 2분)보다 오래된 락은 무시하고 새로 가져간다 — 정상적인 사이클은
+    보통 이보다 훨씬 짧게 끝나므로 안전한 여유값."""
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute("BEGIN IMMEDIATE")
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS trade_cycle_locks (
+                broker TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                locked_at TEXT NOT NULL,
+                locked_by TEXT,
+                UNIQUE(broker, mode)
+            )
+        ''')
+        cursor.execute('SELECT locked_at FROM trade_cycle_locks WHERE broker = ? AND mode = ?', (broker, mode))
+        row = cursor.fetchone()
+        now = datetime.now()
+        if row:
+            try:
+                locked_at = datetime.strptime(row[0], '%Y-%m-%d %H:%M:%S')
+                still_fresh = (now - locked_at).total_seconds() < stale_after_sec
+            except Exception:
+                still_fresh = False
+            if still_fresh:
+                conn.execute("ROLLBACK")
+                return False
+        cursor.execute('''
+            INSERT INTO trade_cycle_locks (broker, mode, locked_at, locked_by)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(broker, mode) DO UPDATE SET locked_at = excluded.locked_at, locked_by = excluded.locked_by
+        ''', (broker, mode, now.strftime('%Y-%m-%d %H:%M:%S'), holder))
+        conn.commit()
+        return True
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        logger.error(f"trade_cycle_lock 획득 실패({broker}/{mode}): {e}")
+        return False  # 락 메커니즘 자체가 고장나면 안전하게 "실행 안 함"으로 처리(중복 실행보다 낫다)
+    finally:
+        conn.close()
+
+
+def release_trade_cycle_lock(broker: str, mode: str, holder: str) -> None:
+    """try_acquire_trade_cycle_lock()으로 잡은 락을 해제한다. holder가 일치하는 락만 지운다(자기가
+    잡은 락이 아니면 손대지 않음 — stale 판정으로 다른 실행자가 이미 가져간 경우 등)."""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute(
+            'DELETE FROM trade_cycle_locks WHERE broker = ? AND mode = ? AND locked_by = ?',
+            (broker, mode, holder)
+        )
+        conn.commit()
+    except Exception as e:
+        logger.error(f"trade_cycle_lock 해제 실패({broker}/{mode}): {e}")
+    finally:
+        conn.close()
+
+
 def get_trade_strategy_settings(broker: str = 'upbit') -> dict:
     """매매 전략 파라미터(포지션당 매수금액/최대 동시보유/손절·익절 기준/루프 주기) 조회(브로커별).
     행이 없으면(최초 실행, 대시보드에서 아직 저장한 적 없음) app/config.py의 TRADE_* 기본값을 그대로 반환."""
@@ -4292,13 +4380,9 @@ def get_condition_status_map(broker: str, mode: str) -> dict:
     return result
 
 
-def get_trade_order_log(broker: str = None, mode: str = None, limit: int = 100, offset: int = 0,
-                         ticker: str = None, decision: str = None) -> list:
-    """매매 판단/체결 로그 최신순 조회. offset/ticker/decision은 별도 이력 페이지(/auto-trade/logs)의
-    페이지네이션·필터용 — 기본값(offset=0, 필터 없음)이면 기존 대시보드 요약 호출과 동일하게 동작."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
+def _trade_order_log_where(broker: str = None, mode: str = None, ticker: str = None, decision: str = None):
+    """get_trade_order_log()/count_trade_order_log()가 공유하는 WHERE절 빌더 — 필터 조건이 늘어나거나
+    바뀔 때 두 곳을 따로 고치다 갈라지는 걸 막기 위해 한 곳으로 합쳤다. (where_sql, params) 튜플 반환."""
     where = []
     params = []
     if broker and mode:
@@ -4311,6 +4395,17 @@ def get_trade_order_log(broker: str = None, mode: str = None, limit: int = 100, 
         where.append('decision = ?')
         params.append(decision)
     where_sql = f"WHERE {' AND '.join(where)}" if where else ''
+    return where_sql, params
+
+
+def get_trade_order_log(broker: str = None, mode: str = None, limit: int = 100, offset: int = 0,
+                         ticker: str = None, decision: str = None) -> list:
+    """매매 판단/체결 로그 최신순 조회. offset/ticker/decision은 별도 이력 페이지(/auto-trade/logs)의
+    페이지네이션·필터용 — 기본값(offset=0, 필터 없음)이면 기존 대시보드 요약 호출과 동일하게 동작."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    where_sql, params = _trade_order_log_where(broker, mode, ticker, decision)
     cursor.execute(f'''
         SELECT * FROM trade_order_log {where_sql}
         ORDER BY id DESC LIMIT ? OFFSET ?
@@ -4324,18 +4419,7 @@ def count_trade_order_log(broker: str = None, mode: str = None, ticker: str = No
     """매매 판단/체결 로그 전체 건수(필터 적용) — 이력 페이지 페이지네이션용."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    where = []
-    params = []
-    if broker and mode:
-        where.append('broker = ? AND mode = ?')
-        params.extend([broker, mode])
-    if ticker:
-        where.append('ticker = ?')
-        params.append(ticker)
-    if decision:
-        where.append('decision = ?')
-        params.append(decision)
-    where_sql = f"WHERE {' AND '.join(where)}" if where else ''
+    where_sql, params = _trade_order_log_where(broker, mode, ticker, decision)
     cursor.execute(f'SELECT COUNT(*) FROM trade_order_log {where_sql}', params)
     count = cursor.fetchone()[0]
     conn.close()

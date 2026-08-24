@@ -8,6 +8,7 @@ TossBroker(app/core/brokers/toss_broker.py)가 DB 가상 원장에만 반영한�
 python main.py toss_trade 로 독립 프로세스 실행. main.py의 start_all()에는 포함하지 않는다
 (업비트 쪽과 동일한 이유로 프로세스 격리).
 """
+import secrets
 import time
 from datetime import datetime
 from types import SimpleNamespace
@@ -15,6 +16,7 @@ from types import SimpleNamespace
 from app.config import Config
 from app.utils.logger import get_logger
 from app.utils.slack import send_slack_msg
+from app.core.brokers.base import TradeCycleBusyError
 from app.core.brokers.toss_broker import TossBroker
 from app.core.brokers.toss_live_broker import TossLiveBroker
 from app.core.trade_strategy import evaluate_entries, evaluate_exits
@@ -22,6 +24,7 @@ from app.core import toss_market_analysis
 from app.utils.db_manager import (
     get_or_create_paper_account,
     get_paper_positions,
+    get_paper_position,
     upsert_paper_position,
     delete_paper_position,
     get_stock_screening_candidates,
@@ -29,6 +32,8 @@ from app.utils.db_manager import (
     save_job_run_log,
     get_trade_engine_settings,
     set_engine_last_cycle_at,
+    try_acquire_trade_cycle_lock,
+    release_trade_cycle_lock,
     get_approved_candidate_tickers,
     get_watchlist_tickers,
     get_trade_strategy_settings,
@@ -42,6 +47,7 @@ from app.utils.db_manager import (
 logger = get_logger()
 
 JOB_NAME = "auto_trade_toss_paper"
+JOB_NAME_LIVE = "auto_trade_toss_live"
 BROKER = "toss"
 
 
@@ -144,10 +150,18 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
     is_live = False  # finally에서 참조하므로 try 진입 전에 기본값을 잡아둔다(TossBroker() 생성 자체가
                       # 실패하는 등 broker.mode 접근 전에 예외가 나도 UnboundLocalError로 원래 예외가
                       # 가려지는 걸 막기 위함 — app/core/auto_trader.py의 동일 수정 참고)
+    lock_acquired = False
+    lock_holder = secrets.token_hex(8)
     result = {'exit_decisions': 0, 'entry_decisions': 0, 'entry_skipped_due_to_sell': False}
     try:
         broker = broker or TossBroker()
         is_live = broker.mode == 'live'
+
+        # 백그라운드 루프와 대시보드 수동 실행 간 레이스 방지 — app/core/auto_trader.py의 동일 수정 참고.
+        if not try_acquire_trade_cycle_lock(broker.broker_name, broker.mode, lock_holder):
+            raise TradeCycleBusyError(f"{broker.broker_name}/{broker.mode} 사이클이 이미 실행 중입니다 — 이번 실행은 건너뜁니다.")
+        lock_acquired = True
+
         strategy_cfg = _effective_strategy_config()
 
         if is_live:
@@ -228,9 +242,11 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
             end_time = datetime.now()
             try:
                 save_job_run_log(
-                    job_name=JOB_NAME,
-                    description='토스증권 모의매매(dry-run) 사이클',
-                    api_used='toss openapi',
+                    # is_live 여부와 무관하게 항상 모의매매로 고정 기록되던 버그 수정(app/core/auto_trader.py의
+                    # 동일 수정 참고).
+                    job_name=JOB_NAME_LIVE if is_live else JOB_NAME,
+                    description='토스증권 실거래 사이클' if is_live else '토스증권 모의매매(dry-run) 사이클',
+                    api_used='toss openapi(실주문)' if is_live else 'toss openapi',
                     start_time=start_time.strftime('%Y-%m-%d %H:%M:%S'),
                     end_time=end_time.strftime('%Y-%m-%d %H:%M:%S'),
                     success=success,
@@ -240,6 +256,9 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
                 )
             except Exception as e:
                 logger.error(f"job_run_log 기록 실패: {e}")
+
+        if lock_acquired:
+            release_trade_cycle_lock(broker.broker_name, broker.mode, lock_holder)
 
     return result
 
@@ -438,16 +457,43 @@ def force_buy(ticker: str, broker=None) -> dict:
     """app/core/auto_trader.force_buy()와 동일 — 대시보드 "강제 매수" 버튼."""
     broker = broker or TossBroker()
     settings = get_trade_strategy_settings(BROKER)
+    was_already_held = get_paper_position(broker.broker_name, broker.mode, ticker) is not None
     result = broker.buy_market(ticker, settings['max_position_krw'], reason='강제매수(수동)')
 
     # 실거래는 buy_market이 실주문만 내고 DB 추적 행(paper_positions)은 안 건드린다 — 성공 시
     # 여기서 실제 잔고를 다시 조회해 즉시 추적 행을 만든다(app/core/auto_trader.force_buy와 동일 이유:
     # 추적 행이 없으면 다음 사이클의 _reconcile_live_positions()가 "관리 범위 밖"으로 보고 무시함).
+    #
+    # buy_market은 체결 확인이 max_wait_sec 안에 안 끝나도 success=True를 반환할 수 있어, 바로 한 번만
+    # 조회해서 못 찾으면 포기하지 않고 짧게 재시도한다(app/core/auto_trader.force_buy와 동일 이유).
     if result.success and broker.mode == 'live':
-        for pos in broker.get_positions():
-            if pos.ticker == ticker:
-                upsert_paper_position(broker.broker_name, broker.mode, ticker, pos.qty, pos.avg_buy_price)
+        matched = None
+        for attempt in range(5):  # 최대 5회(0,1,2,3초 간격) = 최초 조회 포함 총 ~6초까지 재시도
+            for pos in broker.get_positions():
+                if pos.ticker == ticker:
+                    matched = pos
+                    break
+            if matched:
                 break
+            if attempt < 4:
+                time.sleep(1.5)
+        if matched:
+            upsert_paper_position(broker.broker_name, broker.mode, ticker, matched.qty, matched.avg_buy_price)
+        else:
+            message = f"[강제매수] {ticker} 주문은 성공했지만 잔고 반영 확인 지연으로 추적 행을 못 만들었습니다 — 수동으로 확인 후 필요시 다시 강제매수하거나 관리자에게 문의하세요."
+            logger.error(message)
+            send_slack_msg(message)
+
+    # 이미 보유 중인 종목에 강제매수로 평단을 낮췄다면 트레일링 손절 기준점도 새 평단으로 리셋해야
+    # 한다(app/core/auto_trader.force_buy와 동일 이유 — DCA_BUY는 mark_position_dca_used()가 리셋하지만
+    # force_buy는 _execute()를 거치지 않아 이 리셋이 빠져 있었다).
+    if result.success and was_already_held:
+        updated_pos = get_paper_position(broker.broker_name, broker.mode, ticker)
+        if updated_pos and updated_pos.get('avg_buy_price'):
+            update_position_tracking(
+                broker.broker_name, broker.mode, ticker,
+                peak_price=updated_pos['avg_buy_price'], below_stop_streak=0,
+            )
 
     final_decision = 'BUY' if result.success else 'SKIP'
     reason = result.message if result.success else f"강제매수(수동) 실패: {result.message}"

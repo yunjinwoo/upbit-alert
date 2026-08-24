@@ -116,10 +116,10 @@
                 </ul>
             </div>
 
-            {% if client_ip %}
-            <span class="nav-link ms-auto text-muted" style="font-size:0.78rem" title="현재 접속 IP — 업비트/토스 Open API 키의 IP 허용 목록 등록 시 참고">🌐 {{ client_ip }}</span>
+            {% if server_outbound_ip %}
+            <span class="nav-link ms-auto text-muted" style="font-size:0.78rem" title="이 서버가 업비트/토스 API를 호출할 때 쓰는 발신 IP — Open API 키의 IP 허용 목록 등록 시 이 값을 등록하세요(방문자 IP가 아닙니다)">🌐 {{ server_outbound_ip }}</span>
             {% endif %}
-            <a href="{{ url_for('logout_view') }}" class="nav-link{{ '' if client_ip else ' ms-auto' }}">로그아웃</a>
+            <a href="{{ url_for('logout_view') }}" class="nav-link{{ '' if server_outbound_ip else ' ms-auto' }}">로그아웃</a>
         </div>
     </div>
 </nav>

@@ -105,6 +105,11 @@ class UpbitLiveBroker(BrokerClient):
             currency = b.get("currency")
             if currency == "KRW":
                 continue
+            # locked(거래중, 예: 다른 미체결 주문에 걸려있는 수량)까지 포함해 보유 수량을 잡는다 —
+            # 여기서 locked를 빼버리면 "전량 locked"인 종목이 포지션 목록에서 아예 사라져
+            # _reconcile_live_positions()가 "전량 매도됨"으로 오해하고 추적 행(peak_price/dca_count)을
+            # 지워버리는 게 더 나쁘다. 대신 실제로 매도 가능한 수량으로 제한하는 건 sell_market()에서
+            # 주문 직전에 처리한다(아래 참고).
             qty = float(b.get("balance") or 0) + float(b.get("locked") or 0)
             if qty <= 0:
                 continue
@@ -143,8 +148,17 @@ class UpbitLiveBroker(BrokerClient):
     def _extract_fill(order: Optional[dict]):
         """주문 조회 결과에서 (평균 체결가, 체결 수량)을 뽑는다. 미체결/조회 실패면 (None, None) —
         이 경우 주문 자체는 이미 나갔으므로 trade_order_log에는 amount_krw(BUY)/qty(SELL)만
-        남고 price는 비어있게 된다(다음 사이클의 _reconcile_live_positions가 실제 잔고로 정정)."""
+        남고 price는 비어있게 된다(다음 사이클의 _reconcile_live_positions가 실제 잔고로 정정).
+
+        state가 'done'/'cancel'(최종 상태)이 아니면 trades/executed_volume이 채워져 있어도 아직
+        부분체결일 뿐 최종 체결이 아니다 — _wait_for_fill()이 max_wait_sec 안에 최종 상태를 못 받고
+        타임아웃되면 이 부분체결 스냅샷을 그대로 반환하는데, 여기서 이걸 "완전 체결"로 취급해버리면
+        나머지 미체결분(예: 60%)이 몇 초 뒤 마저 체결돼도 trade_order_log/Slack 알림엔 이미 적힌
+        부분 수량(40%)만 최종 기록으로 영구히 남는다. 최종 상태가 아니면 (None, None)을 반환해
+        호출부가 "체결 확인 지연"으로 처리하게 한다."""
         if not isinstance(order, dict):
+            return None, None
+        if order.get('state') not in ('done', 'cancel'):
             return None, None
         trades = order.get('trades') or []
         try:
@@ -159,6 +173,22 @@ class UpbitLiveBroker(BrokerClient):
             return None, None
         avg_price = total_funds / executed_volume if executed_volume else None
         return avg_price, executed_volume
+
+    def _finalize_order(self, uuid: str, ticker: str, side: str, reason: str, unconfirmed_kwargs: dict) -> OrderResult:
+        """주문 접수(resp) 이후 buy_market/sell_market이 공통으로 하던 마무리 단계 — 체결 확인 폴링 →
+        체결 정보 추출 → OrderResult 구성 + 로그. 두 메서드가 side 라벨/미확정 시 채울 필드(BUY는
+        amount_krw, SELL은 qty)만 다르고 나머지 로직이 완전히 같아서 한 곳으로 합쳤다(따로 두면
+        한쪽만 고치고 잊어버리기 쉽다 — _extract_fill의 최종상태 체크를 추가할 때도 두 메서드 모두
+        거쳐가는 이 경로 하나만 고치면 됨)."""
+        side_label = "실매수" if side == "BUY" else "실매도"
+        filled = self._wait_for_fill(uuid)
+        price, qty = self._extract_fill(filled)
+        if not qty:
+            logger.warning(f"[{side_label}] {ticker} 주문 접수됐지만 체결 확인 지연 — uuid={uuid} (다음 사이클에 실제 잔고로 반영됨)")
+            return OrderResult(True, ticker, side, message=reason, **unconfirmed_kwargs)
+
+        logger.info(f"[{side_label}] {ticker} {qty:.8f}개 @ {price:,.0f}원 (총 {qty * price:,.0f}원) — {reason}")
+        return OrderResult(True, ticker, side, price=price, qty=qty, amount_krw=qty * price, message=reason)
 
     def buy_market(self, ticker: str, amount_krw: float, reason: str = "") -> OrderResult:
         blocked = self._blocked_reason()
@@ -178,20 +208,32 @@ class UpbitLiveBroker(BrokerClient):
             logger.error(f"[실매수] {ticker} 주문 거부: {resp}")
             return OrderResult(False, ticker, 'BUY', message=f"주문 거부됨: {resp}")
 
-        filled = self._wait_for_fill(resp['uuid'])
-        price, qty = self._extract_fill(filled)
-        if not qty:
-            logger.warning(f"[실매수] {ticker} 주문 접수됐지만 체결 확인 지연 — uuid={resp['uuid']} (다음 사이클에 실제 잔고로 반영됨)")
-            return OrderResult(True, ticker, 'BUY', amount_krw=amount_krw, message=reason)
-
-        logger.info(f"[실매수] {ticker} {qty:.8f}개 @ {price:,.0f}원 (총 {qty * price:,.0f}원) — {reason}")
-        return OrderResult(True, ticker, 'BUY', price=price, qty=qty, amount_krw=qty * price, message=reason)
+        return self._finalize_order(resp['uuid'], ticker, 'BUY', reason, unconfirmed_kwargs={'amount_krw': amount_krw})
 
     def sell_market(self, ticker: str, qty: float, reason: str = "") -> OrderResult:
         blocked = self._blocked_reason()
         if blocked:
             logger.warning(f"[실거래 매도 차단] {ticker} — {blocked}")
             return OrderResult(False, ticker, 'SELL', message=blocked)
+
+        # 요청받은 qty(get_positions()가 반환한 balance+locked 기준 보유수량)가 실제로 지금 매도 가능한
+        # 수량(locked 제외)보다 많을 수 있다 — 다른 미체결 주문에 일부가 잡혀있는 경우. 그대로 주문 내면
+        # 거래소가 "가능 수량 초과"로 거부해 손절/익절이 필요한 순간 아예 못 파는 사고로 이어지므로,
+        # 실제 매도 가능 수량으로 미리 잘라낸다.
+        currency = ticker.split('-', 1)[1] if '-' in ticker else ticker
+        available = None
+        for b in self.get_raw_balances():
+            if b.get('currency') == currency:
+                available = float(b.get('balance') or 0)
+                break
+        if available is not None and available < qty:
+            if available <= 0:
+                message = f"매도 가능 수량이 0입니다(요청 {qty}, 전량 다른 주문에 locked)"
+                logger.warning(f"[실거래 매도 차단] {ticker} — {message}")
+                return OrderResult(False, ticker, 'SELL', message=message)
+            logger.warning(f"[실거래 매도] {ticker} 요청 수량({qty}) 중 일부가 locked — 매도 가능한 {available}개로 축소")
+            qty = available
+
         price = self.get_current_price(ticker)
         if price and qty * price < MIN_ORDER_KRW:
             message = f"평가금액 {qty * price:,.0f}원 < 최소주문금액 {MIN_ORDER_KRW:,.0f}원"
@@ -206,14 +248,7 @@ class UpbitLiveBroker(BrokerClient):
             logger.error(f"[실매도] {ticker} 주문 거부: {resp}")
             return OrderResult(False, ticker, 'SELL', message=f"주문 거부됨: {resp}")
 
-        filled = self._wait_for_fill(resp['uuid'])
-        fill_price, filled_qty = self._extract_fill(filled)
-        if not filled_qty:
-            logger.warning(f"[실매도] {ticker} 주문 접수됐지만 체결 확인 지연 — uuid={resp['uuid']} (다음 사이클에 실제 잔고로 반영됨)")
-            return OrderResult(True, ticker, 'SELL', qty=qty, message=reason)
-
-        logger.info(f"[실매도] {ticker} {filled_qty:.8f}개 @ {fill_price:,.0f}원 (총 {filled_qty * fill_price:,.0f}원) — {reason}")
-        return OrderResult(True, ticker, 'SELL', price=fill_price, qty=filled_qty, amount_krw=filled_qty * fill_price, message=reason)
+        return self._finalize_order(resp['uuid'], ticker, 'SELL', reason, unconfirmed_kwargs={'qty': qty})
 
 
 def print_selected_balance():
