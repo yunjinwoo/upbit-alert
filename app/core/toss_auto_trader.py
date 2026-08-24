@@ -141,6 +141,9 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
     start_time = datetime.now()
     success = True
     error_message = None
+    is_live = False  # finally에서 참조하므로 try 진입 전에 기본값을 잡아둔다(TossBroker() 생성 자체가
+                      # 실패하는 등 broker.mode 접근 전에 예외가 나도 UnboundLocalError로 원래 예외가
+                      # 가려지는 걸 막기 위함 — app/core/auto_trader.py의 동일 수정 참고)
     result = {'exit_decisions': 0, 'entry_decisions': 0, 'entry_skipped_due_to_sell': False}
     try:
         broker = broker or TossBroker()
@@ -216,7 +219,8 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
     finally:
         # 대시보드의 "마지막 실행/다음 실행 예정" 하트비트 — run_live_trade_loop()의 자동 사이클뿐
         # 아니라 "지금 즉시 실행" 버튼(trigger_type='manual_live')으로 수동 실행했을 때도 반영되도록
-        # 루프 쪽이 아니라 여기(모든 실거래 사이클의 공통 종료 지점)에서 기록한다.
+        # 루프 쪽이 아니라 여기(모든 실거래 사이클의 공통 종료 지점)에서 기록한다. is_live는 try
+        # 진입 전 기본값(False)이 있어 broker 생성 자체가 실패해도 안전하게 False로 남는다.
         if is_live:
             set_engine_last_cycle_at(BROKER, 'live')
 

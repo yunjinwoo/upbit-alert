@@ -380,7 +380,7 @@
                 : '<span class="empty-val">미승인</span>';
         }
         const dcaCount = row.dca_count || 0;
-        if (dcaMaxCount && dcaCount >= dcaMaxCount) return `<span class="status-badge status-dca_done">🟣 물타기 ${dcaCount}/${dcaMaxCount} 완료</span>`;
+        if (dcaCount >= dcaMaxCount) return `<span class="status-badge status-dca_done">🟣 물타기 ${dcaCount}/${dcaMaxCount} 완료</span>`;
         if (row.next_status === 'stop_pending') return '<span class="status-badge status-stop_pending">🟡 손절 대기중</span>';
         if (row.next_status === 'dca_pending') return '<span class="status-badge status-dca_pending">🔵 물타기 대기중</span>';
         if (row.next_action === 'SELL') return '<span class="status-badge status-stop_pending">🔴 다음 사이클 매도 예정</span>';
@@ -391,10 +391,10 @@
     function liveRowHtml(ticker, row, checkboxHtml, dcaMaxCount) {
         const held = !!row.held;
         const dcaCount = row.dca_count || 0;
-        const dcaExhausted = dcaMaxCount && dcaCount >= dcaMaxCount;
+        const dcaExhausted = dcaCount >= dcaMaxCount;
         const dcaCheckbox = held
             ? `<input type="checkbox" ${row.dca_enabled ? 'checked' : ''} ${dcaExhausted ? 'disabled' : ''}
-                   title="${dcaExhausted ? `이미 최대 ${dcaMaxCount}회 물타기를 완료해 더 켤 수 없습니다` : `체크하면 손절 직전 물타기 트리거까지 대기 후 실제 추가매수 (현재 ${dcaCount}/${dcaMaxCount || 1}회)`}"
+                   title="${dcaExhausted ? `이미 최대 ${dcaMaxCount}회 물타기를 완료해 더 켤 수 없습니다` : `체크하면 손절 직전 물타기 트리거까지 대기 후 실제 추가매수 (현재 ${dcaCount}/${dcaMaxCount}회)`}"
                    onchange="toggleLiveDca('${ticker}', this)">`
             : '<span class="empty-val">—</span>';
         return `
@@ -428,7 +428,8 @@
             engineStatusText.className = 'engine-status-text ' + (json.engine_enabled ? 'engine-status-on' : 'engine-status-off');
             renderCycleTiming(json);
 
-            const dcaMaxCount = json.dca_max_count || 1;
+            const dcaMaxCount = json.dca_max_count ?? 1;  // ??만 사용 — 0(물타기 완전 비활성화)은 유효한
+                                                            // 값이므로 ||로 1로 뭉개면 안 됨(0/0회를 1회 가능처럼 표시하는 버그)
             const rows = [];
             for (const c of (json.candidates || [])) {
                 const cb = `<input type="checkbox" ${c.approved ? 'checked' : ''} onchange="toggleLiveCandidateApproval('${c.ticker}', this)">`;

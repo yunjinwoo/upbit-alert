@@ -3879,8 +3879,12 @@ def update_position_tracking(broker: str, mode: str, ticker: str, peak_price: fl
     conn.close()
 
 
-def set_position_dca_enabled(broker: str, mode: str, ticker: str, enabled: bool):
-    """대시보드 체크박스: 이 포지션에 물타기(추가매수) 허용 여부 저장."""
+def set_position_dca_enabled(broker: str, mode: str, ticker: str, enabled: bool) -> bool:
+    """대시보드 체크박스: 이 포지션에 물타기(추가매수) 허용 여부 저장.
+
+    매칭되는 paper_positions 행이 아직 없으면(예: 실거래 잔고에는 잡히지만 추적 행이 아직 안
+    만들어진 종목) UPDATE는 조용히 0행에 적용되고 끝난다 — 그걸 호출부가 구분할 수 있도록 실제로
+    갱신된 행이 있었는지를 bool로 반환한다(True=저장됨, False=대상 행 없어 무시됨)."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -3888,8 +3892,10 @@ def set_position_dca_enabled(broker: str, mode: str, ticker: str, enabled: bool)
         UPDATE paper_positions SET dca_enabled = ?, updated_at = ?
         WHERE broker = ? AND mode = ? AND ticker = ?
     ''', (1 if enabled else 0, timestamp, broker, mode, ticker))
+    updated = cursor.rowcount > 0
     conn.commit()
     conn.close()
+    return updated
 
 
 def mark_position_dca_used(broker: str, mode: str, ticker: str, new_peak_price: float):

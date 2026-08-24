@@ -168,7 +168,10 @@ class TossLiveBroker(BrokerClient):
         if not filled_qty:
             status = (filled or {}).get("status", "확인불가")
             logger.warning(f"[실매수] {ticker} 주문 접수됐지만 체결 확인 지연(status={status}) — orderId={order_id} (다음 사이클에 실제 잔고로 반영됨)")
-            return OrderResult(True, ticker, "BUY", qty=shares, message=reason)
+            # qty는 아직 확정 체결 수량이 아니라 "요청한" 수량이므로 감사로그에 확정 체결처럼
+            # 남기지 않는다(app/core/brokers/upbit_live_broker.py의 buy_market과 동일한 관례 —
+            # amount_krw만 남기고 qty/price는 비워 다음 사이클의 실제 잔고 반영을 기다린다).
+            return OrderResult(True, ticker, "BUY", amount_krw=shares * price, message=reason)
 
         logger.info(f"[실매수] {ticker} {filled_qty:.0f}주 @ {fill_price:,.0f}원 (총 {filled_qty * fill_price:,.0f}원) — {reason}")
         return OrderResult(True, ticker, "BUY", price=fill_price, qty=filled_qty, amount_krw=filled_qty * fill_price, message=reason)
@@ -185,7 +188,16 @@ class TossLiveBroker(BrokerClient):
             logger.warning(f"[실거래 매도 차단] {ticker} — {message}")
             return OrderResult(False, ticker, "SELL", message=message)
 
-        order_id = toss_client.create_order(self._account_seq, symbol=ticker, side="SELL", quantity=shares)
+        # buy_market과 동일하게 고액 주문 확인 플래그를 계산한다 — 매수만 큰 금액이 되는 게 아니라
+        # 많은 수량을 들고 있던 종목을 손절/익절 매도할 때도 똑같이 HIGH_VALUE_ORDER_KRW를 넘을 수
+        # 있고, Toss API가 매도에도 이 플래그를 요구한다면 안 넘길 경우 정작 팔아야 할 때 거부당한다.
+        price = self.get_current_price(ticker)
+        confirm_high_value_order = bool(price and shares * price >= HIGH_VALUE_ORDER_KRW)
+
+        order_id = toss_client.create_order(
+            self._account_seq, symbol=ticker, side="SELL", quantity=shares,
+            confirm_high_value_order=confirm_high_value_order,
+        )
         if not order_id:
             logger.error(f"[실매도] {ticker} 주문 거부/실패")
             return OrderResult(False, ticker, "SELL", message="주문 거부/실패")
