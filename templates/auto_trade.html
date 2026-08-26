@@ -83,6 +83,15 @@
         .collapsible-header:hover { color: #1d4ed8; }
         .collapse-chevron { font-size: 0.78rem; color: #94a3b8; }
         .loading-row td { text-align: center; color: #94a3b8; padding: 24px; }
+        .btn-row-trade {
+            font-size: 0.68rem; font-weight: 700; padding: 2px 8px; border-radius: 6px; border: none;
+            cursor: pointer; white-space: nowrap; margin: 0 2px;
+        }
+        .btn-row-trade:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-row-buy { background: #fee2e2; color: #b91c1c; }
+        .btn-row-buy:hover:not(:disabled) { background: #fecaca; }
+        .btn-row-sell { background: #dbeafe; color: #1d4ed8; }
+        .btn-row-sell:hover:not(:disabled) { background: #bfdbfe; }
     </style>
 </head>
 <body>
@@ -134,10 +143,11 @@
                         <th>평가손익</th>
                         <th style="text-align:center">상태</th>
                         <th style="text-align:center">물타기</th>
+                        <th style="text-align:center">매매</th>
                     </tr>
                 </thead>
                 <tbody id="liveCandidatesBody">
-                    <tr class="loading-row"><td colspan="9">로딩 중...</td></tr>
+                    <tr class="loading-row"><td colspan="10">로딩 중...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -397,6 +407,13 @@
                    title="${dcaExhausted ? `이미 최대 ${dcaMaxCount}회 물타기를 완료해 더 켤 수 없습니다` : `체크하면 손절 직전 물타기 트리거까지 대기 후 실제 추가매수 (현재 ${dcaCount}/${dcaMaxCount}회)`}"
                    onchange="toggleLiveDca('${ticker}', this)">`
             : '<span class="empty-val">—</span>';
+        // 종목별 즉시 매수/매도 — 위쪽 "⚡ 실거래 강제매수"(티커 직접 입력)와 같은 API를 쓰되, 이미
+        // 표에 떠 있는 종목이면 타이핑 없이 바로 누를 수 있게 한 것. 매도는 보유 중일 때만 노출한다
+        // (미보유 종목은 팔 수량이 없음).
+        const tradeButtons = `
+            <button class="btn-row-trade btn-row-buy" onclick="liveForceTradeRow('${ticker}', 'buy', this)" title="1종목당 매수금액만큼 지금 즉시 실매수">매수</button>
+            ${held ? `<button class="btn-row-trade btn-row-sell" onclick="liveForceTradeRow('${ticker}', 'sell', this)" title="보유 수량 전량을 지금 즉시 실매도">매도</button>` : ''}
+        `;
         return `
             <tr>
                 <td style="text-align:center">${checkboxHtml}</td>
@@ -408,6 +425,7 @@
                 <td>${held && row.eval_amount != null ? pnlSpan(row.eval_amount - row.qty * row.avg_buy_price, row.pnl_pct) : '<span class="empty-val">—</span>'}</td>
                 <td style="text-align:center">${liveStatusBadge(row, dcaMaxCount)}</td>
                 <td style="text-align:center">${dcaCheckbox}</td>
+                <td style="text-align:center; white-space:nowrap">${tradeButtons}</td>
             </tr>`;
     }
 
@@ -442,11 +460,11 @@
 
             body.innerHTML = rows.length
                 ? rows.join('')
-                : '<tr class="loading-row"><td colspan="9">아래 "🎯 매매 대상 코인" 표에서 관심 등록을 먼저 체크하세요.</td></tr>';
+                : '<tr class="loading-row"><td colspan="10">아래 "🎯 매매 대상 코인" 표에서 관심 등록을 먼저 체크하세요.</td></tr>';
 
             renderAllCandidates(json.all_candidates || []);
         } catch (e) {
-            body.innerHTML = `<tr class="loading-row"><td colspan="9" class="text-danger">오류: ${e.message}</td></tr>`;
+            body.innerHTML = `<tr class="loading-row"><td colspan="10" class="text-danger">오류: ${e.message}</td></tr>`;
         }
     }
 
@@ -593,6 +611,42 @@
         } catch (e) {
             msg.textContent = '';
             alert('실거래 강제매수 실패: ' + e.message);
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    async function liveForceTradeRow(ticker, side, btn) {
+        // "🔴 실거래" 표의 종목별 매수/매도 버튼 — liveForceBuy()와 같은 API를 쓰되 티커를 이미
+        // 알고 있으니 입력창 없이 바로 실행한다. side: 'buy' | 'sell'.
+        const label = side === 'buy' ? '매수' : '매도';
+        const endpoint = side === 'buy' ? 'api/auto-trade/live/force-buy' : 'api/auto-trade/live/force-sell';
+        const confirmMsg = side === 'buy'
+            ? `⚠️ 실거래입니다. ${ticker}를 조건 검사 없이 지금 즉시 매수(1종목당 매수금액만큼)할까요? (실거래 스위치가 켜져 있어야 체결됩니다)`
+            : `⚠️ 실거래입니다. ${ticker} 보유 수량 전량을 지금 즉시 매도할까요?`;
+        if (!confirm(confirmMsg)) return;
+        btn.disabled = true;
+        const msg = document.getElementById('liveRunNowMsg');
+        try {
+            const res = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ticker }),
+            });
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+            if (json.success) {
+                // 체결 확인이 지연되면 price/qty가 비어있을 수 있음(실거래 브로커 — 다음 사이클에 확정)
+                const qtyText = json.qty != null ? `${json.qty.toFixed(6)}개` : '(체결 확인 지연)';
+                const priceText = json.price != null ? ` @ ${Math.round(json.price).toLocaleString()}원` : '';
+                msg.textContent = `⚡ 실거래 ${label} 완료 — ${ticker} ${qtyText}${priceText}`;
+            } else {
+                msg.textContent = `${label} 안 됨 — ${json.message}`;
+            }
+            await loadLiveSummary();
+        } catch (e) {
+            msg.textContent = '';
+            alert(`실거래 ${label} 실패: ` + e.message);
         } finally {
             btn.disabled = false;
         }
