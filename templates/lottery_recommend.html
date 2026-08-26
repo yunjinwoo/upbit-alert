@@ -1,0 +1,944 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>번호 추천</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f4f7f6; font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; }
+        .main-navbar { background-color: #1a1a2e; }
+        .main-navbar .navbar-brand { color: #fff; font-weight: bold; }
+        .main-navbar .nav-link { color: rgba(255,255,255,0.75) !important; font-size: 0.82rem; }
+        .main-navbar .nav-link:hover, .main-navbar .nav-link.active { color: #fff !important; }
+        .main-navbar .nav-link.active { border-bottom: 2px solid #4da6ff; }
+
+        .dashboard-container { margin-top: 24px; margin-bottom: 60px; }
+        .card-panel { background: white; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); padding: 14px 18px; }
+        .table-container { background: white; padding: 20px 22px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
+        .hint { color: #8a8f9c; font-size: 0.78rem; }
+
+        .disclaimer { background: #fff7e6; border: 1px solid #f2d9a0; color: #8a6b1f; font-size: 0.8rem; padding: 10px 14px; border-radius: 10px; }
+
+        .top-bar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; border-bottom: 2px solid #7b3fe4; padding-bottom: 10px; margin-bottom: 6px; }
+        .game-tabs { display: flex; gap: 4px; }
+        .game-tabs .nav-link { font-weight: bold; color: #666; cursor: pointer; padding: 6px 12px; border-radius: 8px 8px 0 0; }
+        .game-tabs .nav-link.active { color: #7b3fe4 !important; background: #f1e9fd !important; }
+        .method-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
+        .method-buttons .btn { white-space: nowrap; }
+
+        .reco-balls, .reco-digits { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; }
+        .ball { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.72rem; background: #3454c9; color: #fff; flex: none; cursor: pointer; }
+        .pball-single { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.72rem; background: #b5790a; color: #fff; flex: none; cursor: pointer; }
+        .digit { width: 26px; height: 26px; border-radius: 7px; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 0.8rem; background: #eef0f8; color: #1a1a2e; flex: none; cursor: pointer; }
+        .group-badge { font-weight: 800; font-size: 0.7rem; padding: 3px 9px; border-radius: 999px; background: #dff5ea; color: #0a8f5c; flex: none; cursor: pointer; }
+        .ball.marked, .digit.marked, .pball-single.marked, .group-badge.marked { box-shadow: 0 0 0 2px #8b5cf6 inset; }
+
+        /* 번호대 별 색상 (로또645 공식 배색 기준으로 확장) — main(뽑힌 일반 번호)에만 적용, 보너스/조는 고유 색 유지 */
+        .band-1 { background: #fbc400 !important; color: #574b0d !important; }
+        .band-2 { background: #69c8f2 !important; color: #0b3954 !important; }
+        .band-3 { background: #ff7272 !important; color: #5a0d0d !important; }
+        .band-4 { background: #aaaaaa !important; color: #fff !important; }
+        .band-5 { background: #b0d840 !important; color: #2f3d0a !important; }
+
+        .game-badge { font-weight: 700; font-size: 0.72rem; padding: 3px 10px; border-radius: 999px; white-space: nowrap; }
+        .game-badge-powerball { background: #fdf1de; color: #b5790a; }
+        .game-badge-lotto645 { background: #e7ecfb; color: #3454c9; }
+        .game-badge-pension720 { background: #dff5ea; color: #0a8f5c; }
+
+        .freq-wrap { display: flex; flex-wrap: wrap; gap: 6px; }
+        .freq-chip {
+            display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px 4px 12px;
+            border-radius: 999px; background: #eef0f8; color: #1a1a2e; font-weight: 700; font-size: 0.78rem;
+            cursor: pointer; border: 2px solid transparent;
+        }
+        .freq-chip .cnt { background: rgba(255,255,255,0.55); font-weight: 800; font-size: 0.7rem; padding: 1px 7px; border-radius: 999px; }
+        .freq-chip.bonus { background: #fdf1de; color: #b5790a; }
+        .freq-chip.marked { border-color: #8b5cf6; }
+
+        .match-badge { font-weight: 800; font-size: 0.72rem; padding: 3px 9px; border-radius: 999px; background: #eef0f8; color: #5b6270; white-space: nowrap; }
+        .match-badge.hit { background: #fff3cd; color: #7a5c00; }
+        .prize-amount { font-weight: 700; color: #1f8a5f; white-space: nowrap; }
+        .fav-btn { background: none; border: none; font-size: 1rem; cursor: pointer; line-height: 1; }
+        .fav-btn:disabled { opacity: .5; cursor: default; }
+
+        .msg { font-size: 0.78rem; font-weight: 600; margin-top: 6px; white-space: pre-line; }
+        .msg.ok { color: #1f8a5f; }
+        .msg.err { color: #c14a4a; }
+    </style>
+</head>
+<body>
+
+{% include '_navbar.html' %}
+
+<div class="container dashboard-container">
+    <div class="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-2">
+        <h2 class="mb-0" style="font-size:1.2rem; font-weight:700; color:#1a1a2e">🎲 번호 추천</h2>
+    </div>
+    <div class="disclaimer mb-3">⚠️ 모든 회차는 완전히 독립적인 무작위 추첨이라 과거 데이터가 다음 결과에 영향을 주지 않아요. 아래 5가지는 전부 "재미로 보는" 참고용 추천이니 가볍게 즐겨주세요!</div>
+
+    <div class="top-bar">
+        <div class="game-tabs" id="gameTab">
+            <a class="nav-link active" data-game-tab="powerball">파워볼</a>
+            <a class="nav-link" data-game-tab="lotto645">로또6/45</a>
+            <a class="nav-link" data-game-tab="pension720">연금복권720+</a>
+        </div>
+        <div class="d-flex gap-2 flex-wrap align-items-center">
+            <div class="method-buttons" id="methodButtons"></div>
+            <button type="button" class="btn btn-success btn-sm" id="addAllBtn">🧺 전체 넣기</button>
+        </div>
+    </div>
+    <p class="hint mb-1" id="methodHint"></p>
+    <div class="msg" id="genMsg"></div>
+
+    <div class="card-panel my-3">
+        <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+            <div>
+                <h6 class="fw-bold mb-1">번호별 통계 (<span id="freqGameLabel"></span> 기준, 저장된 추천 전체)</h6>
+                <p class="hint mb-2">번호를 클릭하면 아래 표에서 같은 번호에 보라색 테두리가 표시돼요 · 칩과 표의 번호는 서로 연동됩니다.</p>
+            </div>
+            <div class="d-flex align-items-center gap-2">
+                <span class="hint" id="markCount">일반 0/6 · 보너스 0/6</span>
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="clearMarksBtn">표시 지우기</button>
+            </div>
+        </div>
+        <div class="hint mb-1" id="freqMainLabel">번호</div>
+        <div class="freq-wrap mb-2" id="freqMainBoard"></div>
+        <div class="hint mb-1" id="freqBonusLabel" style="display:none"></div>
+        <div class="freq-wrap" id="freqBonusBoard"></div>
+    </div>
+
+    <div class="card-panel my-3">
+        <div class="d-flex flex-wrap gap-2 align-items-center">
+            <select id="filterGame" class="form-select form-select-sm" style="max-width:160px">
+                <option value="">게임 전체</option>
+                <option value="powerball">파워볼</option>
+                <option value="lotto645">로또6/45</option>
+                <option value="pension720">연금복권720+</option>
+            </select>
+            <select id="filterMethod" class="form-select form-select-sm" style="max-width:160px">
+                <option value="">방식 전체</option>
+            </select>
+            <input type="text" id="filterNumber" class="form-control form-control-sm" style="max-width:160px" placeholder="번호 검색 (예: 7)">
+            <button type="button" class="btn btn-outline-secondary btn-sm" id="resetFilterBtn">필터 초기화</button>
+            <div class="form-check ms-auto">
+                <input class="form-check-input" type="checkbox" id="selectAll">
+                <label class="form-check-label hint" for="selectAll">전체 선택(현재 필터)</label>
+            </div>
+            <button type="button" class="btn btn-outline-danger btn-sm" id="bulkDeleteBtn" disabled>선택 삭제 (0)</button>
+        </div>
+    </div>
+
+    <div class="table-container">
+        <table id="recoTable" class="table table-hover" style="width:100%">
+            <thead class="table-light">
+                <tr>
+                    <th></th>
+                    <th>게임</th>
+                    <th>방식</th>
+                    <th>번호</th>
+                    <th>뽑은 시각</th>
+                    <th>매칭</th>
+                    <th title="1등처럼 정확한 회차가 확인된 경우에만 실제 저장된 금액을 보여줘요. 그 외 등수는 회차마다 금액이 달라 데이터가 없어요.">당첨금액</th>
+                    <th></th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody id="recoTableBody"></tbody>
+        </table>
+    </div>
+</div>
+
+<script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
+
+<script>
+    // ──────────────────────────────────────────────
+    // 공통 유틸 — 무작위/가중치 추첨, 빈도 계산, 통계 필터
+    // ──────────────────────────────────────────────
+    function pickRandomUnique(pool, k) {
+        const arr = pool.slice();
+        const out = [];
+        for (let i = 0; i < k && arr.length > 0; i++) {
+            const idx = Math.floor(Math.random() * arr.length);
+            out.push(arr.splice(idx, 1)[0]);
+        }
+        return out;
+    }
+
+    function weightedSampleWithoutReplacement(pool, weights, k) {
+        const items = pool.map((v, i) => ({ v, w: weights[i] }));
+        const out = [];
+        for (let i = 0; i < k && items.length > 0; i++) {
+            const total = items.reduce((s, it) => s + it.w, 0);
+            let r = Math.random() * total;
+            let idx = items.length - 1;
+            for (let j = 0; j < items.length; j++) {
+                r -= items[j].w;
+                if (r <= 0) { idx = j; break; }
+            }
+            out.push(items.splice(idx, 1)[0].v);
+        }
+        return out;
+    }
+
+    function buildFreqMap(domain, valuesFn, rounds) {
+        const counts = new Map();
+        domain.forEach(n => counts.set(n, 0));
+        rounds.forEach(r => valuesFn(r).forEach(n => counts.set(n, (counts.get(n) || 0) + 1)));
+        return counts;
+    }
+
+    // top=true: 자주 나온 순으로 상위 take개(핫), false: 적게 나온 순으로 상위 take개(콜드)
+    function poolByFreq(domain, counts, top, take) {
+        const sorted = domain.slice().sort((a, b) => (top ? counts.get(b) - counts.get(a) : counts.get(a) - counts.get(b)));
+        return sorted.slice(0, take);
+    }
+
+    // 과거 조합들의 합계 20~80퍼센타일 구간 + 홀수개수 최빈값 — "통계 필터 조합" 방식에서 사용
+    function sumOddStats(combos) {
+        if (!combos.length) return { sumLo: null, sumHi: null, modeOdd: null };
+        const sums = combos.map(c => c.reduce((a, b) => a + b, 0)).sort((a, b) => a - b);
+        const pct = (arr, p) => arr[Math.floor((arr.length - 1) * p)];
+        const oddCounts = combos.map(c => c.filter(n => n % 2 === 1).length);
+        const freq = new Map();
+        oddCounts.forEach(c => freq.set(c, (freq.get(c) || 0) + 1));
+        let modeOdd = null, modeCnt = -1;
+        freq.forEach((cnt, val) => { if (cnt > modeCnt) { modeCnt = cnt; modeOdd = val; } });
+        return { sumLo: pct(sums, 0.2), sumHi: pct(sums, 0.8), modeOdd };
+    }
+
+    function passesFilter(candidate, stats) {
+        const sum = candidate.reduce((a, b) => a + b, 0);
+        const odd = candidate.filter(n => n % 2 === 1).length;
+        if (stats.sumLo !== null && (sum < stats.sumLo || sum > stats.sumHi)) return false;
+        if (stats.modeOdd !== null && Math.abs(odd - stats.modeOdd) > 1) return false;
+        return true;
+    }
+
+    // 조건에 맞는 조합을 maxAttempts번까지 시도해서 count개 모으고, 그래도 부족하면 랜덤으로 채움(무한루프 방지)
+    function generateFiltered(candidateFn, stats, count, maxAttempts) {
+        const out = [];
+        let attempts = 0;
+        while (out.length < count && attempts < maxAttempts) {
+            attempts++;
+            const c = candidateFn();
+            if (passesFilter(c, stats)) out.push(c);
+        }
+        while (out.length < count) out.push(candidateFn());
+        return out;
+    }
+
+    const SETS_PER_DRAW = 3;
+    const SETS_PER_METHOD_IN_ADD_ALL = 2; // "전체 넣기" 클릭 시 5가지 방식 각각 몇 세트씩 넣을지
+
+    // ──────────────────────────────────────────────
+    // 당첨결과 통계용 데이터 로드 (핫/콜드/가중치/필터 계산 재료)
+    // ──────────────────────────────────────────────
+    let roundsData = { powerball: [], lotto645: [], pension720: [] };
+
+    async function loadAllRounds() {
+        const safeFetch = (url) => fetch(url).then(r => r.json()).catch(() => ({ data: [] }));
+        const [pb, lo, pe] = await Promise.all([
+            safeFetch('api/powerball/rounds'),
+            safeFetch('api/lotto645/rounds'),
+            safeFetch('api/pension720/rounds'),
+        ]);
+        roundsData.powerball = pb.data || [];
+        roundsData.lotto645 = lo.data || [];
+        roundsData.pension720 = pe.data || [];
+    }
+
+    // ──────────────────────────────────────────────
+    // 이미 즐겨찾기에 저장된 조합인지 판별 (번호+보너스가 똑같은 게 이미 있으면 ✅로 고정 표시)
+    // ──────────────────────────────────────────────
+    let favoritesData = { powerball: [], lotto645: [], pension720: [] };
+
+    async function loadFavoritesData() {
+        const safeFetch = (url) => fetch(url).then(r => r.json()).catch(() => ({ data: [] }));
+        const [pb, lo, pe] = await Promise.all([
+            safeFetch('api/powerball/favorites'),
+            safeFetch('api/lotto645/favorites'),
+            safeFetch('api/pension720/favorites'),
+        ]);
+        favoritesData.powerball = pb.data || [];
+        favoritesData.lotto645 = lo.data || [];
+        favoritesData.pension720 = pe.data || [];
+    }
+
+    function isFavorited(rec) {
+        const favs = favoritesData[rec.game] || [];
+        const sortedMain = rec.main.slice().sort((a, b) => a - b);
+        if (rec.game === 'powerball') {
+            return favs.some(f => f.pb === rec.bonus && JSON.stringify(f.nums.slice().sort((a, b) => a - b)) === JSON.stringify(sortedMain));
+        }
+        if (rec.game === 'lotto645') {
+            return favs.some(f => JSON.stringify(f.nums.slice().sort((a, b) => a - b)) === JSON.stringify(sortedMain));
+        }
+        // pension720 — 자릿수는 순서가 의미 있어서 정렬하면 안 됨
+        const numberStr = rec.main.join('');
+        return favs.some(f => f.group === rec.bonus && f.number === numberStr);
+    }
+
+    // ──────────────────────────────────────────────
+    // 파워볼 — 일반볼 5개(1~28, 중복없음) + 파워볼 1개(0~9)
+    // ──────────────────────────────────────────────
+    const PB_NUM_DOMAIN = Array.from({ length: 28 }, (_, i) => i + 1);
+    const PB_PB_DOMAIN = Array.from({ length: 10 }, (_, i) => i);
+
+    function pbGenerate(method, count = SETS_PER_DRAW) {
+        const rounds = roundsData.powerball;
+        const numCounts = buildFreqMap(PB_NUM_DOMAIN, r => r.nums, rounds);
+        const pbCounts = buildFreqMap(PB_PB_DOMAIN, r => [r.pb], rounds);
+        const results = [];
+        for (let i = 0; i < count; i++) {
+            let nums, pb;
+            if (method === 'hot' || method === 'cold') {
+                const top = method === 'hot';
+                const numPool = poolByFreq(PB_NUM_DOMAIN, numCounts, top, 12);
+                const pbPool = poolByFreq(PB_PB_DOMAIN, pbCounts, top, 4);
+                nums = pickRandomUnique(numPool.length >= 5 ? numPool : PB_NUM_DOMAIN, 5).sort((a, b) => a - b);
+                pb = pbPool[Math.floor(Math.random() * pbPool.length)];
+            } else if (method === 'weighted') {
+                const numWeights = PB_NUM_DOMAIN.map(n => numCounts.get(n) + 1);
+                nums = weightedSampleWithoutReplacement(PB_NUM_DOMAIN, numWeights, 5).sort((a, b) => a - b);
+                const pbWeights = PB_PB_DOMAIN.map(n => pbCounts.get(n) + 1);
+                pb = weightedSampleWithoutReplacement(PB_PB_DOMAIN, pbWeights, 1)[0];
+            } else if (method === 'filter') {
+                const stats = sumOddStats(rounds.map(r => r.nums));
+                nums = generateFiltered(() => pickRandomUnique(PB_NUM_DOMAIN, 5).sort((a, b) => a - b), stats, 1, 300)[0];
+                const pbWeights = PB_PB_DOMAIN.map(n => pbCounts.get(n) + 1);
+                pb = weightedSampleWithoutReplacement(PB_PB_DOMAIN, pbWeights, 1)[0];
+            } else {
+                nums = pickRandomUnique(PB_NUM_DOMAIN, 5).sort((a, b) => a - b);
+                pb = PB_PB_DOMAIN[Math.floor(Math.random() * 10)];
+            }
+            results.push({ nums, pb });
+        }
+        return results;
+    }
+
+    // ──────────────────────────────────────────────
+    // 로또6/45 — 번호 6개(1~45, 중복없음)
+    // ──────────────────────────────────────────────
+    const LOTTO_DOMAIN = Array.from({ length: 45 }, (_, i) => i + 1);
+
+    function lottoGenerate(method, count = SETS_PER_DRAW) {
+        const rounds = roundsData.lotto645;
+        const counts = buildFreqMap(LOTTO_DOMAIN, r => r.nums, rounds);
+        const results = [];
+        for (let i = 0; i < count; i++) {
+            let nums;
+            if (method === 'hot' || method === 'cold') {
+                const pool = poolByFreq(LOTTO_DOMAIN, counts, method === 'hot', 18);
+                nums = pickRandomUnique(pool.length >= 6 ? pool : LOTTO_DOMAIN, 6).sort((a, b) => a - b);
+            } else if (method === 'weighted') {
+                const weights = LOTTO_DOMAIN.map(n => counts.get(n) + 1);
+                nums = weightedSampleWithoutReplacement(LOTTO_DOMAIN, weights, 6).sort((a, b) => a - b);
+            } else if (method === 'filter') {
+                const stats = sumOddStats(rounds.map(r => r.nums));
+                nums = generateFiltered(() => pickRandomUnique(LOTTO_DOMAIN, 6).sort((a, b) => a - b), stats, 1, 300)[0];
+            } else {
+                nums = pickRandomUnique(LOTTO_DOMAIN, 6).sort((a, b) => a - b);
+            }
+            results.push(nums);
+        }
+        return results;
+    }
+
+    // ──────────────────────────────────────────────
+    // 연금복권720+ — 조 1개(1~5) + 번호 6자리(자릿수마다 0~9, 중복 가능)
+    // ──────────────────────────────────────────────
+    const GROUP_DOMAIN = [1, 2, 3, 4, 5];
+    const DIGIT_DOMAIN = Array.from({ length: 10 }, (_, i) => i);
+
+    function randomDigits() {
+        return Array.from({ length: 6 }, () => Math.floor(Math.random() * 10));
+    }
+
+    function pensionGenerate(method, count = SETS_PER_DRAW) {
+        const rounds = roundsData.pension720;
+        const groupCounts = buildFreqMap(GROUP_DOMAIN, r => [r.group], rounds);
+        const posCounts = Array.from({ length: 6 }, (_, pos) =>
+            buildFreqMap(DIGIT_DOMAIN, r => [parseInt(r.number[pos], 10)], rounds)
+        );
+        const results = [];
+        for (let i = 0; i < count; i++) {
+            let group, digits;
+            if (method === 'hot' || method === 'cold') {
+                const top = method === 'hot';
+                const groupPool = poolByFreq(GROUP_DOMAIN, groupCounts, top, 3);
+                group = groupPool[Math.floor(Math.random() * groupPool.length)];
+                digits = posCounts.map(pc => {
+                    const pool = poolByFreq(DIGIT_DOMAIN, pc, top, 4);
+                    return pool[Math.floor(Math.random() * pool.length)];
+                });
+            } else if (method === 'weighted') {
+                const groupWeights = GROUP_DOMAIN.map(g => groupCounts.get(g) + 1);
+                group = weightedSampleWithoutReplacement(GROUP_DOMAIN, groupWeights, 1)[0];
+                digits = posCounts.map(pc => {
+                    const weights = DIGIT_DOMAIN.map(d => pc.get(d) + 1);
+                    return weightedSampleWithoutReplacement(DIGIT_DOMAIN, weights, 1)[0];
+                });
+            } else if (method === 'filter') {
+                const stats = sumOddStats(rounds.map(r => r.number.split('').map(Number)));
+                digits = generateFiltered(randomDigits, stats, 1, 300)[0];
+                const groupWeights = GROUP_DOMAIN.map(g => groupCounts.get(g) + 1);
+                group = weightedSampleWithoutReplacement(GROUP_DOMAIN, groupWeights, 1)[0];
+            } else {
+                group = GROUP_DOMAIN[Math.floor(Math.random() * 5)];
+                digits = randomDigits();
+            }
+            results.push({ group, digits });
+        }
+        return results;
+    }
+
+    // ──────────────────────────────────────────────
+    // 게임/방식 메타 + 상단 버튼 · 저장
+    // ──────────────────────────────────────────────
+    const GAME_META = {
+        powerball: { label: '파워볼' },
+        lotto645: { label: '로또6/45' },
+        pension720: { label: '연금복권720+' },
+    };
+    const METHOD_META = [
+        { id: 'full', label: '🎯 완전 랜덤', short: '완전 랜덤', desc: '실제 추첨처럼 순수 무작위로 뽑아요.' },
+        { id: 'hot', label: '🔥 핫 넘버', short: '핫 넘버', desc: '저장된 당첨결과에서 자주 나온 번호 위주로 뽑아요.' },
+        { id: 'cold', label: '🧊 콜드 넘버', short: '콜드 넘버', desc: '오래 안 나왔거나 적게 나온 번호 위주로 뽑아요 — "나올 때 됐다" 컨셉.' },
+        { id: 'weighted', label: '⚖️ 빈도 가중', short: '빈도 가중', desc: '자주 나온 번호일수록 뽑힐 확률이 살짝 높아지는 랜덤이에요.' },
+        { id: 'filter', label: '🧮 통계 필터', short: '통계 필터', desc: '과거 당첨결과의 홀짝 비율·합계 구간에 맞춰 그럴듯한 조합만 골라요.' },
+    ];
+    const GENERATORS = { powerball: pbGenerate, lotto645: lottoGenerate, pension720: pensionGenerate };
+
+    let currentGame = 'powerball';
+    let allRecommendations = [];
+    let selectedIds = new Set();
+    let dataTable = null;
+
+    // 번호대별 색상 — main(뽑힌 일반 번호)에만 적용. 파워볼/조는 고유 강조색을 그대로 씀
+    function bandClass(game, n) {
+        if (game === 'lotto645') {
+            if (n <= 10) return 'band-1';
+            if (n <= 20) return 'band-2';
+            if (n <= 30) return 'band-3';
+            if (n <= 40) return 'band-4';
+            return 'band-5';
+        }
+        if (game === 'powerball') {
+            if (n <= 7) return 'band-1';
+            if (n <= 14) return 'band-2';
+            if (n <= 21) return 'band-3';
+            return 'band-4';
+        }
+        // pension720 — 자릿수 0~9
+        if (n <= 3) return 'band-1';
+        if (n <= 6) return 'band-2';
+        return 'band-5';
+    }
+
+    // ──────────────────────────────────────────────
+    // 저장된 실제 당첨결과(roundsData) 대비 매칭 등수 판정 — 게임별 실제 등수 규칙
+    // ──────────────────────────────────────────────
+    const LOTTO_FIXED_PRIZE = { 4: 50000, 5: 5000 }; // 로또6/45 4·5등은 법으로 고정된 금액 (2·3등은 회차마다 달라 데이터 없음)
+
+    function pbGrade(mainMatch, pbMatch) {
+        if (mainMatch === 5 && pbMatch) return { rank: 1, label: '1등' };
+        if (mainMatch === 5) return { rank: 2, label: '2등' };
+        if (mainMatch === 4 && pbMatch) return { rank: 3, label: '3등' };
+        if (mainMatch === 4) return { rank: 4, label: '4등' };
+        if (mainMatch === 3 && pbMatch) return { rank: 5, label: '5등' };
+        if (mainMatch === 3) return { rank: 6, label: '6등' };
+        if (pbMatch) return { rank: 7, label: '7등' };
+        return null;
+    }
+
+    function lottoGradeOf(mainMatch, bonusMatch) {
+        if (mainMatch === 6) return { rank: 1, label: '1등' };
+        if (mainMatch === 5 && bonusMatch) return { rank: 2, label: '2등' };
+        if (mainMatch === 5) return { rank: 3, label: '3등' };
+        if (mainMatch === 4) return { rank: 4, label: '4등' };
+        if (mainMatch === 3) return { rank: 5, label: '5등' };
+        return null;
+    }
+
+    // 연금복권720+ — db_manager.py의 _pension720_grade와 동일한 로직(뒤 자릿수 연속 일치 개수 기준)
+    function pensionGradeOf(favGroup, favNumber, rGroup, rNumber) {
+        let trailing = 0;
+        for (let i = favNumber.length - 1; i >= 0; i--) {
+            if (favNumber[i] !== rNumber[i]) break;
+            trailing++;
+        }
+        if (trailing === 6) return favGroup === rGroup ? { rank: 1, label: '1등' } : { rank: 2, label: '2등' };
+        if (trailing === 5) return { rank: 3, label: '3등' };
+        if (trailing === 4) return { rank: 4, label: '4등' };
+        if (trailing === 3) return { rank: 5, label: '5등' };
+        if (trailing === 2) return { rank: 6, label: '6등' };
+        if (trailing === 1) return { rank: 7, label: '7등' };
+        return null;
+    }
+
+    // 추천 1건을 저장된 실제 당첨결과 전체와 비교해 가장 좋은 등수를 찾음.
+    // 반환: null(낙첨) 또는 { rank, label, round, prize(있으면 실제 금액, 없으면 null) }
+    function computeBestMatch(rec) {
+        const rounds = roundsData[rec.game] || [];
+        let best = null;
+        if (rec.game === 'powerball') {
+            rounds.forEach(r => {
+                const mainMatch = rec.main.filter(n => r.nums.includes(n)).length;
+                const g = pbGrade(mainMatch, rec.bonus === r.pb);
+                if (g && (!best || g.rank < best.rank)) best = { ...g, round: r.round, prize: null };
+            });
+        } else if (rec.game === 'lotto645') {
+            rounds.forEach(r => {
+                const mainMatch = rec.main.filter(n => r.nums.includes(n)).length;
+                const bonusMatch = mainMatch === 5 && rec.main.includes(r.bonus);
+                const g = lottoGradeOf(mainMatch, bonusMatch);
+                if (g && (!best || g.rank < best.rank)) {
+                    const prize = g.rank === 1 ? r.prize : (LOTTO_FIXED_PRIZE[g.rank] || null);
+                    best = { ...g, round: r.round, prize };
+                }
+            });
+        } else if (rec.game === 'pension720') {
+            const favNumber = rec.main.join('');
+            rounds.forEach(r => {
+                const g = pensionGradeOf(rec.bonus, favNumber, r.group, r.number);
+                if (g && (!best || g.rank < best.rank)) best = { ...g, round: r.round, prize: null };
+            });
+        }
+        return best;
+    }
+
+    // 번호 클릭 시 표 전체 + 통계 칩에서 같은 번호에 보더를 토글하는 표시 상태 (일반번호/보너스 별도, 각 최대 6개)
+    const MAX_MARKS = 6;
+    const markedMain = new Set();
+    const markedBonus = new Set();
+
+    function toggleMark(set, n) {
+        if (set.has(n)) { set.delete(n); return; }
+        if (set.size >= MAX_MARKS) return;
+        set.add(n);
+    }
+
+    function applyMarks() {
+        document.querySelectorAll('#recoTableBody .ball, #recoTableBody .digit').forEach(el => {
+            el.classList.toggle('marked', markedMain.has(parseInt(el.dataset.num, 10)));
+        });
+        document.querySelectorAll('#recoTableBody .pball-single, #recoTableBody .group-badge').forEach(el => {
+            el.classList.toggle('marked', markedBonus.has(parseInt(el.dataset.num, 10)));
+        });
+        document.querySelectorAll('#freqMainBoard .freq-chip').forEach(el => {
+            el.classList.toggle('marked', markedMain.has(parseInt(el.dataset.num, 10)));
+        });
+        document.querySelectorAll('#freqBonusBoard .freq-chip').forEach(el => {
+            el.classList.toggle('marked', markedBonus.has(parseInt(el.dataset.num, 10)));
+        });
+        document.getElementById('markCount').textContent = `일반 ${markedMain.size}/${MAX_MARKS} · 보너스 ${markedBonus.size}/${MAX_MARKS}`;
+    }
+
+    // 번호 검색 필터: DataTables 기본 검색은 셀의 HTML 태그를 벗겨서 이어붙이기 때문에
+    // (예: <span>10</span><span>20</span> -> "1020") 문자열/정규식으로는 "정확히 그 번호"를 가려낼 수 없다.
+    // 그래서 렌더링된 텍스트가 아니라 원본 데이터(allRecommendations)를 직접 검사하는 커스텀 필터를 등록한다.
+    $.fn.dataTable.ext.search.push((settings, searchData, rowIdx) => {
+        if (settings.nTable.id !== 'recoTable') return true; // 이 페이지의 테이블에만 적용
+        const num = document.getElementById('filterNumber').value.trim();
+        if (num === '') return true;
+        const n = Number(num);
+        if (Number.isNaN(n)) return false;
+        const rec = allRecommendations[rowIdx];
+        if (!rec) return true;
+        const values = (rec.bonus !== null && rec.bonus !== undefined) ? [...rec.main, rec.bonus] : rec.main;
+        return values.includes(n);
+    });
+
+    // 게임별 생성 결과(N세트)를 저장용 공통 row 형태로 변환
+    function toRecommendationRows(game, method, results) {
+        if (game === 'powerball') return results.map(({ nums, pb }) => ({ game, method, main: nums, bonus: pb }));
+        if (game === 'lotto645') return results.map(nums => ({ game, method, main: nums, bonus: null }));
+        return results.map(({ group, digits }) => ({ game, method, main: digits, bonus: group })); // pension720
+    }
+
+    function renderNumbersCell(rec) {
+        if (rec.game === 'powerball') {
+            const balls = rec.main.map(n => `<span class="ball ${bandClass('powerball', n)}" data-num="${n}">${n}</span>`).join('');
+            return `<div class="reco-balls">${balls}<span class="pball-single" data-num="${rec.bonus}">${rec.bonus}</span></div>`;
+        }
+        if (rec.game === 'lotto645') {
+            const balls = rec.main.map(n => `<span class="ball ${bandClass('lotto645', n)}" data-num="${n}">${n}</span>`).join('');
+            return `<div class="reco-balls">${balls}</div>`;
+        }
+        const digits = rec.main.map(n => `<span class="digit ${bandClass('pension720', n)}" data-num="${n}">${n}</span>`).join('');
+        return `<div class="reco-digits"><span class="group-badge" data-num="${rec.bonus}">${rec.bonus}조</span>${digits}</div>`;
+    }
+
+    function updateMethodHint() {
+        document.getElementById('methodHint').textContent =
+            `지금 뽑을 게임: ${GAME_META[currentGame].label} — 버튼을 누르면 ${SETS_PER_DRAW}세트를 뽑아서 아래 표에 저장해요.`;
+    }
+
+    // currentGame으로 저장된 추천들만 모아 번호별 출현 횟수 계산 (많이 나온 순)
+    function computeFreqFromRecs(recs, key, domain) {
+        const counts = new Map();
+        domain.forEach(n => counts.set(n, 0));
+        recs.forEach(r => {
+            const values = key === 'main' ? r.main : ((r.bonus !== null && r.bonus !== undefined) ? [r.bonus] : []);
+            values.forEach(n => counts.set(n, (counts.get(n) || 0) + 1));
+        });
+        return Array.from(counts.entries()).filter(([, c]) => c > 0).sort((a, b) => b[1] - a[1] || a[0] - b[0]);
+    }
+
+    function freqChipsHtml(freqList, markedSet, bandFn) {
+        return freqList.length
+            ? freqList.map(([n, c]) => {
+                const cls = bandFn ? bandFn(n) : 'bonus';
+                return `<span class="freq-chip ${cls}${markedSet.has(n) ? ' marked' : ''}" data-num="${n}">${n} <span class="cnt">${c}회</span></span>`;
+            }).join('')
+            : '<span class="hint">아직 뽑은 결과가 없어요</span>';
+    }
+
+    function renderFreqBoards() {
+        const recs = allRecommendations.filter(r => r.game === currentGame);
+        document.getElementById('freqGameLabel').textContent = GAME_META[currentGame].label;
+
+        const mainDomain = currentGame === 'lotto645' ? LOTTO_DOMAIN : (currentGame === 'powerball' ? PB_NUM_DOMAIN : DIGIT_DOMAIN);
+        document.getElementById('freqMainLabel').textContent = currentGame === 'pension720' ? '번호(자릿수 전체 합산)' : '일반 번호';
+        document.getElementById('freqMainBoard').innerHTML = freqChipsHtml(
+            computeFreqFromRecs(recs, 'main', mainDomain), markedMain, n => bandClass(currentGame, n)
+        );
+
+        const bonusLabel = document.getElementById('freqBonusLabel');
+        const bonusBoard = document.getElementById('freqBonusBoard');
+        if (currentGame === 'lotto645') {
+            bonusLabel.style.display = 'none';
+            bonusBoard.innerHTML = '';
+        } else {
+            const bonusDomain = currentGame === 'powerball' ? PB_PB_DOMAIN : GROUP_DOMAIN;
+            bonusLabel.textContent = currentGame === 'powerball' ? '파워볼' : '조';
+            bonusLabel.style.display = '';
+            bonusBoard.innerHTML = freqChipsHtml(computeFreqFromRecs(recs, 'bonus', bonusDomain), markedBonus, null);
+        }
+
+        applyMarks();
+    }
+
+    function buildMethodButtons() {
+        document.getElementById('methodButtons').innerHTML = METHOD_META.map(m =>
+            `<button type="button" class="btn btn-outline-primary btn-sm method-btn" data-method="${m.id}" title="${m.desc}">${m.label}</button>`
+        ).join('');
+    }
+
+    async function handleMethodClick(method, btn) {
+        const msg = document.getElementById('genMsg');
+        btn.disabled = true;
+        const original = btn.textContent;
+        btn.textContent = '뽑는 중...';
+        try {
+            const results = GENERATORS[currentGame](method);
+            const rows = toRecommendationRows(currentGame, method, results);
+            const res = await fetch('api/lottery-recommend', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ rows }),
+            });
+            const json = await res.json();
+            if (json.status !== 'success') {
+                msg.textContent = json.message || '저장 실패';
+                msg.className = 'msg err';
+                return;
+            }
+            msg.textContent = `${GAME_META[currentGame].label} · ${METHOD_META.find(m => m.id === method).short} ${SETS_PER_DRAW}세트 저장됨`;
+            msg.className = 'msg ok';
+            await loadRecommendations();
+            renderTable();
+        } catch (e) {
+            msg.textContent = '저장 중 오류: ' + e.message;
+            msg.className = 'msg err';
+        } finally {
+            btn.disabled = false;
+            btn.textContent = original;
+        }
+    }
+
+    // "전체 넣기" — 지금 탭의 게임에 5가지 방식을 전부 돌려서 방식마다 SETS_PER_METHOD_IN_ADD_ALL세트씩 한 번에 저장
+    async function handleAddAllClick(btn) {
+        const msg = document.getElementById('genMsg');
+        btn.disabled = true;
+        const original = btn.textContent;
+        btn.textContent = '넣는 중...';
+        try {
+            let rows = [];
+            METHOD_META.forEach(m => {
+                const results = GENERATORS[currentGame](m.id, SETS_PER_METHOD_IN_ADD_ALL);
+                rows = rows.concat(toRecommendationRows(currentGame, m.id, results));
+            });
+            const res = await fetch('api/lottery-recommend', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ rows }),
+            });
+            const json = await res.json();
+            if (json.status !== 'success') {
+                msg.textContent = json.message || '저장 실패';
+                msg.className = 'msg err';
+                return;
+            }
+            msg.textContent = `${GAME_META[currentGame].label} · 전체 ${METHOD_META.length}개 방식 각 ${SETS_PER_METHOD_IN_ADD_ALL}세트씩 총 ${rows.length}개 저장됨`;
+            msg.className = 'msg ok';
+            await loadRecommendations();
+            renderTable();
+        } catch (e) {
+            msg.textContent = '저장 중 오류: ' + e.message;
+            msg.className = 'msg err';
+        } finally {
+            btn.disabled = false;
+            btn.textContent = original;
+        }
+    }
+
+    function switchGame(game) {
+        currentGame = game;
+        document.querySelectorAll('#gameTab .nav-link').forEach(a => a.classList.toggle('active', a.dataset.gameTab === game));
+        updateMethodHint();
+        renderFreqBoards();
+    }
+
+    // ---- 목록 로드 / DataTable 렌더 / 필터 ----
+    async function loadRecommendations() {
+        const res = await fetch('api/lottery-recommend').then(r => r.json()).catch(() => ({ data: [] }));
+        allRecommendations = res.data || [];
+    }
+
+    function rowHtml(rec) {
+        const method = METHOD_META.find(m => m.id === rec.method);
+        const best = computeBestMatch(rec);
+        const matchHtml = best
+            ? `<span class="match-badge hit">${best.label}</span> <span class="hint">${best.round}회</span>`
+            : `<span class="hint">낙첨</span>`;
+        const prizeHtml = (best && best.prize)
+            ? `<span class="prize-amount">${Number(best.prize).toLocaleString()}원</span>`
+            : `<span class="hint">-</span>`;
+        const favBtnHtml = isFavorited(rec)
+            ? `<button type="button" class="fav-btn" disabled title="이미 즐겨찾기에 있어요">✅</button>`
+            : `<button type="button" class="fav-btn" data-fav-id="${rec.id}" title="즐겨찾기로 저장">⭐</button>`;
+        return `
+            <tr data-row-id="${rec.id}">
+                <td><input type="checkbox" class="form-check-input reco-check" data-id="${rec.id}" ${selectedIds.has(rec.id) ? 'checked' : ''}></td>
+                <td><span class="game-badge game-badge-${rec.game}">${GAME_META[rec.game].label}</span></td>
+                <td class="hint">${method ? method.short : rec.method}</td>
+                <td>${renderNumbersCell(rec)}</td>
+                <td class="hint">${rec.created_at}</td>
+                <td>${matchHtml}</td>
+                <td>${prizeHtml}</td>
+                <td>${favBtnHtml}</td>
+                <td><button type="button" class="btn btn-outline-danger btn-sm" data-del-id="${rec.id}" title="삭제">✕</button></td>
+            </tr>`;
+    }
+
+    function updateBulkDeleteButton() {
+        const btn = document.getElementById('bulkDeleteBtn');
+        btn.textContent = `선택 삭제 (${selectedIds.size})`;
+        btn.disabled = selectedIds.size === 0;
+    }
+
+    function renderTable() {
+        if (dataTable) { dataTable.destroy(); dataTable = null; }
+        document.getElementById('recoTableBody').innerHTML = allRecommendations.length
+            ? allRecommendations.map(rowHtml).join('')
+            : '';
+
+        dataTable = $('#recoTable').DataTable({
+            order: [[4, 'desc']],
+            pageLength: 25,
+            columnDefs: [
+                { orderable: false, targets: [0, 3, 5, 6, 7, 8] },
+            ],
+            language: {
+                search: "결과 내 검색:",
+                lengthMenu: "_MENU_ 개씩 보기",
+                info: "총 _TOTAL_ 건 중 _START_~_END_ 표시",
+                emptyTable: "저장된 추천 번호가 없어요. 위에서 \"뽑기\" 버튼을 눌러보세요.",
+                zeroRecords: "필터 조건에 맞는 결과가 없어요.",
+            },
+        });
+
+        applyColumnFilters();
+        syncSelectAllState();
+        updateBulkDeleteButton();
+        renderFreqBoards(); // 표를 새로 그렸으니 통계 칩 + 표시(마크) 상태도 다시 반영
+
+        dataTable.off('draw.dt').on('draw.dt', () => { syncSelectAllState(); });
+    }
+
+    function applyColumnFilters() {
+        const game = document.getElementById('filterGame').value;
+        const method = document.getElementById('filterMethod').value;
+
+        dataTable.column(1).search(game ? `^${$.fn.dataTable.util.escapeRegex(GAME_META[game].label)}$` : '', true, false);
+        const methodMeta = METHOD_META.find(m => m.id === method);
+        dataTable.column(2).search(methodMeta ? `^${$.fn.dataTable.util.escapeRegex(methodMeta.short)}$` : '', true, false);
+        // 번호 필터는 위에 등록해둔 ext.search 커스텀 함수가 filterNumber 입력값을 직접 읽어서 처리함
+        dataTable.draw();
+    }
+
+    // "전체 선택" 체크박스 상태 — 현재 필터에 걸린(검색 적용된) 행이 전부 선택돼 있는지로 갱신
+    function syncSelectAllState() {
+        const visibleIds = dataTable ? dataTable.rows({ search: 'applied' }).nodes().to$().map(function () {
+            return parseInt($(this).data('row-id'), 10);
+        }).get() : [];
+        document.getElementById('selectAll').checked = visibleIds.length > 0 && visibleIds.every(id => selectedIds.has(id));
+    }
+
+    // ---- 이벤트 바인딩 ----
+    document.querySelectorAll('#gameTab .nav-link').forEach(a => {
+        a.addEventListener('click', () => switchGame(a.dataset.gameTab));
+    });
+
+    document.getElementById('methodButtons').addEventListener('click', (e) => {
+        const btn = e.target.closest('.method-btn');
+        if (btn) handleMethodClick(btn.dataset.method, btn);
+    });
+    document.getElementById('addAllBtn').addEventListener('click', (e) => handleAddAllClick(e.currentTarget));
+
+    ['filterGame', 'filterMethod'].forEach(id => document.getElementById(id).addEventListener('change', applyColumnFilters));
+    document.getElementById('filterNumber').addEventListener('input', applyColumnFilters);
+    document.getElementById('resetFilterBtn').addEventListener('click', () => {
+        document.getElementById('filterGame').value = '';
+        document.getElementById('filterMethod').value = '';
+        document.getElementById('filterNumber').value = '';
+        applyColumnFilters();
+    });
+
+    document.getElementById('selectAll').addEventListener('change', (e) => {
+        const visibleIds = dataTable.rows({ search: 'applied' }).nodes().to$().map(function () {
+            return parseInt($(this).data('row-id'), 10);
+        }).get();
+        visibleIds.forEach(id => { if (e.target.checked) selectedIds.add(id); else selectedIds.delete(id); });
+        // 체크박스 표시 갱신 (페이지 이동 없이 바로 보이도록 현재 페이지 노드만 갱신)
+        document.querySelectorAll('.reco-check').forEach(cb => {
+            const id = parseInt(cb.dataset.id, 10);
+            cb.checked = selectedIds.has(id);
+        });
+        updateBulkDeleteButton();
+    });
+
+    document.getElementById('recoTableBody').addEventListener('change', (e) => {
+        const cb = e.target.closest('.reco-check');
+        if (!cb) return;
+        const id = parseInt(cb.dataset.id, 10);
+        if (cb.checked) selectedIds.add(id); else selectedIds.delete(id);
+        syncSelectAllState();
+        updateBulkDeleteButton();
+    });
+
+    // 게임별 즐겨찾기 API가 요구하는 body 모양이 서로 달라서(파워볼: nums+pb, 로또: nums만, 연금복권: group+number)
+    // 추천 1건(rec)을 해당 게임 즐겨찾기 엔드포인트로 그대로 보낼 수 있게 변환
+    const FAVORITE_ENDPOINT = {
+        powerball: 'api/powerball/favorites',
+        lotto645: 'api/lotto645/favorites',
+        pension720: 'api/pension720/favorites',
+    };
+    function favoritePayload(rec) {
+        const method = METHOD_META.find(m => m.id === rec.method);
+        const name = `${GAME_META[rec.game].label} ${method ? method.short : rec.method}`;
+        if (rec.game === 'powerball') return { name, nums: rec.main, pb: rec.bonus };
+        if (rec.game === 'lotto645') return { name, nums: rec.main };
+        return { name, group: rec.bonus, number: rec.main.join('') }; // pension720
+    }
+
+    document.getElementById('recoTableBody').addEventListener('click', async (e) => {
+        const delBtn = e.target.closest('[data-del-id]');
+        if (delBtn) {
+            const id = parseInt(delBtn.dataset.delId, 10);
+            await fetch(`api/lottery-recommend/${id}`, { method: 'DELETE' });
+            selectedIds.delete(id);
+            await loadRecommendations();
+            renderTable();
+            return;
+        }
+        const favBtn = e.target.closest('[data-fav-id]');
+        if (favBtn) {
+            const id = parseInt(favBtn.dataset.favId, 10);
+            const rec = allRecommendations.find(r => r.id === id);
+            if (!rec) return;
+            favBtn.disabled = true;
+            favBtn.textContent = '…';
+            try {
+                const res = await fetch(FAVORITE_ENDPOINT[rec.game], {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(favoritePayload(rec)),
+                });
+                const json = await res.json();
+                if (json.status === 'success') {
+                    // 성공하면 즐겨찾기 목록을 다시 불러와서 이 행(과 같은 조합인 다른 행들)을 전부 ✅로 고정 표시
+                    await loadFavoritesData();
+                    renderTable();
+                } else {
+                    favBtn.textContent = '⚠️';
+                    setTimeout(() => { favBtn.textContent = '⭐'; favBtn.disabled = false; }, 1200);
+                }
+            } catch (err) {
+                favBtn.textContent = '⚠️';
+                setTimeout(() => { favBtn.textContent = '⭐'; favBtn.disabled = false; }, 1200);
+            }
+            return;
+        }
+        const mainEl = e.target.closest('.ball, .digit');
+        if (mainEl) {
+            toggleMark(markedMain, parseInt(mainEl.dataset.num, 10));
+            applyMarks();
+            return;
+        }
+        const bonusEl = e.target.closest('.pball-single, .group-badge');
+        if (bonusEl) {
+            toggleMark(markedBonus, parseInt(bonusEl.dataset.num, 10));
+            applyMarks();
+        }
+    });
+
+    function bindFreqBoardClicks(containerId, set) {
+        document.getElementById(containerId).addEventListener('click', (e) => {
+            const chip = e.target.closest('.freq-chip');
+            if (!chip) return;
+            toggleMark(set, parseInt(chip.dataset.num, 10));
+            applyMarks();
+        });
+    }
+    bindFreqBoardClicks('freqMainBoard', markedMain);
+    bindFreqBoardClicks('freqBonusBoard', markedBonus);
+
+    document.getElementById('clearMarksBtn').addEventListener('click', () => {
+        markedMain.clear();
+        markedBonus.clear();
+        applyMarks();
+    });
+
+    document.getElementById('bulkDeleteBtn').addEventListener('click', async () => {
+        if (selectedIds.size === 0) return;
+        const ids = Array.from(selectedIds);
+        const res = await fetch('api/lottery-recommend/bulk-delete', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids }),
+        });
+        const json = await res.json();
+        if (json.status === 'success') {
+            selectedIds.clear();
+            await loadRecommendations();
+            renderTable();
+        }
+    });
+
+    // ---- 초기화 ----
+    async function init() {
+        buildMethodButtons();
+        document.getElementById('filterMethod').insertAdjacentHTML(
+            'beforeend', METHOD_META.map(m => `<option value="${m.id}">${m.short}</option>`).join('')
+        );
+        updateMethodHint();
+        await Promise.all([loadAllRounds(), loadRecommendations(), loadFavoritesData()]);
+        renderTable();
+    }
+    init();
+</script>
+</body>
+</html>

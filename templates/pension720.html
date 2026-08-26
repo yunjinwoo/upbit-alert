@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>연금복권720+ 트래커</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f4f7f6; font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; }
+        .main-navbar { background-color: #1a1a2e; }
+        .main-navbar .navbar-brand { color: #fff; font-weight: bold; }
+        .main-navbar .nav-link { color: rgba(255,255,255,0.75) !important; font-size: 0.82rem; }
+        .main-navbar .nav-link:hover, .main-navbar .nav-link.active { color: #fff !important; }
+        .main-navbar .nav-link.active { border-bottom: 2px solid #4da6ff; }
+
+        .dashboard-container { margin-top: 24px; margin-bottom: 60px; }
+        .card-panel { background: white; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); padding: 18px 20px; }
+
+        .nav-tabs { border-bottom: 2px solid #0a8f5c; margin-bottom: 18px; }
+        .nav-tabs .nav-link { font-weight: bold; color: #666; cursor: pointer; }
+        .nav-tabs .nav-link.active { color: #0a8f5c !important; border-bottom: 3px solid #0a8f5c !important; background: none !important; }
+
+        textarea#pasteBox { font-family: 'SF Mono', Consolas, monospace; font-size: 0.82rem; }
+        .hint { color: #8a8f9c; font-size: 0.78rem; }
+
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; margin-top: 16px; }
+        .rcard { position: relative; background: white; border-radius: 14px; box-shadow: 0 3px 10px rgba(0,0,0,0.06); padding: 14px 16px 16px; }
+        .rcard .del { position: absolute; top: 10px; right: 10px; width: 22px; height: 22px; border-radius: 50%; border: none; background: #f1f3f8; color: #99a; font-size: 0.7rem; cursor: pointer; }
+        .rcard .del:hover { background: #e35d5d; color: #fff; }
+        .rhead { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding-right: 26px; }
+        .rhead .round { font-weight: 800; font-size: 0.95rem; color: #1a1a2e; }
+        .group-badge { font-weight: 800; font-size: 0.72rem; padding: 3px 10px; border-radius: 999px; background: #dff5ea; color: #0a8f5c; }
+        .numboard { display: flex; gap: 5px; }
+        .digit { flex: 1; aspect-ratio: 1; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 1rem; background: #eef0f8; color: #1a1a2e; }
+
+        .freq-wrap { display: flex; flex-wrap: wrap; gap: 6px; }
+        .freq-chip {
+            display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px 4px 12px;
+            border-radius: 999px; background: #eef0f8; color: #1a1a2e; font-weight: 700; font-size: 0.78rem;
+        }
+        .freq-chip .cnt { background: #dfe3f5; color: #3454c9; font-weight: 800; font-size: 0.7rem; padding: 1px 7px; border-radius: 999px; }
+        .freq-chip.group { background: #dff5ea; color: #0a8f5c; }
+        .freq-chip.group .cnt { background: #c5ecd9; color: #0a8f5c; }
+
+        .empty { color: #a0a4b8; font-size: 0.85rem; padding: 26px 4px; text-align: center; border: 1px dashed #dde1ec; border-radius: 12px; margin-top: 16px; }
+
+        .pickgroup { display: flex; gap: 8px; }
+        .pickball { min-width: 46px; padding: 8px 0; border-radius: 10px; border: 1px solid #dde1ec; background: #f6f7fb; color: #1a1a2e; font-weight: 700; font-size: 0.85rem; cursor: pointer; }
+        .pickball.sel { background: #0a8f5c; color: #fff; border-color: transparent; }
+        #favNumber { font-family: 'SF Mono', Consolas, monospace; font-size: 1.1rem; letter-spacing: 0.3em; text-align: center; max-width: 200px; }
+
+        .favrow { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; background: white; border-radius: 12px; box-shadow: 0 3px 10px rgba(0,0,0,0.06); padding: 12px 16px; margin-bottom: 10px; }
+        .favrow .name { font-weight: 800; font-size: 0.86rem; min-width: 90px; }
+        .favrow .combo { display: flex; gap: 4px; align-items: center; font-family: 'SF Mono', Consolas, monospace; font-weight: 800; }
+        .favrow .combo .group-badge { font-family: inherit; }
+        .favrow .best { font-size: 0.78rem; color: #777; margin-left: auto; }
+        .favrow .best b { color: #1f8a5f; }
+
+        .msg { font-size: 0.78rem; font-weight: 600; margin-top: 8px; white-space: pre-line; }
+        .msg.ok { color: #1f8a5f; }
+        .msg.err { color: #c14a4a; }
+    </style>
+</head>
+<body>
+
+{% include '_navbar.html' %}
+
+<div class="container dashboard-container">
+    <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+        <h2 class="mb-0" style="font-size:1.2rem; font-weight:700; color:#1a1a2e">💰 연금복권720+ 당첨결과 &amp; 즐겨찾기 번호</h2>
+    </div>
+
+    <ul class="nav nav-tabs" id="mainTab">
+        <li class="nav-item"><a class="nav-link active" onclick="switchTab('results')">당첨결과</a></li>
+        <li class="nav-item"><a class="nav-link" onclick="switchTab('favorites')">즐겨찾기 번호</a></li>
+    </ul>
+
+    <!-- 당첨결과 탭 -->
+    <div id="panel-results">
+        <div class="card-panel mb-3">
+            <h6 class="fw-bold mb-1">출현 빈도</h6>
+            <p class="hint mb-2">저장된 당첨결과 전체 기준</p>
+            <div class="hint mb-1">조 (많이 나온 순)</div>
+            <div class="freq-wrap mb-2" id="freqGroupBoard"></div>
+            <div class="hint mb-1">번호 끝자리 (많이 나온 순)</div>
+            <div class="freq-wrap" id="freqDigitBoard"></div>
+        </div>
+
+        <div class="card-panel mb-3">
+            <h6 class="fw-bold mb-1">새 회차 추가</h6>
+            <p class="hint mb-2">동행복권 연금복권720+ 결과 페이지에서 복사한 텍스트를 그대로 붙여넣으세요. 두 형식 다 자동으로 인식합니다 — ① 결과 하나씩 세로로 복사(회차 / 조 / "조" / 번호 6자리, 한 줄에 숫자 하나씩, 9줄) ② 엑셀 표 범위를 통째로 복사(한 줄에 한 회차, 탭으로 구분 — No열 있어도 됨).</p>
+            <textarea id="pasteBox" class="form-control" rows="4" placeholder="327 회&#10;3&#10;조&#10;2&#10;2&#10;1&#10;5&#10;4&#10;0&#10;&#10;(또는 엑셀에서 표 범위를 그대로 복사해서 붙여넣기)"></textarea>
+            <div class="mt-2 d-flex gap-2">
+                <button class="btn btn-primary btn-sm" id="addBtn">회차 추가</button>
+                <button class="btn btn-outline-secondary btn-sm" id="clearBoxBtn">입력창 비우기</button>
+            </div>
+            <div class="msg" id="addMsg"></div>
+
+            <hr class="my-3">
+            <h6 class="fw-bold mb-1">또는 엑셀 파일로 한 번에 추가</h6>
+            <p class="hint mb-2">동행복권 "연금복권720+ 회차별 당첨번호" 통계 다운로드(.xlsx) 파일을 그대로 업로드하세요.</p>
+            <div class="d-flex gap-2 align-items-center flex-wrap">
+                <input type="file" id="excelFile" class="form-control form-control-sm" style="max-width:320px" accept=".xlsx">
+                <button class="btn btn-warning btn-sm" id="uploadBtn">엑셀 업로드</button>
+            </div>
+            <div class="msg" id="uploadMsg"></div>
+        </div>
+
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <span class="hint" id="roundCount"></span>
+        </div>
+        <div id="board" class="grid"></div>
+    </div>
+
+    <!-- 즐겨찾기 탭 -->
+    <div id="panel-favorites" style="display:none">
+        <div class="card-panel mb-3">
+            <h6 class="fw-bold mb-1">내 번호 만들기</h6>
+            <p class="hint mb-2">조 1개와 6자리 번호를 입력해 저장하면, 저장된 당첨결과와 자동으로 비교해서 가장 좋은 등수를 보여드려요. (뒤 자릿수가 맞을수록 높은 등수)</p>
+            <div class="hint mb-1">조</div>
+            <div class="pickgroup" id="pickGroup"></div>
+            <div class="mt-3 d-flex gap-2 flex-wrap align-items-center">
+                <div>
+                    <div class="hint mb-1">번호 6자리</div>
+                    <input class="form-control form-control-sm" id="favNumber" placeholder="000000" maxlength="6" inputmode="numeric">
+                </div>
+                <div>
+                    <div class="hint mb-1">이름</div>
+                    <input class="form-control form-control-sm" style="max-width:220px" id="favName" placeholder="이름 (예: 생일 조합)" maxlength="24">
+                </div>
+            </div>
+            <div class="mt-3 d-flex gap-2">
+                <button class="btn btn-warning btn-sm" id="saveFavBtn">즐겨찾기 저장</button>
+                <button class="btn btn-outline-secondary btn-sm" id="resetPickBtn">선택 초기화</button>
+            </div>
+            <div class="msg" id="favMsg"></div>
+        </div>
+
+        <div id="favList"></div>
+    </div>
+</div>
+
+<script>
+    function switchTab(tab) {
+        document.querySelectorAll('#mainTab .nav-link').forEach(a => a.classList.remove('active'));
+        event.target.classList.add('active');
+        document.getElementById('panel-results').style.display = tab === 'results' ? '' : 'none';
+        document.getElementById('panel-favorites').style.display = tab === 'favorites' ? '' : 'none';
+    }
+
+    function roundCard(r) {
+        const digits = r.number.split('').map(d => `<span class="digit">${d}</span>`).join('');
+        return `
+            <div class="rcard">
+                <button class="del" data-del-round="${r.id}" title="삭제">✕</button>
+                <div class="rhead">
+                    <span class="round">제 ${r.round} 회</span>
+                    <span class="group-badge">${r.group}조</span>
+                </div>
+                <div class="numboard">${digits}</div>
+            </div>`;
+    }
+
+    let lastRounds = [];
+
+    function computeFreq(rounds, keyFn, domainStart, domainEnd) {
+        const counts = new Map();
+        for (let n = domainStart; n <= domainEnd; n++) counts.set(n, 0);
+        rounds.forEach(r => {
+            const n = keyFn(r);
+            counts.set(n, (counts.get(n) || 0) + 1);
+        });
+        return Array.from(counts.entries())
+            .filter(([, c]) => c > 0)
+            .sort((a, b) => b[1] - a[1] || a[0] - b[0]);
+    }
+
+    function renderFreq(containerId, freqList, chipClass) {
+        const el = document.getElementById(containerId);
+        el.innerHTML = freqList.length
+            ? freqList.map(([n, c]) => `<span class="freq-chip${chipClass ? ' ' + chipClass : ''}">${n} <span class="cnt">${c}회</span></span>`).join('')
+            : '<span class="hint">아직 데이터가 없어요</span>';
+    }
+
+    function renderFreqBoards() {
+        renderFreq('freqGroupBoard', computeFreq(lastRounds, r => r.group, 1, 5), 'group');
+        renderFreq('freqDigitBoard', computeFreq(lastRounds, r => parseInt(r.number.slice(-1), 10), 0, 9), '');
+    }
+
+    async function loadRounds() {
+        const res = await fetch('api/pension720/rounds');
+        const json = await res.json();
+        const board = document.getElementById('board');
+        const rounds = json.data || [];
+        lastRounds = rounds;
+        board.innerHTML = rounds.length
+            ? rounds.map(roundCard).join('')
+            : '<div class="empty" style="grid-column:1/-1">아직 등록된 회차가 없어요. 위에 붙여넣고 "회차 추가"를 눌러보세요.</div>';
+        document.getElementById('roundCount').textContent = `총 ${rounds.length}개 회차 저장됨`;
+        renderFreqBoards();
+
+        board.querySelectorAll('[data-del-round]').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                await fetch(`api/pension720/rounds/${btn.dataset.delRound}`, { method: 'DELETE' });
+                loadRounds();
+                loadFavorites();
+            });
+        });
+    }
+
+    document.getElementById('addBtn').addEventListener('click', async () => {
+        const box = document.getElementById('pasteBox');
+        const msg = document.getElementById('addMsg');
+        const res = await fetch('api/pension720/rounds', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: box.value })
+        });
+        const json = await res.json();
+        if (json.status !== 'success') {
+            msg.textContent = json.message || '추가 실패';
+            msg.className = 'msg err';
+            return;
+        }
+        const parts = [];
+        if (json.added > 0) parts.push(`${json.added}개 회차 추가됨`);
+        if (json.skipped > 0) parts.push(`이미 있는 회차 ${json.skipped}개는 건너뜀`);
+        if (json.errors && json.errors.length) parts.push('오류:\n' + json.errors.join('\n'));
+        msg.textContent = parts.join(' · ') || '추가할 내용이 없습니다.';
+        msg.className = 'msg ' + (json.added > 0 ? 'ok' : 'err');
+        if (json.added > 0) { box.value = ''; loadRounds(); loadFavorites(); }
+    });
+
+    document.getElementById('clearBoxBtn').addEventListener('click', () => {
+        document.getElementById('pasteBox').value = '';
+        document.getElementById('addMsg').textContent = '';
+    });
+
+    document.getElementById('uploadBtn').addEventListener('click', async () => {
+        const fileInput = document.getElementById('excelFile');
+        const msg = document.getElementById('uploadMsg');
+        const file = fileInput.files[0];
+        if (!file) {
+            msg.textContent = '업로드할 .xlsx 파일을 선택해주세요.';
+            msg.className = 'msg err';
+            return;
+        }
+        msg.textContent = '업로드 중...';
+        msg.className = 'msg';
+        const formData = new FormData();
+        formData.append('file', file);
+        try {
+            const res = await fetch('api/pension720/upload', { method: 'POST', body: formData });
+            const json = await res.json();
+            if (json.status !== 'success') {
+                msg.textContent = json.message || '업로드 실패';
+                msg.className = 'msg err';
+                return;
+            }
+            const parts = [];
+            if (json.added > 0) parts.push(`${json.added}개 회차 추가됨`);
+            if (json.skipped > 0) parts.push(`이미 있는 회차 ${json.skipped}개는 건너뜀`);
+            if (json.errors && json.errors.length) parts.push('오류:\n' + json.errors.slice(0, 10).join('\n'));
+            msg.textContent = parts.join(' · ') || '추가할 내용이 없습니다.';
+            msg.className = 'msg ' + (json.added > 0 ? 'ok' : 'err');
+            if (json.added > 0) { fileInput.value = ''; loadRounds(); loadFavorites(); }
+        } catch (e) {
+            msg.textContent = '업로드 중 오류: ' + e.message;
+            msg.className = 'msg err';
+        }
+    });
+
+    // ---- 즐겨찾기 ----
+    let pickedGroup = null;
+
+    function renderPickGroup() {
+        const el = document.getElementById('pickGroup');
+        el.innerHTML = [1, 2, 3, 4, 5].map(n =>
+            `<button type="button" class="pickball${pickedGroup === n ? ' sel' : ''}" data-g="${n}">${n}조</button>`
+        ).join('');
+        el.querySelectorAll('.pickball').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const n = parseInt(btn.dataset.g, 10);
+                pickedGroup = (pickedGroup === n) ? null : n;
+                renderPickGroup();
+            });
+        });
+    }
+
+    document.getElementById('favNumber').addEventListener('input', (e) => {
+        e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6);
+    });
+
+    document.getElementById('resetPickBtn').addEventListener('click', () => {
+        pickedGroup = null;
+        document.getElementById('favNumber').value = '';
+        document.getElementById('favName').value = '';
+        renderPickGroup();
+    });
+
+    document.getElementById('saveFavBtn').addEventListener('click', async () => {
+        const msg = document.getElementById('favMsg');
+        const number = document.getElementById('favNumber').value;
+        if (pickedGroup === null || number.length !== 6) {
+            msg.textContent = '조 1개와 번호 6자리를 모두 입력해주세요.';
+            msg.className = 'msg err';
+            return;
+        }
+        const name = document.getElementById('favName').value.trim();
+        const res = await fetch('api/pension720/favorites', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, group: pickedGroup, number })
+        });
+        const json = await res.json();
+        if (json.status !== 'success') {
+            msg.textContent = json.message || '저장 실패';
+            msg.className = 'msg err';
+            return;
+        }
+        msg.textContent = '저장됨';
+        msg.className = 'msg ok';
+        pickedGroup = null;
+        document.getElementById('favNumber').value = '';
+        document.getElementById('favName').value = '';
+        renderPickGroup();
+        loadFavorites();
+    });
+
+    function favRow(f) {
+        const digits = f.number.split('').map(d => `<span class="digit" style="width:24px;height:24px;font-size:0.8rem">${d}</span>`).join('');
+        const best = (f.best_grade_rank === null)
+            ? '아직 당첨 이력이 없어요'
+            : `최고 등수: <b>${f.best_grade_label}</b> (제 ${f.best_round}회, ${f.best_group}조 ${f.best_number})`;
+        return `
+            <div class="favrow">
+                <span class="name">${f.name}</span>
+                <div class="combo"><span class="group-badge">${f.group}조</span>${digits}</div>
+                <span class="best">${best}</span>
+                <button class="btn btn-outline-danger btn-sm" data-del-fav="${f.id}">삭제</button>
+            </div>`;
+    }
+
+    async function loadFavorites() {
+        const res = await fetch('api/pension720/favorites');
+        const json = await res.json();
+        const list = document.getElementById('favList');
+        const favs = json.data || [];
+        list.innerHTML = favs.length
+            ? favs.map(favRow).join('')
+            : '<div class="empty">아직 저장한 번호가 없어요. 위에서 번호를 고르고 저장해보세요.</div>';
+        list.querySelectorAll('[data-del-fav]').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                await fetch(`api/pension720/favorites/${btn.dataset.delFav}`, { method: 'DELETE' });
+                loadFavorites();
+            });
+        });
+    }
+
+    renderPickGroup();
+    loadRounds();
+    loadFavorites();
+</script>
+</body>
+</html>

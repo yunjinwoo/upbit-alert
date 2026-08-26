@@ -56,6 +56,9 @@
         .empty-cell { color: #cbd5e1; font-size: 0.72rem; text-align: center; }
         .top5-sep td { border-top: 2px solid #e2e8f0; }
         .top10-sep td { border-top: 1px dashed #e2e8f0; }
+
+        .stock-name.clickable { cursor: pointer; }
+        .stock-name.clickable:hover { text-decoration: underline; color: #1a4fd6; }
     </style>
 </head>
 <body>
@@ -83,6 +86,9 @@
     </div>
 
     <div class="mb-3" id="statusBanner" style="font-size:0.8rem; color:#64748b;">누적 현황 확인 중...</div>
+
+    {% set chart_placeholder = '종목을 클릭하면 차트가 표시됩니다.' %}
+    {% include '_stock_chart_panel.html' %}
 
     <div class="card-panel">
         <div class="ranking-wrap">
@@ -122,6 +128,8 @@
         if (ratio >= 2) return 'ratio-warm';
         return '';
     }
+
+    // selectChart(code, name)는 _stock_chart_panel.html(공용 partial)에서 전역으로 제공됨
 
     async function load() {
         const date     = document.getElementById('dateInput').value;
@@ -214,7 +222,7 @@
                     const avgDays = parseInt(document.getElementById('avgDaysSelect').value) || 20;
                     const daysCls = item.days_used < avgDays ? 'days-badge-short' : 'days-badge';
                     out += `<td class="${bc}">` +
-                                `<div class="stock-name">${item.name}</div>` +
+                                `<div class="stock-name clickable" onclick='selectChart(${JSON.stringify(item.code)}, ${JSON.stringify(item.name || "")})'>${item.name}</div>` +
                                 `<div class="stock-code">${item.code}</div>` +
                             `</td>` +
                             `<td class="ratio-cell ${ratioClass(item.ratio)}">${item.ratio.toFixed(2)}x` +

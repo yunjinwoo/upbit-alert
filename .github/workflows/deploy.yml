@@ -28,20 +28,51 @@ jobs:
             git reset --hard origin/main
 
             # 3. 필요한 환경변수 보장 (.env에 없으면 추가)
-            grep -q "APP_ROOT" .env 2>/dev/null || echo "APP_ROOT=/upbit" >> .env
+            # .env 마지막 줄에 개행이 없는 채로 끝나있으면 `>>`로 그냥 이어붙일 때 이전 줄에
+            # 붙어버려(예: SECRET_KEY=abc123APP_ROOT=/upbit) 두 값 다 깨지는 문제가 있어,
+            # 항상 빈 줄 하나를 앞세워 새 줄에서 시작하도록 printf로 추가한다.
+            # (로컬/서버 구분용 APP_ENV는 더 이상 .env에 넣지 않음 — app/config.py가 OS로 자동 판별)
+            grep -q "APP_ROOT" .env 2>/dev/null || printf '\nAPP_ROOT=/upbit\n' >> .env
 
             # 4. 필요한 라이브러리 설치
-            pip install -r requirements.txt
+            # 반드시 venv의 pip를 써야 함 — 그냥 pip는 시스템 파이썬에 설치되어 버려서,
+            # 실제 앱이 도는 ./venv/bin/python3 쪽엔 패키지가 반영되지 않는 문제가 있었음
+            ./venv/bin/pip install -r requirements.txt
             
             # 4. PM2를 이용한 프로세스 재시작
             # 기존 프로세스가 있다면 중지 후 삭제 (확실한 재시작을 위해)
-            pm2 delete upbit-bot upbit-api stock-bot || true
-            
+            # trade-bot/condition-check-bot(업비트 모의매매 전용 프로세스)은 모의매매 기능을 더 이상
+            # 쓰지 않기로 해서 중단함 — 코드/DB는 그대로 남아있지만 자동 시작 목록에서만 뺐다.
+            # 실거래(upbit-live-trade-bot/toss-live-trade-bot)는 한동안 의도적으로 여기 넣지 않고
+            # 수동 실행 전용으로 뒀었는데(docs/auto-trade-upbit-live.md 참고), 그 결과 서버에 아무도
+            # 수동으로 띄워두지 않아서 자동 루프가 한 번도 안 돌고 "지금 즉시 실행" 버튼에만 의존하게
+            # 되는 문제가 있어 이제 다른 봇들과 동일하게 배포마다 재시작되도록 편입한다 — 실거래
+            # 스위치/승인은 여전히 DB(대시보드)로 제어되므로, 이 프로세스가 떠 있어도 스위치를 끄면
+            # 실주문은 안 나간다(안전장치는 그대로 유지).
+            pm2 delete upbit-bot upbit-api stock-bot coin-analysis-bot trade-bot condition-check-bot toss-analysis-bot toss-trade-bot toss-condition-check-bot upbit-live-trade-bot toss-live-trade-bot || true
+
             # 가상환경 내의 python3 경로를 정확히 지정하여 실행
             pm2 start main.py --name upbit-api --interpreter ./venv/bin/python3 -- api
             pm2 start main.py --name upbit-bot --interpreter ./venv/bin/python3 -- upbit
             pm2 start main.py --name stock-bot --interpreter ./venv/bin/python3 -- stock
-            
+            # coin-analysis-bot: 자동매매 진입 후보(coin_screening_daily)를 30분 주기로 채움 —
+            # 모의매매는 더 이상 안 쓰지만, 실거래(live_trade) 후보 목록도 이 데이터에 의존하므로 계속 띄운다.
+            pm2 start main.py --name coin-analysis-bot --interpreter ./venv/bin/python3 -- coin_analysis
+            # upbit-live-trade-bot: 실주문 발생 가능 — 그래도 대시보드의 "실거래 실행" 스위치(기본
+            # 꺼짐)와 종목별 "실거래 승인" 체크박스를 둘 다 켜야 실제로 매매한다(app/core/brokers/
+            # upbit_live_broker.py 참고). API 키가 없으면 시작 시 에러 로그만 남기고 바로 종료한다.
+            pm2 start main.py --name upbit-live-trade-bot --interpreter ./venv/bin/python3 -- live_trade
+
+            # 토스증권(국내주식) 자동매매(모의) — 업비트 쪽과 격리된 프로세스(별개 기능, 계속 유지).
+            # 서버 .env에 TOSS_CLIENT_ID/TOSS_CLIENT_SECRET이 없으면 시세 조회가 실패해 매매 판단이
+            # 전부 SKIP으로만 기록될 뿐 에러로 죽지는 않는다.
+            pm2 start main.py --name toss-analysis-bot --interpreter ./venv/bin/python3 -- toss_analysis
+            pm2 start main.py --name toss-trade-bot --interpreter ./venv/bin/python3 -- toss_trade
+            pm2 start main.py --name toss-condition-check-bot --interpreter ./venv/bin/python3 -- toss_condition_check
+            # toss-live-trade-bot: 위 upbit-live-trade-bot과 동일한 안전장치(실거래 실행 스위치 +
+            # 종목별 실거래 승인) — app/core/brokers/toss_live_broker.py 참고.
+            pm2 start main.py --name toss-live-trade-bot --interpreter ./venv/bin/python3 -- toss_live_trade
+
             # 5. 설정 저장 (서버 재부팅 시 자동 실행)
             pm2 save
             

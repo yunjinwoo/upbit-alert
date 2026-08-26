@@ -67,7 +67,7 @@
         </div>
         <div class="info-section">
             <h6>⚙️ 알림 조건</h6>
-            <p class="small">4시간봉 3배 / 1시간봉 4배 / 30분봉 6배 / 15분봉 8배<br>중 2개 이상 동시 충족 시 알림 발생</p>
+            <p class="small">주봉 2배 / 일봉 2.5배 / 4시간봉 3배 (모두 최근 100봉 평균 대비)<br>중 2개 이상 동시 충족 시 알림 발생</p>
         </div>
         <div class="info-section">
             <h6>💡 활용 팁</h6>
@@ -177,13 +177,15 @@
             const tableBody = document.getElementById('tableBody');
             
             if (currentTab === 'coin') {
-                tableHead.innerHTML = `<tr><th>시간</th><th>코인</th><th>상태</th><th>4시간</th><th>1시간</th><th>30분</th><th>15분</th><th>일봉 정보</th><th>작업</th></tr>`;
+                tableHead.innerHTML = `<tr><th>시간</th><th>코인</th><th>상태</th><th>주봉</th><th>일봉</th><th>4시간</th><th>일봉 정보</th><th>작업</th></tr>`;
                 tableBody.innerHTML = result.data.map(item => `
                     <tr>
                         <td><small>${item.timestamp}</small></td>
                         <td><a href="${item.url}" target="_blank" class="ticker-link">${item.ticker}</a></td>
                         <td><span class="badge ${parseInt(item.surge_count) >= 3 ? 'badge-red' : 'bg-warning text-dark'}">${item.surge_count}</span></td>
-                        <td><small>${item.m240}</small></td><td><small>${item.m60}</small></td><td><small>${item.m30}</small></td><td><small>${item.m15}</small></td>
+                        <td><small>${item.mweek || '-'}</small></td>
+                        <td><small>${item.mday || '-'}</small></td>
+                        <td><small>${item.m240}</small></td>
                         <td><small>${item.daily_info.replace('▲', '<span class="up-rate">▲').replace('%', '%</span>')}</small></td>
                         <td><button onclick="deleteAlert(${item.id})" class="btn btn-outline-danger btn-sm">🗑️</button></td>
                     </tr>

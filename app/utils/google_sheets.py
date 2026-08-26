@@ -68,7 +68,7 @@ def init_sheet():
     if sheet and sheet.cell(1, 1).value != "시간":
         sheet.insert_row(
             ["시간", "티커", "발화봉수",
-            "4시간봉", "1시간봉", "30분봉", "15분봉",
+            "주봉", "일봉", "4시간봉",
             "일봉 거래량", "URL"],
             index=1
         )
@@ -107,7 +107,7 @@ def get_daily_volume_info(ticker):
         logger.error(f"[일봉 조회 실패] {e}")
         return None
 
-def save_to_sheet(ticker, active_intervals, surge_count, daily_str):
+def save_to_sheet(ticker, active_intervals, surge_count, daily_str, total_intervals=None):
     try:
         def get_ratio_str(name):
             for item in active_intervals:
@@ -115,24 +115,32 @@ def save_to_sheet(ticker, active_intervals, surge_count, daily_str):
                     return item
             return "-"
 
+        # 데이터가 없어 평가에서 제외된 타임프레임(예: 상장 초기라 주봉 이력 부족)은 분모에서 빠진 값으로
+        # 넘어오므로 그대로 사용 — 안 넘어온 경우(예: 다른 호출부)를 대비해 전체 개수로 폴백
+        if total_intervals is None:
+            total_intervals = len(Config.UPBIT_INTERVALS)
+
         # Save to SQLite DB (Always)
+        # m60/m30/m15는 더 이상 감시하지 않는 분봉(1시간/30분/15분)의 잔재 컬럼 — 항상 "-"로 저장
         save_alert_to_db(
-            ticker, 
-            f"{surge_count}/4", 
-            get_ratio_str("4시간봉"), 
-            get_ratio_str("1시간봉"), 
-            get_ratio_str("30분봉"), 
-            get_ratio_str("15분봉"), 
-            daily_str, 
-            f"https://upbit.com/exchange?code=CRIX.UPBIT.{ticker}"
+            ticker,
+            f"{surge_count}/{total_intervals}",
+            get_ratio_str("4시간봉"),
+            "-",
+            "-",
+            "-",
+            daily_str,
+            f"https://upbit.com/exchange?code=CRIX.UPBIT.{ticker}",
+            mweek=get_ratio_str("주봉"),
+            mday=get_ratio_str("일봉"),
         )
 
         # Save to Google Sheets (If configured)
         sheet = get_sheet()
         if sheet:
-            if surge_count >= 4:
+            if surge_count >= total_intervals:
                 icon = "🔴"
-            elif surge_count == 3:
+            elif surge_count == total_intervals - 1:
                 icon = "🟠"
             else:
                 icon = "🟡"
@@ -140,23 +148,22 @@ def save_to_sheet(ticker, active_intervals, surge_count, daily_str):
             sheet.insert_row([
                 f"{icon} {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
                 ticker,
-                f"{surge_count}/4",
+                f"{surge_count}/{total_intervals}",
+                get_ratio_str("주봉"),
+                get_ratio_str("일봉"),
                 get_ratio_str("4시간봉"),
-                get_ratio_str("1시간봉"),
-                get_ratio_str("30분봉"),
-                get_ratio_str("15분봉"),
                 daily_str,
                 f"https://upbit.com/exchange?code=CRIX.UPBIT.{ticker}"
             ], index=2)
 
-            if surge_count >= 4:
+            if surge_count >= total_intervals:
                 bg_color = {"red": 1.0, "green": 0.6, "blue": 0.6}
-            elif surge_count == 3:
+            elif surge_count == total_intervals - 1:
                 bg_color = {"red": 1.0, "green": 0.8, "blue": 0.6}
             else:
                 bg_color = {"red": 1.0, "green": 1.0, "blue": 0.8}
 
-            sheet.format("A2:D2", {
+            sheet.format("A2:F2", {
                 "backgroundColor": bg_color,
                 "textFormat": {"bold": True}
             })

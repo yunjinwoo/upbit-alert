@@ -1,10 +1,13 @@
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, session, redirect, url_for
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.security import generate_password_hash, check_password_hash
 from app.utils.db_manager import (
+    init_db,
     get_latest_alerts, delete_alert,
     get_latest_stock_alerts, delete_stock_alert,
     get_latest_stock_raw_data, get_market_cap_history,
+    get_db_stats, delete_oldest_stock_raw_data,
     get_investor_trend_history,
     get_stock_investor_combined, get_latest_market_cap_date,
     get_stock_investor_trend,
@@ -34,7 +37,29 @@ from app.utils.db_manager import (
     get_top_gainers_export, sync_upsert_top_gainers,
     get_quick_links, add_quick_link, delete_quick_link,
     get_coin_screening,
+    set_trade_engine_enabled,
+    set_candidate_approval,
+    set_candidate_watchlist,
+    set_trade_strategy_settings,
+    set_position_dca_enabled,
+    set_candidate_condition_watch,
+    set_trade_condition_setting,
+    get_trade_order_log,
+    count_trade_order_log,
+    save_powerball_rounds, get_powerball_rounds, delete_powerball_round,
+    add_powerball_favorite, get_powerball_favorites, delete_powerball_favorite,
+    save_lotto645_rounds, get_lotto645_rounds, delete_lotto645_round,
+    add_lotto645_favorite, get_lotto645_favorites, delete_lotto645_favorite,
+    save_pension720_rounds, get_pension720_rounds, delete_pension720_round,
+    add_pension720_favorite, get_pension720_favorites, delete_pension720_favorite,
+    save_lottery_recommendations, get_lottery_recommendations,
+    delete_lottery_recommendation, delete_lottery_recommendations_bulk,
+    get_login_settings, save_login_settings,
+    get_or_create_secret_key,
 )
+from app.core.powerball import parse_powerball_block
+from app.core.lotto645 import parse_lotto645_block, parse_lotto645_excel
+from app.core.pension720 import parse_pension720_block, parse_pension720_excel
 from app.core.stock_monitor import (
     fetch_market_cap_ranking, fetch_investor_trend, fetch_sector_index_daily, fetch_stock_investor_daily,
     fetch_ranking_preview, fetch_sector_stocks, fetch_multi_stock_price,
@@ -45,19 +70,240 @@ from app.core.stock_monitor import (
     SECTOR_NAMES,
 )
 from app.core.upbit_market_analysis import run_coin_screening
+from app.core.auto_trader import get_dashboard_summary, run_trade_cycle, force_buy, get_live_dashboard_summary
+from app.core.brokers.base import TradeCycleBusyError
+from app.core.brokers.upbit_live_broker import UpbitLiveBroker
+from app.core.toss_auto_trader import (
+    get_dashboard_summary as get_toss_dashboard_summary,
+    run_trade_cycle as run_toss_trade_cycle,
+    force_buy as toss_force_buy,
+    get_live_dashboard_summary as get_toss_live_dashboard_summary,
+)
+from app.core.brokers.toss_live_broker import TossLiveBroker
 from app.config import Config
 import json
 import os
+import platform
 import threading
 import secrets
 import subprocess
 import time as _time
-from datetime import datetime as _dt
+from datetime import datetime as _dt, timedelta as _timedelta
+from app.utils.slack import send_slack_msg
+from app.utils.network import get_server_outbound_ip
 
 app = Flask(__name__, template_folder='../../templates')
 app.config['APPLICATION_ROOT'] = Config.APP_ROOT
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 CORS(app)
+
+# 실거래(mode='live') 사이클 실행/강제매수는 실제 주문을 낸다. Flask가 threaded=True로 떠 있어서
+# 같은 (broker, mode)에 대해 "지금 즉시 실행"과 "강제매수" 요청이 동시에(버튼 더블클릭, 느린 응답 중
+# 재요청 등) 들어오면 서로 겹쳐 실행되며 잔고/현금을 각자 stale하게 읽어 동일 종목을 이중 매수하는
+# 사고로 이어질 수 있다. (broker, mode)별 락으로 겹치는 실행을 즉시 거절한다 — 자동 루프
+# (run_live_trade_loop, 별도 프로세스)까지 막지는 못하지만 최소한 이 웹 프로세스 안에서의 이중 실행은
+# 원천 차단한다.
+_live_trade_locks = {
+    ('upbit', 'live'): threading.Lock(),
+    ('toss', 'live'): threading.Lock(),
+}
+
+
+def _acquire_live_trade_lock(broker_name: str, mode: str = 'live'):
+    """실거래 락을 논블로킹으로 획득 시도. 이미 실행 중이면 None을 반환(호출부가 409로 응답)."""
+    lock = _live_trade_locks[(broker_name, mode)]
+    return lock if lock.acquire(blocking=False) else None
+
+
+def _get_client_ip():
+    return request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
+
+@app.context_processor
+def inject_client_ip():
+    """모든 템플릿에서 {{ client_ip }}(방문자 IP)와 {{ server_outbound_ip }}(이 서버가 외부로 나갈 때
+    쓰는 IP)를 쓸 수 있게 주입한다.
+
+    업비트/토스 Open API 키의 IP 허용 목록에 등록해야 할 건 server_outbound_ip다 — 서버가 실제로
+    업비트/토스 API를 호출할 때 그 API 서버가 보는 발신 IP지, 대시보드를 열어본 방문자의 브라우저
+    IP(client_ip)가 아니다. 예전엔 이 둘을 구분하지 않고 client_ip를 그 용도로 안내해서, 서버가
+    방문자와 다른 네트워크에 있을 때(예: 클라우드 VPS) 엉뚱한 IP를 등록하게 만드는 버그가 있었다
+    (app/core/brokers/upbit_account.py의 no_authorization_ip 에러 대응 기능 자체가 무력화됨).
+    client_ip는 접근 통제(app/api/server.py의 sync_start 등)에도 쓰이므로 그대로 유지."""
+    try:
+        client_ip = _get_client_ip()
+    except Exception:
+        client_ip = None
+    return {'client_ip': client_ip, 'server_outbound_ip': get_server_outbound_ip()}
+
+# API 프로세스는 다른 프로세스(run_stock_monitor 등)의 init_db() 호출 시점에 의존하지 않도록
+# 여기서도 명시적으로 한 번 호출(idempotent) — 특히 아래 login_settings 조회가 모듈 임포트 시점에
+# 바로 실행되므로, 테이블이 아직 없는 상태로 레이스 컨디션에 걸리는 걸 방지
+init_db()
+
+if Config.SECRET_KEY:
+    app.secret_key = Config.SECRET_KEY
+else:
+    # .env에 SECRET_KEY가 없으면 DB에 저장된 값을 쓴다(없으면 최초 1회 자동 생성) — 재시작(배포 포함)해도
+    # 계속 같은 키를 재사용하므로 로그인 세션이 풀리지 않는다. 완전히 새 키로 강제 교체하고 싶다면
+    # (=모든 세션 강제 로그아웃) DB의 app_secret 테이블 행을 지우거나 .env에 SECRET_KEY를 직접 지정할 것.
+    app.secret_key = get_or_create_secret_key()
+    app.logger.info("[로그인] SECRET_KEY가 .env에 없어 DB에 저장된 키를 사용합니다(최초 실행 시 자동 생성·이후 재사용).")
+app.config['PERMANENT_SESSION_LIFETIME'] = _timedelta(days=Config.SESSION_LIFETIME_DAYS)
+# APPLICATION_ROOT(운영 서버의 리버스 프록시 하위경로, 예: /upbit)를 지정 안 하면 Flask가 세션 쿠키의
+# Path를 APPLICATION_ROOT로 그대로 써버려서, 그 경로 밖에서 접근(로컬 직접 접속 등)하면 로그인 직후
+# 쿠키가 안 돌아와 계속 /login으로 튕기는 문제가 있었음 — 쿠키는 항상 사이트 전체(/)에 적용되게 고정
+app.config['SESSION_COOKIE_PATH'] = '/'
+
+# ──────────────────────────────────────────────
+# 로그인 (잠금 토글 — 켜질 때마다 새 비밀번호를 Slack으로 전송, 해제될 때까지 그 비밀번호 재사용)
+# ──────────────────────────────────────────────
+_login_state = get_login_settings()  # {'lock_enabled': bool, 'password_hash': str|None} — 시작 시 DB에서 로드, 이후 메모리 캐시
+# 안전장치: 잠금은 켜져 있는데(기본값) 발급된 비밀번호가 없고 Slack 웹훅도 설정 안 돼 있으면
+# 비밀번호를 받을 방법이 전혀 없어 영구적으로 잠기게 된다. 이 경우에만 잠금을 강제로 꺼서
+# 접근 불가 상태를 막는다 — SLACK_TOKEN을 설정하고 /security에서 다시 켜면 정상적으로 잠글 수 있음.
+if _login_state['lock_enabled'] and not _login_state['password_hash'] and not Config.SLACK_WEBHOOK_URL:
+    app.logger.warning(
+        "[로그인] 잠금 기본값이 켜져 있지만 비밀번호가 없고 SLACK_TOKEN도 설정돼 있지 않아 "
+        "로그인할 방법이 없습니다. 잠금을 임시로 꺼둡니다 — SLACK_TOKEN을 설정한 뒤 "
+        "/security에서 잠금을 다시 켜주세요."
+    )
+    _login_state['lock_enabled'] = False
+    save_login_settings(False, None)
+_login_fail_count = 0
+_login_locked_until = 0
+_MAX_LOGIN_FAILS = 5
+_LOGIN_FAIL_LOCKOUT_SECONDS = 60
+
+_login_request_last_ts = 0.0
+_LOGIN_REQUEST_COOLDOWN_SECONDS = 120  # 로그인 페이지의 "비밀번호 받기" 재요청 최소 간격(남용 방지)
+
+# 로그인 없이 접근 가능한 엔드포인트 — 로그인 화면, 비밀번호 검증 API, 비밀번호 요청 API, 정적 파일
+# (잠금 토글/재발급 API는 일부러 여기 안 넣음 — 잠금 켜진 상태에선 로그인해야만 끄거나 재발급할 수 있어야 함)
+_PUBLIC_ENDPOINTS = {'login_view', 'verify_password_api', 'request_password_api', 'static'}
+
+@app.before_request
+def require_login():
+    # 서버 간 동기화(/api/sync/*)는 자체 토큰(X-Sync-Token)으로 별도 인증하므로 세션 로그인과 무관
+    if request.path.startswith('/api/sync/'):
+        return
+    if not _login_state['lock_enabled']:
+        return  # 잠금 꺼져있으면 전체 오픈
+    if request.endpoint in _PUBLIC_ENDPOINTS:
+        return
+    if not session.get('logged_in'):
+        if request.path.startswith('/api/'):
+            return jsonify({'status': 'error', 'message': '로그인이 필요합니다.'}), 401
+        return redirect(url_for('login_view'))
+
+@app.route('/login')
+def login_view():
+    if session.get('logged_in'):
+        return redirect(url_for('index'))
+    return render_template('login.html')
+
+@app.route('/api/login/status', methods=['GET'])
+def login_status_api():
+    """잠금 켜짐/꺼짐 여부만 반환 (비밀번호 자체는 절대 내려주지 않음)"""
+    return jsonify({'status': 'success', 'lock_enabled': _login_state['lock_enabled']})
+
+def _issue_new_password() -> str:
+    """새 비밀번호를 생성해 해시로 저장하고 Slack으로 평문 전송. 반환: 평문 비밀번호(로그용)"""
+    password = f"{secrets.randbelow(10_000_000):07d}"  # 숫자 7자리(0000000~9999999, 0으로 시작 가능)
+    _login_state['password_hash'] = generate_password_hash(password)
+    save_login_settings(_login_state['lock_enabled'], _login_state['password_hash'])
+    # "로컬/서버"로 미리 라벨링하지 않고 실제 OS + 호스트명을 그대로 보냄 — local/production 같은 별도
+    # 구분값을 관리·동기화할 필요 없이, 어디서 보냈는지 발급 시점에 platform 모듈로 그냥 알려줌
+    # (로컬 Windows PC에서 보내면 "Windows / DESKTOP-XXXX", 리눅스 서버에서 보내면 "Linux / <서버 호스트명>")
+    # 공인 IP는 넣지 않음 — 외부 API 호출이 추가로 필요하고, 서버 IP가 Slack 메시지 평문에 그대로 노출되는 게 부담스러움
+    # 마크다운(*강조*)을 쓰지 않음 — 렌더링 안 되는 클라이언트에서 별표가 문자 그대로 보여 복사·붙여넣기 시 섞여 들어가는 걸 방지
+    send_slack_msg(f"🔐 [{platform.system()} / {platform.node()}] 로그인 비밀번호: {password}\n해제하거나 다시 발급하기 전까지 계속 이 비밀번호를 쓰시면 됩니다.")
+    return password
+
+@app.route('/api/login/toggle', methods=['POST'])
+def toggle_lock_api():
+    """잠금 켜기/끄기. 켜질 때는(꺼짐→켜짐이든, 이미 켜진 상태에서 재발급이든) 항상 새 비밀번호를 발급해 Slack으로 보냄.
+    끌 때는 비밀번호 그대로 두고(다음에 켤 때 재사용 안 함 — 켤 때마다 무조건 새로 발급) 잠금만 해제.
+    body: {enabled: bool}
+    """
+    body = request.get_json(silent=True) or {}
+    enabled = bool(body.get('enabled'))
+
+    if enabled:
+        if not Config.SLACK_WEBHOOK_URL:
+            return jsonify({'status': 'error', 'message': 'Slack 웹훅(SLACK_TOKEN)이 설정돼 있지 않아 비밀번호를 보낼 수 없습니다.'}), 500
+        _login_state['lock_enabled'] = True
+        _issue_new_password()
+        app.logger.info("[로그인] 잠금 켜짐 — 새 비밀번호 발급")
+    else:
+        _login_state['lock_enabled'] = False
+        save_login_settings(False, _login_state['password_hash'])
+        app.logger.info("[로그인] 잠금 꺼짐")
+
+    return jsonify({'status': 'success', 'lock_enabled': _login_state['lock_enabled']})
+
+@app.route('/api/login/reissue', methods=['POST'])
+def reissue_password_api():
+    """잠금은 켜진 채로 비밀번호만 새로 발급(로그인된 상태에서만 호출 가능 — before_request가 이미 보장)"""
+    if not Config.SLACK_WEBHOOK_URL:
+        return jsonify({'status': 'error', 'message': 'Slack 웹훅(SLACK_TOKEN)이 설정돼 있지 않아 비밀번호를 보낼 수 없습니다.'}), 500
+    _issue_new_password()
+    app.logger.info("[로그인] 비밀번호 재발급")
+    return jsonify({'status': 'success'})
+
+@app.route('/api/login/verify', methods=['POST'])
+def verify_password_api():
+    """비밀번호 검증 → 통과 시 세션 로그인 처리(30일 유지). 여러 번 재사용 가능한 상시 비밀번호."""
+    global _login_fail_count, _login_locked_until
+    now = _time.time()
+    if now < _login_locked_until:
+        return jsonify({'status': 'error', 'message': f'로그인 시도가 너무 많았습니다. {int(_login_locked_until - now)}초 후 다시 시도해주세요.'}), 429
+
+    body = request.get_json(silent=True) or {}
+    password = body.get('password') or ''
+
+    if not _login_state['password_hash'] or not check_password_hash(_login_state['password_hash'], password):
+        _login_fail_count += 1
+        if _login_fail_count >= _MAX_LOGIN_FAILS:
+            _login_locked_until = now + _LOGIN_FAIL_LOCKOUT_SECONDS
+            _login_fail_count = 0
+            return jsonify({'status': 'error', 'message': f'{_LOGIN_FAIL_LOCKOUT_SECONDS}초 동안 로그인이 잠겼습니다.'}), 429
+        return jsonify({'status': 'error', 'message': '비밀번호가 일치하지 않습니다.'}), 401
+
+    _login_fail_count = 0
+    session.permanent = True
+    session['logged_in'] = True
+    app.logger.info("[로그인] 로그인 성공")
+    return jsonify({'status': 'success'})
+
+@app.route('/api/login/request', methods=['POST'])
+def request_password_api():
+    """로그인 페이지에서 비밀번호를 잊었을 때 Slack으로 새 비밀번호를 재발급 요청.
+    로그인 없이 호출 가능한 공개 API라 남용 방지를 위해 쿨다운을 둔다."""
+    global _login_request_last_ts
+    if not _login_state['lock_enabled']:
+        return jsonify({'status': 'error', 'message': '잠금이 꺼져있어 비밀번호가 필요 없습니다.'}), 400
+    if not Config.SLACK_WEBHOOK_URL:
+        return jsonify({'status': 'error', 'message': 'Slack 웹훅(SLACK_TOKEN)이 설정돼 있지 않아 비밀번호를 보낼 수 없습니다.'}), 500
+
+    now = _time.time()
+    remain = _LOGIN_REQUEST_COOLDOWN_SECONDS - (now - _login_request_last_ts)
+    if remain > 0:
+        return jsonify({'status': 'error', 'message': f'{int(remain)}초 후 다시 요청해주세요.'}), 429
+
+    _login_request_last_ts = now
+    _issue_new_password()
+    app.logger.info("[로그인] 로그인 페이지에서 비밀번호 재발급 요청")
+    return jsonify({'status': 'success', 'message': 'Slack으로 새 비밀번호를 보냈습니다.', 'cooldown': _LOGIN_REQUEST_COOLDOWN_SECONDS})
+
+@app.route('/logout')
+def logout_view():
+    session.clear()
+    return redirect(url_for('login_view'))
+
+@app.route('/security')
+def security_view():
+    """앱 잠금 설정 페이지 (잠금 토글 + 비밀번호 재발급)"""
+    return render_template('security.html', active_page='security', lock_enabled=_login_state['lock_enabled'])
 
 @app.route('/')
 def index():
@@ -106,6 +352,276 @@ def delete_quick_link_api(link_id):
         return jsonify({'status': 'error', 'message': '해당 링크를 찾을 수 없습니다.'}), 404
     return jsonify({'status': 'success', 'deleted': deleted})
 
+@app.route('/powerball')
+def powerball_view():
+    """동행복권 파워볼 당첨결과 저장 + 즐겨찾기 번호 관리 페이지"""
+    return render_template('powerball.html', active_page='powerball')
+
+@app.route('/api/powerball/rounds', methods=['GET'])
+def get_powerball_rounds_api():
+    """저장된 파워볼 당첨결과 전체 조회 (회차 최신순)"""
+    data = get_powerball_rounds()
+    return jsonify({'status': 'success', 'count': len(data), 'data': data})
+
+@app.route('/api/powerball/rounds', methods=['POST'])
+def add_powerball_rounds_api():
+    """동행복권 사이트에서 복사한 텍스트를 붙여넣어 회차 일괄 추가. body: {text}"""
+    body = request.get_json(silent=True) or {}
+    text = body.get('text') or ''
+    if not text.strip():
+        return jsonify({'status': 'error', 'message': '붙여넣은 텍스트가 비어있습니다.'}), 400
+    rounds, errors = parse_powerball_block(text)
+    added, skipped = save_powerball_rounds(rounds) if rounds else (0, 0)
+    return jsonify({'status': 'success', 'added': added, 'skipped': skipped, 'errors': errors})
+
+@app.route('/api/powerball/rounds/<int:round_id>', methods=['DELETE'])
+def delete_powerball_round_api(round_id):
+    """파워볼 당첨결과 1건 삭제"""
+    deleted = delete_powerball_round(round_id)
+    if not deleted:
+        return jsonify({'status': 'error', 'message': '해당 회차를 찾을 수 없습니다.'}), 404
+    return jsonify({'status': 'success', 'deleted': deleted})
+
+@app.route('/api/powerball/favorites', methods=['GET'])
+def get_powerball_favorites_api():
+    """즐겨찾기 번호 목록 + 저장된 당첨결과 대비 최다 일치 회차 조회"""
+    data = get_powerball_favorites()
+    return jsonify({'status': 'success', 'count': len(data), 'data': data})
+
+@app.route('/api/powerball/favorites', methods=['POST'])
+def add_powerball_favorite_api():
+    """즐겨찾기 번호 추가. body: {name, nums: [일반볼 5개], pb: 파워볼 1개}"""
+    body = request.get_json(silent=True) or {}
+    name = (body.get('name') or '').strip()
+    nums = body.get('nums') or []
+    pb = body.get('pb')
+    if len(nums) != 5 or any(not isinstance(n, int) for n in nums):
+        return jsonify({'status': 'error', 'message': '일반볼 5개(정수)가 필요합니다.'}), 400
+    if not isinstance(pb, int):
+        return jsonify({'status': 'error', 'message': '파워볼 번호(정수)가 필요합니다.'}), 400
+    if not name:
+        name = f"내 번호 {_dt.now().strftime('%H%M%S')}"
+    new_id = add_powerball_favorite(name, nums, pb)
+    return jsonify({'status': 'success', 'id': new_id})
+
+@app.route('/api/powerball/favorites/<int:fav_id>', methods=['DELETE'])
+def delete_powerball_favorite_api(fav_id):
+    """즐겨찾기 번호 1건 삭제"""
+    deleted = delete_powerball_favorite(fav_id)
+    if not deleted:
+        return jsonify({'status': 'error', 'message': '해당 즐겨찾기를 찾을 수 없습니다.'}), 404
+    return jsonify({'status': 'success', 'deleted': deleted})
+
+@app.route('/lotto645')
+def lotto645_view():
+    """동행복권 로또6/45 당첨결과 저장 페이지"""
+    return render_template('lotto645.html', active_page='lotto645')
+
+@app.route('/api/lotto645/rounds', methods=['GET'])
+def get_lotto645_rounds_api():
+    """저장된 로또6/45 당첨결과 전체 조회 (회차 최신순)"""
+    data = get_lotto645_rounds()
+    return jsonify({'status': 'success', 'count': len(data), 'data': data})
+
+@app.route('/api/lotto645/rounds', methods=['POST'])
+def add_lotto645_rounds_api():
+    """동행복권 사이트에서 복사한 텍스트를 붙여넣어 회차 일괄 추가. body: {text}"""
+    body = request.get_json(silent=True) or {}
+    text = body.get('text') or ''
+    if not text.strip():
+        return jsonify({'status': 'error', 'message': '붙여넣은 텍스트가 비어있습니다.'}), 400
+    rounds, errors = parse_lotto645_block(text)
+    added, skipped = save_lotto645_rounds(rounds) if rounds else (0, 0)
+    return jsonify({'status': 'success', 'added': added, 'skipped': skipped, 'errors': errors})
+
+@app.route('/api/lotto645/rounds/<int:round_id>', methods=['DELETE'])
+def delete_lotto645_round_api(round_id):
+    """로또6/45 당첨결과 1건 삭제"""
+    deleted = delete_lotto645_round(round_id)
+    if not deleted:
+        return jsonify({'status': 'error', 'message': '해당 회차를 찾을 수 없습니다.'}), 404
+    return jsonify({'status': 'success', 'deleted': deleted})
+
+@app.route('/api/lotto645/upload', methods=['POST'])
+def upload_lotto645_excel_api():
+    """동행복권 "로또 회차별 당첨번호" 통계 엑셀(.xlsx) 파일을 업로드해서 일괄 추가. multipart form, 필드명: file"""
+    file = request.files.get('file')
+    if not file or not file.filename:
+        return jsonify({'status': 'error', 'message': '업로드할 파일이 없습니다.'}), 400
+    if not file.filename.lower().endswith('.xlsx'):
+        return jsonify({'status': 'error', 'message': '.xlsx 파일만 지원합니다.'}), 400
+    try:
+        rounds, errors = parse_lotto645_excel(file.stream)
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'엑셀 파일을 읽지 못했습니다: {e}'}), 400
+    added, skipped = save_lotto645_rounds(rounds) if rounds else (0, 0)
+    return jsonify({'status': 'success', 'added': added, 'skipped': skipped, 'errors': errors})
+
+@app.route('/api/lotto645/favorites', methods=['GET'])
+def get_lotto645_favorites_api():
+    """즐겨찾기 번호 목록 + 저장된 당첨결과 대비 최고 등수 회차 조회"""
+    data = get_lotto645_favorites()
+    return jsonify({'status': 'success', 'count': len(data), 'data': data})
+
+@app.route('/api/lotto645/favorites', methods=['POST'])
+def add_lotto645_favorite_api():
+    """즐겨찾기 번호 추가. body: {name, nums: [번호 6개]}"""
+    body = request.get_json(silent=True) or {}
+    name = (body.get('name') or '').strip()
+    nums = body.get('nums') or []
+    if len(nums) != 6 or any(not isinstance(n, int) for n in nums):
+        return jsonify({'status': 'error', 'message': '번호 6개(정수)가 필요합니다.'}), 400
+    if not name:
+        name = f"내 번호 {_dt.now().strftime('%H%M%S')}"
+    new_id = add_lotto645_favorite(name, nums)
+    return jsonify({'status': 'success', 'id': new_id})
+
+@app.route('/api/lotto645/favorites/<int:fav_id>', methods=['DELETE'])
+def delete_lotto645_favorite_api(fav_id):
+    """즐겨찾기 번호 1건 삭제"""
+    deleted = delete_lotto645_favorite(fav_id)
+    if not deleted:
+        return jsonify({'status': 'error', 'message': '해당 즐겨찾기를 찾을 수 없습니다.'}), 404
+    return jsonify({'status': 'success', 'deleted': deleted})
+
+@app.route('/pension720')
+def pension720_view():
+    """동행복권 연금복권720+ 당첨결과 저장 + 즐겨찾기 페이지"""
+    return render_template('pension720.html', active_page='pension720')
+
+@app.route('/api/pension720/rounds', methods=['GET'])
+def get_pension720_rounds_api():
+    """저장된 연금복권720+ 당첨결과 전체 조회 (회차 최신순)"""
+    data = get_pension720_rounds()
+    return jsonify({'status': 'success', 'count': len(data), 'data': data})
+
+@app.route('/api/pension720/rounds', methods=['POST'])
+def add_pension720_rounds_api():
+    """동행복권 사이트에서 복사한 텍스트를 붙여넣어 회차 일괄 추가. body: {text}"""
+    body = request.get_json(silent=True) or {}
+    text = body.get('text') or ''
+    if not text.strip():
+        return jsonify({'status': 'error', 'message': '붙여넣은 텍스트가 비어있습니다.'}), 400
+    rounds, errors = parse_pension720_block(text)
+    added, skipped = save_pension720_rounds(rounds) if rounds else (0, 0)
+    return jsonify({'status': 'success', 'added': added, 'skipped': skipped, 'errors': errors})
+
+@app.route('/api/pension720/rounds/<int:round_id>', methods=['DELETE'])
+def delete_pension720_round_api(round_id):
+    """연금복권720+ 당첨결과 1건 삭제"""
+    deleted = delete_pension720_round(round_id)
+    if not deleted:
+        return jsonify({'status': 'error', 'message': '해당 회차를 찾을 수 없습니다.'}), 404
+    return jsonify({'status': 'success', 'deleted': deleted})
+
+@app.route('/api/pension720/upload', methods=['POST'])
+def upload_pension720_excel_api():
+    """동행복권 "연금복권720+ 회차별 당첨번호" 통계 엑셀(.xlsx) 파일을 업로드해서 일괄 추가. multipart form, 필드명: file"""
+    file = request.files.get('file')
+    if not file or not file.filename:
+        return jsonify({'status': 'error', 'message': '업로드할 파일이 없습니다.'}), 400
+    if not file.filename.lower().endswith('.xlsx'):
+        return jsonify({'status': 'error', 'message': '.xlsx 파일만 지원합니다.'}), 400
+    try:
+        rounds, errors = parse_pension720_excel(file.stream)
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'엑셀 파일을 읽지 못했습니다: {e}'}), 400
+    added, skipped = save_pension720_rounds(rounds) if rounds else (0, 0)
+    return jsonify({'status': 'success', 'added': added, 'skipped': skipped, 'errors': errors})
+
+@app.route('/api/pension720/favorites', methods=['GET'])
+def get_pension720_favorites_api():
+    """즐겨찾기 번호 목록 + 저장된 당첨결과 대비 최고 등수 회차 조회"""
+    data = get_pension720_favorites()
+    return jsonify({'status': 'success', 'count': len(data), 'data': data})
+
+@app.route('/api/pension720/favorites', methods=['POST'])
+def add_pension720_favorite_api():
+    """즐겨찾기 번호 추가. body: {name, group(조, 1~5), number(6자리 문자열/숫자)}"""
+    body = request.get_json(silent=True) or {}
+    name = (body.get('name') or '').strip()
+    group = body.get('group')
+    number_raw = body.get('number')
+    if not isinstance(group, int) or not (1 <= group <= 5):
+        return jsonify({'status': 'error', 'message': '조(1~5, 정수)가 필요합니다.'}), 400
+    digits = ''.join(ch for ch in str(number_raw) if ch.isdigit()) if number_raw is not None else ''
+    if len(digits) != 6:
+        return jsonify({'status': 'error', 'message': '번호는 숫자 6자리가 필요합니다.'}), 400
+    if not name:
+        name = f"내 번호 {_dt.now().strftime('%H%M%S')}"
+    new_id = add_pension720_favorite(name, group, digits)
+    return jsonify({'status': 'success', 'id': new_id})
+
+@app.route('/api/pension720/favorites/<int:fav_id>', methods=['DELETE'])
+def delete_pension720_favorite_api(fav_id):
+    """즐겨찾기 번호 1건 삭제"""
+    deleted = delete_pension720_favorite(fav_id)
+    if not deleted:
+        return jsonify({'status': 'error', 'message': '해당 즐겨찾기를 찾을 수 없습니다.'}), 404
+    return jsonify({'status': 'success', 'deleted': deleted})
+
+@app.route('/lottery-recommend')
+def lottery_recommend_view():
+    """파워볼/로또6/45/연금복권720+ 재미용 번호 추천 페이지 — 당첨결과 통계는 브라우저에서 계산하고, 뽑은 결과는 DB에 저장"""
+    return render_template('lottery_recommend.html', active_page='lottery_recommend')
+
+_RECO_GAMES = {'powerball', 'lotto645', 'pension720'}
+_RECO_METHODS = {'full', 'hot', 'cold', 'weighted', 'filter'}
+
+def _validate_recommendation_row(r):
+    """번호 추천 저장 요청 1건의 형태를 검증. 문제 있으면 오류 메시지, 없으면 None."""
+    if not isinstance(r, dict):
+        return '항목 형식이 올바르지 않습니다.'
+    if r.get('game') not in _RECO_GAMES:
+        return f"잘못된 game 값입니다: {r.get('game')}"
+    if r.get('method') not in _RECO_METHODS:
+        return f"잘못된 method 값입니다: {r.get('method')}"
+    main = r.get('main')
+    if not isinstance(main, list) or len(main) not in (5, 6) or not all(isinstance(n, int) and not isinstance(n, bool) for n in main):
+        return 'main은 정수 5~6개짜리 배열이어야 합니다.'
+    bonus = r.get('bonus')
+    if bonus is not None and (not isinstance(bonus, int) or isinstance(bonus, bool)):
+        return 'bonus는 정수여야 합니다.'
+    return None
+
+@app.route('/api/lottery-recommend', methods=['GET'])
+def get_lottery_recommendations_api():
+    """저장된 번호 추천 결과 전체 조회 (최신순) — 필터링은 프론트에서 처리"""
+    data = get_lottery_recommendations()
+    return jsonify({'status': 'success', 'count': len(data), 'data': data})
+
+@app.route('/api/lottery-recommend', methods=['POST'])
+def save_lottery_recommendations_api():
+    """번호 추천 결과 여러 건을 한 번에 저장. body: {rows: [{game, method, main:[int,...], bonus:int|null}, ...]}"""
+    body = request.get_json(silent=True) or {}
+    rows = body.get('rows')
+    if not isinstance(rows, list) or not rows:
+        return jsonify({'status': 'error', 'message': '저장할 데이터가 없습니다.'}), 400
+    for r in rows:
+        err = _validate_recommendation_row(r)
+        if err:
+            return jsonify({'status': 'error', 'message': err}), 400
+    saved = save_lottery_recommendations(rows)
+    return jsonify({'status': 'success', 'saved': saved})
+
+@app.route('/api/lottery-recommend/bulk-delete', methods=['POST'])
+def delete_lottery_recommendations_bulk_api():
+    """번호 추천 결과 여러 건을 한 번에 삭제. body: {ids: [int, ...]}"""
+    body = request.get_json(silent=True) or {}
+    ids = body.get('ids')
+    if not isinstance(ids, list) or not ids or not all(isinstance(i, int) and not isinstance(i, bool) for i in ids):
+        return jsonify({'status': 'error', 'message': '삭제할 id 목록이 필요합니다.'}), 400
+    deleted = delete_lottery_recommendations_bulk(ids)
+    return jsonify({'status': 'success', 'deleted': deleted})
+
+@app.route('/api/lottery-recommend/<int:rec_id>', methods=['DELETE'])
+def delete_lottery_recommendation_api(rec_id):
+    """번호 추천 결과 1건 삭제"""
+    deleted = delete_lottery_recommendation(rec_id)
+    if not deleted:
+        return jsonify({'status': 'error', 'message': '해당 항목을 찾을 수 없습니다.'}), 404
+    return jsonify({'status': 'success', 'deleted': deleted})
+
 @app.route('/coin-screening')
 def coin_screening_view():
     """코인(업비트 KRW 마켓) 기술지표 스크리닝 페이지를 보여줍니다."""
@@ -145,6 +661,726 @@ def fetch_coin_screening_status_api(task_id):
     """코인 스크리닝 백그라운드 수집 진행 상태 조회"""
     result = _coin_screening_fetch_status.get(task_id, {"status": "unknown", "message": "작업을 찾을 수 없습니다."})
     return jsonify(result)
+
+@app.route('/auto-trade')
+def auto_trade_view():
+    """업비트 자동매매(모의) 대시보드 — 읽기 전용. 매매 판단/실행은 별도 프로세스(python main.py trade)에서만 발생."""
+    return render_template('auto_trade.html', active_page='auto_trade')
+
+@app.route('/auto-trade/logs')
+def auto_trade_logs_view():
+    """매매 판단/체결 이력(BUY/SELL/HOLD/SKIP 전부) 조회 페이지 — 대시보드(/auto-trade)에서 분리.
+    폴링되는 대시보드 요약 API에 매번 100건씩 딸려오던 부담을 줄이려고, 실시간성이 필요 없는
+    이 로그는 별도 페이지+페이지네이션으로 뺐다(get_auto_trade_logs_api 참고)."""
+    return render_template('auto_trade_logs.html', active_page='auto_trade')
+
+@app.route('/api/auto-trade/logs', methods=['GET'])
+def get_auto_trade_logs_api():
+    """매매 판단/체결 이력을 페이지네이션해서 조회. 쿼리파라미터: limit(기본 50, 최대 200),
+    offset(기본 0), ticker(선택, 예: KRW-BTC), decision(선택, BUY/SELL/HOLD/SKIP/DCA_BUY),
+    mode(선택, 'paper'(기본)/'live' — 실거래 이력을 보려면 mode=live)."""
+    try:
+        limit = min(int(request.args.get('limit', 50)), 200)
+        offset = max(int(request.args.get('offset', 0)), 0)
+        ticker = (request.args.get('ticker') or '').strip() or None
+        decision = (request.args.get('decision') or '').strip() or None
+        mode = (request.args.get('mode') or 'paper').strip() or 'paper'
+        orders = get_trade_order_log('upbit', mode, limit=limit, offset=offset, ticker=ticker, decision=decision)
+        total = count_trade_order_log('upbit', mode, ticker=ticker, decision=decision)
+        return jsonify({'status': 'success', 'orders': orders, 'total': total, 'limit': limit, 'offset': offset})
+    except (ValueError, TypeError) as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/auto-trade/summary', methods=['GET'])
+def get_auto_trade_summary_api():
+    """가상 계좌 잔고/보유 포지션(현재가·평가손익 포함)/진입 후보(매매 대상 코인)/엔진 실행 여부/
+    매매 전략 파라미터(settings)를 JSON으로 반환합니다 (읽기 전용, 주문 실행 없음). 매매 판단 로그는
+    포함하지 않음 — /auto-trade/logs 페이지의 /api/auto-trade/logs를 따로 호출할 것.
+    real_krw_balance: .env에 UPBIT_ACCESS_KEY/SECRET_KEY가 설정돼 있으면 실계좌 현금 잔고(조회 전용,
+    참고용)를 함께 반환합니다 — 미설정/조회 실패 시 null."""
+    try:
+        data = get_dashboard_summary()
+        return jsonify({'status': 'success', **data})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/auto-trade/live-summary', methods=['GET'])
+def get_upbit_live_summary_api():
+    """업비트 실거래 패널용 읽기 전용 요약(진짜 계좌 조회, 주문 없음): 실거래 실행 스위치 상태,
+    실제 KRW 현금 잔고, 매매 대상 후보(체크박스로 "실거래 승인"한 종목은 보유 중이면 잔고를,
+    아니면 미보유(다음 사이클 매수판단 대상)임을 함께 표시). API 키가 없으면 오류를 반환합니다."""
+    if not Config.UPBIT_ACCESS_KEY or not Config.UPBIT_SECRET_KEY:
+        return jsonify({'status': 'error', 'message': '.env에 UPBIT_ACCESS_KEY/UPBIT_SECRET_KEY가 설정되어 있지 않습니다.'}), 400
+    try:
+        data = get_live_dashboard_summary()
+        return jsonify({'status': 'success', **data})
+    except RuntimeError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'실거래 요약 조회 중 오류 발생: {str(e)}'}), 500
+
+@app.route('/api/auto-trade/live/toggle', methods=['POST'])
+def toggle_live_trade_api():
+    """업비트 실거래 실행/일시중지 스위치 — 모의매매 스위치와 완전히 독립적으로 동작합니다.
+    켜져 있어야(그리고 아래 승인 체크박스에 종목이 있어야) `python main.py live_trade` 프로세스가
+    다음 사이클에 실주문을 낼 수 있습니다. 기본값은 꺼짐."""
+    body = request.get_json(silent=True) or {}
+    enabled = bool(body.get('enabled'))
+    try:
+        set_trade_engine_enabled(enabled, 'upbit', 'live')
+        return jsonify({'status': 'success', 'enabled': enabled})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/auto-trade/live/candidates/approve', methods=['POST'])
+def set_live_candidate_approval_api():
+    """실거래 매매 대상 코인 체크박스 상태 저장(모의매매 승인 체크박스와 별도 저장 — mode='live').
+    승인한 종목이 하나도 없으면 실거래 실행 스위치가 켜져 있어도 아무 것도 매수하지 않습니다
+    (실거래는 화이트리스트가 비어있다고 전체 후보를 사는 게 아니라 안전하게 아무 것도 안 삽니다).
+    body: {ticker: str, approved: bool}"""
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip()
+    approved = bool(body.get('approved'))
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    try:
+        set_candidate_approval('upbit', 'live', ticker, approved)
+        return jsonify({'status': 'success', 'ticker': ticker, 'approved': approved})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/auto-trade/live/candidates/watchlist', methods=['POST'])
+def set_live_candidate_watchlist_api():
+    """"🎯 매매 대상 코인" 표(1단계, "관심 등록" 체크박스) 상태 저장. 여기 등록해야 그 종목이
+    "🔴 실거래" 표(2단계, 실거래 승인)에 나타난다 — 등록 없이는 실거래 승인 자체를 켤 수 없다.
+    body: {ticker: str, watchlisted: bool}"""
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip()
+    watchlisted = bool(body.get('watchlisted'))
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    try:
+        set_candidate_watchlist('upbit', 'live', ticker, watchlisted)
+        return jsonify({'status': 'success', 'ticker': ticker, 'watchlisted': watchlisted})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/auto-trade/live/run-now', methods=['POST'])
+def run_live_trade_now_api():
+    """실거래 1사이클(청산→진입)을 지금 이 요청 안에서 동기적으로 즉시 실행합니다. `python main.py
+    live_trade` 프로세스가 떠 있는지와 무관하게 웹 서버 프로세스에서 직접 실행하며, 실거래 실행
+    스위치가 꺼져 있어도 요청 자체는 실행되지만 UpbitLiveBroker가 주문 단계에서 다시 스위치를
+    확인해 차단합니다(그 사이클의 판단 근거는 trade_order_log에 SKIP으로 남음)."""
+    if not Config.UPBIT_ACCESS_KEY or not Config.UPBIT_SECRET_KEY:
+        return jsonify({'status': 'error', 'message': '.env에 UPBIT_ACCESS_KEY/UPBIT_SECRET_KEY가 설정되어 있지 않습니다.'}), 400
+    lock = _acquire_live_trade_lock('upbit')
+    if lock is None:
+        return jsonify({'status': 'error', 'message': '이미 업비트 실거래 사이클이 실행 중입니다. 잠시 후 다시 시도하세요.'}), 409
+    try:
+        result = run_trade_cycle(broker=UpbitLiveBroker(), trigger_type='manual_live')
+        return jsonify({'status': 'success', **result})
+    except TradeCycleBusyError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 409
+    except RuntimeError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'즉시 실행 중 오류 발생: {str(e)}'}), 500
+    finally:
+        lock.release()
+
+@app.route('/api/auto-trade/live/force-buy', methods=['POST'])
+def force_buy_live_api():
+    """실거래 강제 매수 — 진입 후보 여부와 무관하게 지정한 종목을 "1종목당 매수금액"만큼 지금 즉시
+    시장가로 실매수합니다. 실거래 실행 스위치가 꺼져 있으면 UpbitLiveBroker가 차단합니다.
+    소액 end-to-end 테스트용 진입점. body: {ticker: str}"""
+    if not Config.UPBIT_ACCESS_KEY or not Config.UPBIT_SECRET_KEY:
+        return jsonify({'status': 'error', 'message': '.env에 UPBIT_ACCESS_KEY/UPBIT_SECRET_KEY가 설정되어 있지 않습니다.'}), 400
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip().upper()
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    if not ticker.startswith('KRW-'):
+        ticker = f'KRW-{ticker}'
+    lock = _acquire_live_trade_lock('upbit')
+    if lock is None:
+        return jsonify({'status': 'error', 'message': '이미 업비트 실거래 사이클이 실행 중입니다. 잠시 후 다시 시도하세요.'}), 409
+    try:
+        result = force_buy(ticker, broker=UpbitLiveBroker())
+        return jsonify({'status': 'success', **result})
+    except RuntimeError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'강제매수 중 오류 발생: {str(e)}'}), 500
+    finally:
+        lock.release()
+
+@app.route('/api/auto-trade/live/positions/dca', methods=['POST'])
+def set_position_dca_live_api():
+    """실거래 보유 포지션의 물타기(추가매수) 허용 체크박스 상태 저장. 필드 구성은 모의매매의
+    /api/auto-trade/positions/dca와 동일 — 켜두면 트레일링 손절 연속확인이 끝난 뒤 곧바로
+    손절하지 않고 -dca_trigger_pct까지 한 번 더 기다렸다가 실제 추가매수합니다.
+    body: {ticker: str, enabled: bool}"""
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip()
+    enabled = bool(body.get('enabled'))
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    try:
+        updated = set_position_dca_enabled('upbit', 'live', ticker, enabled)
+        if not updated:
+            return jsonify({'status': 'error', 'message': f'{ticker} 추적 행이 아직 없습니다(잔고 반영 대기 중일 수 있음) — 잠시 후 다시 시도하세요.'}), 404
+        return jsonify({'status': 'success', 'ticker': ticker, 'enabled': enabled})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/auto-trade/toggle', methods=['POST'])
+def toggle_auto_trade_api():
+    """자동매매 엔진 실행/일시중지 토글. 실행 중인 `python main.py trade` 프로세스가 다음 사이클(최대
+    TRADE_LOOP_INTERVAL_SEC초 이내)마다 이 값을 확인해 반영하므로 재시작이 필요 없습니다."""
+    body = request.get_json(silent=True) or {}
+    enabled = bool(body.get('enabled'))
+    try:
+        set_trade_engine_enabled(enabled)
+        return jsonify({'status': 'success', 'enabled': enabled})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/auto-trade/run-now', methods=['POST'])
+def run_auto_trade_now_api():
+    """매매 루프의 다음 sleep(최대 loop_interval_sec초)을 기다리지 않고, 지금 이 요청 안에서
+    동기적으로 매매 판단 1사이클(청산→진입, 현재 DB에 저장된 매매 기준 그대로)을 즉시 실행합니다.
+    `python main.py trade` 프로세스가 떠 있는지와 무관하게 웹 서버 프로세스에서 직접 실행하며(다른
+    수동 즉시수집 버튼들과 동일한 패턴), 엔진 실행/일시중지 토글 상태와도 무관하게 항상 실행됩니다
+    (수동 트리거는 토글의 자동 스케줄링과 별개). 결과는 여느 사이클처럼 trade_order_log/job_run_log에
+    'manual'로 기록됩니다."""
+    try:
+        result = run_trade_cycle(trigger_type='manual')
+        return jsonify({'status': 'success', **result})
+    except TradeCycleBusyError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 409
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'즉시 실행 중 오류 발생: {str(e)}'}), 500
+
+@app.route('/api/auto-trade/candidates/approve', methods=['POST'])
+def set_candidate_approval_api():
+    """매매 대상 코인 체크박스 상태 저장. 체크된 종목이 하나라도 있으면 다음 사이클부터
+    그 종목들만 신규 진입 대상이 되고(기존 보유/청산 로직에는 영향 없음), 전부 체크 해제하면
+    다시 전체 후보를 대상으로 합니다. body: {ticker: str, approved: bool}"""
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip()
+    approved = bool(body.get('approved'))
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    try:
+        set_candidate_approval('upbit', 'paper', ticker, approved)
+        return jsonify({'status': 'success', 'ticker': ticker, 'approved': approved})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/auto-trade/settings', methods=['POST'])
+def set_trade_strategy_settings_api():
+    """매매 전략 파라미터(1종목당 매수금액/최대 동시보유/손절·익절 기준/루프 주기/손절 연속확인
+    사이클수/물타기 트리거 %) 저장. 실행 중인 `python main.py trade` 프로세스가 다음 사이클부터
+    새 값을 적용하므로 재시작이 필요 없습니다. body는 아래 필드 중 바꿀 것만 보내면 됩니다(부분 갱신):
+    {max_position_krw, max_concurrent_positions, stop_loss_pct, take_profit_pct, loop_interval_sec,
+     stop_loss_confirm_cycles, dca_trigger_pct, dca_max_count}"""
+    body = request.get_json(silent=True) or {}
+    try:
+        kwargs = {}
+        if 'max_position_krw' in body:
+            v = float(body['max_position_krw'])
+            if v <= 0:
+                raise ValueError('1종목당 매수금액은 0보다 커야 합니다.')
+            kwargs['max_position_krw'] = v
+        if 'max_concurrent_positions' in body:
+            v = int(body['max_concurrent_positions'])
+            if v <= 0:
+                raise ValueError('최대 동시보유 종목수는 1 이상이어야 합니다.')
+            kwargs['max_concurrent_positions'] = v
+        if 'stop_loss_pct' in body:
+            v = float(body['stop_loss_pct'])
+            if v <= 0:
+                raise ValueError('손절 기준(%)은 0보다 커야 합니다.')
+            kwargs['stop_loss_pct'] = v
+        if 'take_profit_pct' in body:
+            v = float(body['take_profit_pct'])
+            if v <= 0:
+                raise ValueError('익절 기준(%)은 0보다 커야 합니다.')
+            kwargs['take_profit_pct'] = v
+        if 'loop_interval_sec' in body:
+            v = int(body['loop_interval_sec'])
+            if v < 10:
+                raise ValueError('매매 루프 주기는 최소 10초 이상이어야 합니다.')
+            kwargs['loop_interval_sec'] = v
+        if 'stop_loss_confirm_cycles' in body:
+            v = int(body['stop_loss_confirm_cycles'])
+            if v <= 0:
+                raise ValueError('손절 연속확인 사이클수는 1 이상이어야 합니다.')
+            kwargs['stop_loss_confirm_cycles'] = v
+        if 'dca_trigger_pct' in body:
+            v = float(body['dca_trigger_pct'])
+            if v <= 0:
+                raise ValueError('물타기 트리거(%)는 0보다 커야 합니다.')
+            kwargs['dca_trigger_pct'] = v
+        if 'dca_max_count' in body:
+            v = int(body['dca_max_count'])
+            if v <= 0:
+                raise ValueError('물타기 최대 횟수는 1 이상이어야 합니다.')
+            kwargs['dca_max_count'] = v
+        if 'condition_check_interval_sec' in body:
+            v = int(body['condition_check_interval_sec'])
+            if v < 10:
+                raise ValueError('정밀조건 검사 주기는 최소 10초 이상이어야 합니다.')
+            kwargs['condition_check_interval_sec'] = v
+
+        settings = set_trade_strategy_settings(**kwargs)
+        return jsonify({'status': 'success', 'settings': settings})
+    except (ValueError, TypeError) as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/auto-trade/candidates/condition-watch', methods=['POST'])
+def set_candidate_condition_watch_api():
+    """"정밀조건 검사" 체크박스 상태 저장. 켜진 종목만 entry_condition_checker.py(python main.py
+    condition_check)가 별도 주기로 일봉/5분봉/1분봉을 조회해 정밀 매수조건을 검사한다.
+    body: {ticker: str, enabled: bool}"""
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip()
+    enabled = bool(body.get('enabled'))
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    try:
+        set_candidate_condition_watch('upbit', 'paper', ticker, enabled)
+        return jsonify({'status': 'success', 'ticker': ticker, 'enabled': enabled})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/auto-trade/conditions/settings', methods=['POST'])
+def set_trade_condition_settings_api():
+    """정밀 매수조건(일봉 20MA 위/5분봉 지지반등/1분봉 볼밴+거래량 돌파 등) 설정 저장 — 여러 건
+    한 번에 부분 갱신 가능. body: {conditions: [{condition_key, enabled?, logic_group?, params?}, ...]}
+    logic_group은 'AND' 또는 'OR'만 허용. params는 조건별로 다른 키를 부분 갱신(넘긴 키만 덮어씀)."""
+    body = request.get_json(silent=True) or {}
+    conditions = body.get('conditions')
+    if not isinstance(conditions, list) or not conditions:
+        return jsonify({'status': 'error', 'message': 'conditions 배열이 필요합니다.'}), 400
+    try:
+        updated = []
+        for c in conditions:
+            condition_key = (c.get('condition_key') or '').strip()
+            if not condition_key:
+                raise ValueError('condition_key가 필요합니다.')
+            logic_group = c.get('logic_group')
+            if logic_group is not None and logic_group not in ('AND', 'OR'):
+                raise ValueError(f'logic_group은 AND/OR만 가능합니다: {logic_group}')
+            enabled = c.get('enabled')
+            params = c.get('params')
+            if params is not None and not isinstance(params, dict):
+                raise ValueError('params는 객체여야 합니다.')
+            updated.append(set_trade_condition_setting(
+                condition_key,
+                enabled=bool(enabled) if enabled is not None else None,
+                logic_group=logic_group,
+                params=params,
+            ))
+        return jsonify({'status': 'success', 'conditions': updated})
+    except ValueError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/auto-trade/force-buy', methods=['POST'])
+def force_buy_api():
+    """대시보드 "강제 매수" — 진입 후보/승인/정밀조건 등 모든 필터를 건너뛰고 지정한 티커를 지금
+    즉시 "1종목당 매수금액"만큼 시장가 매수(모의)한다. body: {ticker: str} (예: 'KRW-BTC')."""
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip().upper()
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    if not ticker.startswith('KRW-'):
+        return jsonify({'status': 'error', 'message': "ticker는 'KRW-BTC'와 같은 형식이어야 합니다."}), 400
+    try:
+        result = force_buy(ticker)
+        status = 'success' if result['success'] else 'error'
+        code = 200 if result['success'] else 400
+        return jsonify({'status': status, **result}), code
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'강제 매수 중 오류 발생: {str(e)}'}), 500
+
+@app.route('/api/auto-trade/positions/dca', methods=['POST'])
+def set_position_dca_api():
+    """보유 포지션의 물타기(추가매수) 허용 체크박스 상태 저장. 켜두면 트레일링 손절 연속확인이
+    끝난 뒤 곧바로 손절하지 않고 평단 대비 -dca_trigger_pct까지 한 번 더 기다렸다가 매매기준
+    (1종목당 매수금액)으로 추가매수합니다(1회 제한). body: {ticker: str, enabled: bool}"""
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip()
+    enabled = bool(body.get('enabled'))
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    try:
+        updated = set_position_dca_enabled('upbit', 'paper', ticker, enabled)
+        if not updated:
+            return jsonify({'status': 'error', 'message': f'{ticker} 보유 포지션을 찾을 수 없습니다.'}), 404
+        return jsonify({'status': 'success', 'ticker': ticker, 'enabled': enabled})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+# ──────────────────────────────────────────────
+# 토스증권(국내주식) 자동매매(모의) — 위 /auto-trade* 블록(업비트)과 완전히 동일한 패턴,
+# broker만 'toss'로 고정. app/core/toss_auto_trader.py 참고.
+# ──────────────────────────────────────────────
+
+@app.route('/toss-trade')
+def toss_trade_view():
+    """토스증권 자동매매(모의) 대시보드 — 읽기 전용. 매매 판단/실행은 별도 프로세스
+    (python main.py toss_trade)에서만 발생."""
+    return render_template('toss_trade.html', active_page='toss_trade')
+
+@app.route('/toss-trade/logs')
+def toss_trade_logs_view():
+    """토스증권 매매 판단/체결 이력(BUY/SELL/HOLD/SKIP 전부) 조회 페이지."""
+    return render_template('toss_trade_logs.html', active_page='toss_trade')
+
+@app.route('/api/toss-trade/logs', methods=['GET'])
+def get_toss_trade_logs_api():
+    """매매 판단/체결 이력을 페이지네이션해서 조회. 쿼리파라미터: limit(기본 50, 최대 200),
+    offset(기본 0), ticker(선택, 예: 005930), decision(선택, BUY/SELL/HOLD/SKIP/DCA_BUY),
+    mode(선택, 'paper'(기본)/'live' — 실거래 이력을 보려면 mode=live)."""
+    try:
+        limit = min(int(request.args.get('limit', 50)), 200)
+        offset = max(int(request.args.get('offset', 0)), 0)
+        ticker = (request.args.get('ticker') or '').strip() or None
+        decision = (request.args.get('decision') or '').strip() or None
+        mode = (request.args.get('mode') or 'paper').strip() or 'paper'
+        orders = get_trade_order_log('toss', mode, limit=limit, offset=offset, ticker=ticker, decision=decision)
+        total = count_trade_order_log('toss', mode, ticker=ticker, decision=decision)
+        return jsonify({'status': 'success', 'orders': orders, 'total': total, 'limit': limit, 'offset': offset})
+    except (ValueError, TypeError) as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/toss-trade/summary', methods=['GET'])
+def get_toss_trade_summary_api():
+    """가상 계좌 잔고/보유 포지션(현재가·평가손익 포함)/진입 후보(매매 대상 종목)/엔진 실행 여부/
+    매매 전략 파라미터(settings)를 JSON으로 반환합니다 (읽기 전용, 주문 실행 없음)."""
+    try:
+        data = get_toss_dashboard_summary()
+        return jsonify({'status': 'success', **data})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/toss-trade/toggle', methods=['POST'])
+def toggle_toss_trade_api():
+    """토스 자동매매 엔진 실행/일시중지 토글. 실행 중인 `python main.py toss_trade` 프로세스가
+    다음 사이클마다 이 값을 확인해 반영하므로 재시작이 필요 없습니다."""
+    body = request.get_json(silent=True) or {}
+    enabled = bool(body.get('enabled'))
+    try:
+        set_trade_engine_enabled(enabled, broker='toss')
+        return jsonify({'status': 'success', 'enabled': enabled})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/toss-trade/run-now', methods=['POST'])
+def run_toss_trade_now_api():
+    """매매 루프의 다음 sleep을 기다리지 않고, 지금 이 요청 안에서 동기적으로 매매 판단 1사이클을
+    즉시 실행합니다. 결과는 trade_order_log/job_run_log에 'manual'로 기록됩니다."""
+    try:
+        result = run_toss_trade_cycle(trigger_type='manual')
+        return jsonify({'status': 'success', **result})
+    except TradeCycleBusyError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 409
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'즉시 실행 중 오류 발생: {str(e)}'}), 500
+
+@app.route('/api/toss-trade/candidates/approve', methods=['POST'])
+def set_toss_candidate_approval_api():
+    """매매 대상 종목 체크박스 상태 저장. body: {ticker: str, approved: bool}"""
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip()
+    approved = bool(body.get('approved'))
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    try:
+        set_candidate_approval('toss', 'paper', ticker, approved)
+        return jsonify({'status': 'success', 'ticker': ticker, 'approved': approved})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/toss-trade/settings', methods=['POST'])
+def set_toss_trade_strategy_settings_api():
+    """매매 전략 파라미터 저장(부분 갱신). body 필드는 업비트용(/api/auto-trade/settings)과 동일."""
+    body = request.get_json(silent=True) or {}
+    try:
+        kwargs = {}
+        if 'max_position_krw' in body:
+            v = float(body['max_position_krw'])
+            if v <= 0:
+                raise ValueError('1종목당 매수금액은 0보다 커야 합니다.')
+            kwargs['max_position_krw'] = v
+        if 'max_concurrent_positions' in body:
+            v = int(body['max_concurrent_positions'])
+            if v <= 0:
+                raise ValueError('최대 동시보유 종목수는 1 이상이어야 합니다.')
+            kwargs['max_concurrent_positions'] = v
+        if 'stop_loss_pct' in body:
+            v = float(body['stop_loss_pct'])
+            if v <= 0:
+                raise ValueError('손절 기준(%)은 0보다 커야 합니다.')
+            kwargs['stop_loss_pct'] = v
+        if 'take_profit_pct' in body:
+            v = float(body['take_profit_pct'])
+            if v <= 0:
+                raise ValueError('익절 기준(%)은 0보다 커야 합니다.')
+            kwargs['take_profit_pct'] = v
+        if 'loop_interval_sec' in body:
+            v = int(body['loop_interval_sec'])
+            if v < 10:
+                raise ValueError('매매 루프 주기는 최소 10초 이상이어야 합니다.')
+            kwargs['loop_interval_sec'] = v
+        if 'stop_loss_confirm_cycles' in body:
+            v = int(body['stop_loss_confirm_cycles'])
+            if v <= 0:
+                raise ValueError('손절 연속확인 사이클수는 1 이상이어야 합니다.')
+            kwargs['stop_loss_confirm_cycles'] = v
+        if 'dca_trigger_pct' in body:
+            v = float(body['dca_trigger_pct'])
+            if v <= 0:
+                raise ValueError('물타기 트리거(%)는 0보다 커야 합니다.')
+            kwargs['dca_trigger_pct'] = v
+        if 'dca_max_count' in body:
+            v = int(body['dca_max_count'])
+            if v <= 0:
+                raise ValueError('물타기 최대 횟수는 1 이상이어야 합니다.')
+            kwargs['dca_max_count'] = v
+        if 'condition_check_interval_sec' in body:
+            v = int(body['condition_check_interval_sec'])
+            if v < 10:
+                raise ValueError('정밀조건 검사 주기는 최소 10초 이상이어야 합니다.')
+            kwargs['condition_check_interval_sec'] = v
+
+        settings = set_trade_strategy_settings(broker='toss', **kwargs)
+        return jsonify({'status': 'success', 'settings': settings})
+    except (ValueError, TypeError) as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/toss-trade/candidates/condition-watch', methods=['POST'])
+def set_toss_candidate_condition_watch_api():
+    """"정밀조건 검사" 체크박스 상태 저장. body: {ticker: str, enabled: bool}"""
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip()
+    enabled = bool(body.get('enabled'))
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    try:
+        set_candidate_condition_watch('toss', 'paper', ticker, enabled)
+        return jsonify({'status': 'success', 'ticker': ticker, 'enabled': enabled})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/toss-trade/conditions/settings', methods=['POST'])
+def set_toss_trade_condition_settings_api():
+    """정밀 매수조건 설정 저장 — 여러 건 한 번에 부분 갱신 가능. body: {conditions: [...]}
+    (필드 구성은 업비트용 /api/auto-trade/conditions/settings와 동일)"""
+    body = request.get_json(silent=True) or {}
+    conditions = body.get('conditions')
+    if not isinstance(conditions, list) or not conditions:
+        return jsonify({'status': 'error', 'message': 'conditions 배열이 필요합니다.'}), 400
+    try:
+        updated = []
+        for c in conditions:
+            condition_key = (c.get('condition_key') or '').strip()
+            if not condition_key:
+                raise ValueError('condition_key가 필요합니다.')
+            logic_group = c.get('logic_group')
+            if logic_group is not None and logic_group not in ('AND', 'OR'):
+                raise ValueError(f'logic_group은 AND/OR만 가능합니다: {logic_group}')
+            enabled = c.get('enabled')
+            params = c.get('params')
+            if params is not None and not isinstance(params, dict):
+                raise ValueError('params는 객체여야 합니다.')
+            updated.append(set_trade_condition_setting(
+                condition_key,
+                enabled=bool(enabled) if enabled is not None else None,
+                logic_group=logic_group,
+                params=params,
+                broker='toss',
+            ))
+        return jsonify({'status': 'success', 'conditions': updated})
+    except ValueError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/toss-trade/force-buy', methods=['POST'])
+def toss_force_buy_api():
+    """대시보드 "강제 매수" — 지정한 종목을 지금 즉시 "1종목당 매수금액"만큼 시장가 매수(모의)한다.
+    body: {ticker: str} (예: '005930', 6자리 종목코드)."""
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip()
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    if not (ticker.isdigit() and len(ticker) == 6):
+        return jsonify({'status': 'error', 'message': "ticker는 '005930'과 같은 6자리 종목코드여야 합니다."}), 400
+    try:
+        result = toss_force_buy(ticker)
+        status = 'success' if result['success'] else 'error'
+        code = 200 if result['success'] else 400
+        return jsonify({'status': status, **result}), code
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'강제 매수 중 오류 발생: {str(e)}'}), 500
+
+@app.route('/api/toss-trade/positions/dca', methods=['POST'])
+def set_toss_position_dca_api():
+    """보유 포지션의 물타기(추가매수) 허용 체크박스 상태 저장. body: {ticker: str, enabled: bool}"""
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip()
+    enabled = bool(body.get('enabled'))
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    try:
+        updated = set_position_dca_enabled('toss', 'paper', ticker, enabled)
+        if not updated:
+            return jsonify({'status': 'error', 'message': f'{ticker} 보유 포지션을 찾을 수 없습니다.'}), 404
+        return jsonify({'status': 'success', 'ticker': ticker, 'enabled': enabled})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+# ──────────────────────────────────────────────
+# 토스증권 실거래 — 위 /api/auto-trade/live/* 블록(업비트)과 완전히 동일한 패턴, broker만 'toss'로
+# 고정. app/core/toss_auto_trader.py의 get_live_dashboard_summary/run_trade_cycle/force_buy 참고.
+# ──────────────────────────────────────────────
+
+@app.route('/api/toss-trade/live-summary', methods=['GET'])
+def get_toss_live_summary_api():
+    """토스 실거래 패널용 읽기 전용 요약(진짜 계좌 조회, 주문 없음): 실거래 실행 스위치 상태,
+    실제 KRW 현금 잔고, 매매 대상 후보(체크박스로 "실거래 승인"한 종목은 보유 중이면 잔고를,
+    아니면 미보유(다음 사이클 매수판단 대상)임을 함께 표시). API 키가 없으면 오류를 반환합니다."""
+    if not Config.TOSS_CLIENT_ID or not Config.TOSS_CLIENT_SECRET:
+        return jsonify({'status': 'error', 'message': '.env에 TOSS_CLIENT_ID/TOSS_CLIENT_SECRET이 설정되어 있지 않습니다.'}), 400
+    try:
+        data = get_toss_live_dashboard_summary()
+        return jsonify({'status': 'success', **data})
+    except RuntimeError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'실거래 요약 조회 중 오류 발생: {str(e)}'}), 500
+
+@app.route('/api/toss-trade/live/toggle', methods=['POST'])
+def toggle_toss_live_trade_api():
+    """토스 실거래 실행/일시중지 스위치 — 모의매매 스위치와 완전히 독립적으로 동작합니다.
+    켜져 있어야(그리고 아래 승인 체크박스에 종목이 있어야) `python main.py toss_live_trade`
+    프로세스가 다음 사이클에 실주문을 낼 수 있습니다. 기본값은 꺼짐."""
+    body = request.get_json(silent=True) or {}
+    enabled = bool(body.get('enabled'))
+    try:
+        set_trade_engine_enabled(enabled, 'toss', 'live')
+        return jsonify({'status': 'success', 'enabled': enabled})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/toss-trade/live/candidates/approve', methods=['POST'])
+def set_toss_live_candidate_approval_api():
+    """실거래 매매 대상 종목 체크박스 상태 저장(모의매매 승인 체크박스와 별도 저장 — mode='live').
+    승인한 종목이 하나도 없으면 실거래 실행 스위치가 켜져 있어도 아무 것도 매수하지 않습니다.
+    body: {ticker: str, approved: bool}"""
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip()
+    approved = bool(body.get('approved'))
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    try:
+        set_candidate_approval('toss', 'live', ticker, approved)
+        return jsonify({'status': 'success', 'ticker': ticker, 'approved': approved})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/toss-trade/live/candidates/watchlist', methods=['POST'])
+def set_toss_live_candidate_watchlist_api():
+    """"🎯 매매 대상 종목" 표(1단계, "관심 등록" 체크박스) 상태 저장. 여기 등록해야 그 종목이
+    "🔴 실거래" 표(2단계, 실거래 승인)에 나타난다. body: {ticker: str, watchlisted: bool}"""
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip()
+    watchlisted = bool(body.get('watchlisted'))
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    try:
+        set_candidate_watchlist('toss', 'live', ticker, watchlisted)
+        return jsonify({'status': 'success', 'ticker': ticker, 'watchlisted': watchlisted})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/toss-trade/live/run-now', methods=['POST'])
+def run_toss_live_trade_now_api():
+    """실거래 1사이클(청산→진입)을 지금 이 요청 안에서 동기적으로 즉시 실행합니다. `python main.py
+    toss_live_trade` 프로세스가 떠 있는지와 무관하게 웹 서버 프로세스에서 직접 실행하며, 실거래 실행
+    스위치가 꺼져 있어도 요청 자체는 실행되지만 TossLiveBroker가 주문 단계에서 다시 스위치를
+    확인해 차단합니다(그 사이클의 판단 근거는 trade_order_log에 SKIP으로 남음)."""
+    if not Config.TOSS_CLIENT_ID or not Config.TOSS_CLIENT_SECRET:
+        return jsonify({'status': 'error', 'message': '.env에 TOSS_CLIENT_ID/TOSS_CLIENT_SECRET이 설정되어 있지 않습니다.'}), 400
+    lock = _acquire_live_trade_lock('toss')
+    if lock is None:
+        return jsonify({'status': 'error', 'message': '이미 토스증권 실거래 사이클이 실행 중입니다. 잠시 후 다시 시도하세요.'}), 409
+    try:
+        result = run_toss_trade_cycle(broker=TossLiveBroker(), trigger_type='manual_live')
+        return jsonify({'status': 'success', **result})
+    except TradeCycleBusyError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 409
+    except RuntimeError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'즉시 실행 중 오류 발생: {str(e)}'}), 500
+    finally:
+        lock.release()
+
+@app.route('/api/toss-trade/live/force-buy', methods=['POST'])
+def toss_force_buy_live_api():
+    """실거래 강제 매수 — 진입 후보 여부와 무관하게 지정한 종목을 "1종목당 매수금액"만큼 지금 즉시
+    시장가로 실매수합니다. 실거래 실행 스위치가 꺼져 있으면 TossLiveBroker가 차단합니다.
+    소액 end-to-end 테스트용 진입점. body: {ticker: str} (예: '005930', 6자리 종목코드)."""
+    if not Config.TOSS_CLIENT_ID or not Config.TOSS_CLIENT_SECRET:
+        return jsonify({'status': 'error', 'message': '.env에 TOSS_CLIENT_ID/TOSS_CLIENT_SECRET이 설정되어 있지 않습니다.'}), 400
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip()
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    if not (ticker.isdigit() and len(ticker) == 6):
+        return jsonify({'status': 'error', 'message': "ticker는 '005930'과 같은 6자리 종목코드여야 합니다."}), 400
+    lock = _acquire_live_trade_lock('toss')
+    if lock is None:
+        return jsonify({'status': 'error', 'message': '이미 토스증권 실거래 사이클이 실행 중입니다. 잠시 후 다시 시도하세요.'}), 409
+    try:
+        result = toss_force_buy(ticker, broker=TossLiveBroker())
+        return jsonify({'status': 'success', **result})
+    except RuntimeError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'강제매수 중 오류 발생: {str(e)}'}), 500
+    finally:
+        lock.release()
+
+@app.route('/api/toss-trade/live/positions/dca', methods=['POST'])
+def set_toss_position_dca_live_api():
+    """실거래 보유 포지션의 물타기(추가매수) 허용 체크박스 상태 저장. 필드 구성은 모의매매의
+    /api/toss-trade/positions/dca와 동일. body: {ticker: str, enabled: bool}"""
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip()
+    enabled = bool(body.get('enabled'))
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    try:
+        updated = set_position_dca_enabled('toss', 'live', ticker, enabled)
+        if not updated:
+            return jsonify({'status': 'error', 'message': f'{ticker} 추적 행이 아직 없습니다(잔고 반영 대기 중일 수 있음) — 잠시 후 다시 시도하세요.'}), 404
+        return jsonify({'status': 'success', 'ticker': ticker, 'enabled': enabled})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/market-cap')
 def market_cap_view():
@@ -762,6 +1998,36 @@ def get_stock_raw_data_api():
             "message": str(e)
         }), 500
 
+@app.route('/api/stock-raw-data/cleanup', methods=['POST'])
+def cleanup_stock_raw_data_api():
+    """오래된 주식 원본 데이터(stock_raw_data)를 오래된 순으로 count건 삭제합니다."""
+    try:
+        body = request.get_json(silent=True) or {}
+        count = body.get('count', 1000)
+        try:
+            count = int(count)
+        except (TypeError, ValueError):
+            return jsonify({"status": "error", "message": "count는 숫자여야 합니다."}), 400
+
+        if count <= 0:
+            return jsonify({"status": "error", "message": "count는 1 이상이어야 합니다."}), 400
+        if count > 100000:
+            return jsonify({"status": "error", "message": "한 번에 최대 100,000건까지만 삭제할 수 있습니다."}), 400
+
+        deleted = delete_oldest_stock_raw_data(count)
+        return jsonify({"status": "success", "deleted": deleted})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/db-stats', methods=['GET'])
+def get_db_stats_api():
+    """DB 파일 크기 및 테이블별 행 수/컬럼/추정 용량을 반환합니다."""
+    try:
+        stats = get_db_stats()
+        return jsonify({"status": "success", **stats})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 @app.route('/alerts', methods=['GET'])
 def get_alerts():
     """최근 발생한 코인 알림을 JSON 형식으로 반환합니다."""
@@ -825,9 +2091,6 @@ SYNC_TABLE_MAP = {
     'stock_top_interest_daily':    sync_upsert_top_interest,
     'stock_top_gainers_hourly':    sync_upsert_top_gainers,
 }
-
-def _get_client_ip():
-    return request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
 
 def _verify_sync_token(token):
     """토큰 유효성 검사 (만료 체크)"""

@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>매매 이력 — 토스증권 자동매매(모의)</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f4f7f6; font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; }
+        .main-navbar { background-color: #1a1a2e; }
+        .main-navbar .navbar-brand { color: #fff; font-weight: bold; }
+        .main-navbar .nav-link { color: rgba(255,255,255,0.75) !important; font-size: 0.82rem; }
+        .main-navbar .nav-link:hover,
+        .main-navbar .nav-link.active { color: #fff !important; }
+        .main-navbar .nav-link.active { border-bottom: 2px solid #4da6ff; }
+
+        .dashboard-container { margin-top: 24px; margin-bottom: 60px; }
+        .card-panel { background: white; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); padding: 16px 18px; }
+
+        .btn-search {
+            background: #1a1a2e; color: #fff; border: none; border-radius: 8px;
+            padding: 5px 16px; font-size: 0.83rem; cursor: pointer; font-weight: 600;
+        }
+        .btn-search:hover { background: #2d2d4e; color: #fff; }
+        .btn-search:disabled { opacity: 0.6; cursor: not-allowed; }
+        .btn-back {
+            background: #fff; color: #1a1a2e; border: 1px solid #e2e8f0; border-radius: 8px;
+            padding: 5px 14px; font-size: 0.83rem; font-weight: 600; text-decoration: none; display: inline-block;
+        }
+        .btn-back:hover { background: #f1f5f9; color: #1a1a2e; }
+
+        .table-wrap { overflow-x: auto; }
+        table.trade-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+        .trade-table th {
+            background: #1a1a2e; color: #fff; padding: 7px 10px; text-align: right;
+            white-space: nowrap; font-weight: 600; position: sticky; top: 0; z-index: 1;
+        }
+        .trade-table th:first-child, .trade-table td:first-child { text-align: left; }
+        .trade-table td { padding: 5px 10px; border-bottom: 1px solid #f1f5f9; text-align: right; white-space: nowrap; }
+        .trade-table tr:hover td { background: #f8fafc; }
+        .pnl-pos { color: #b91c1c; font-weight: 600; }
+        .pnl-neg { color: #1d4ed8; font-weight: 600; }
+        .decision-badge { font-size: 0.7rem; font-weight: 700; padding: 2px 8px; border-radius: 10px; }
+        .decision-BUY { background: #fee2e2; color: #b91c1c; }
+        .decision-DCA_BUY { background: #f3e8ff; color: #7e22ce; }
+        .decision-SELL { background: #dbeafe; color: #1d4ed8; }
+        .decision-HOLD { background: #f1f5f9; color: #64748b; }
+        .decision-SKIP { background: #f1f5f9; color: #94a3b8; }
+        .empty-val { color: #cbd5e1; }
+        .loading-row td { text-align: center; color: #94a3b8; padding: 24px; }
+
+        .pagination-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
+    </style>
+</head>
+<body>
+
+{% include '_navbar.html' %}
+
+<div class="container-fluid dashboard-container px-4" style="max-width:1300px">
+
+    <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+        <h2 class="mb-0" style="font-size:1.2rem; font-weight:700; color:#1a1a2e">
+            📜 매매 이력 (토스증권) <span class="text-muted" style="font-size:0.8rem; font-weight:400">(BUY/SELL/HOLD/SKIP 전부 기록)</span>
+        </h2>
+        <a href="{{ url_for('toss_trade_view') }}" class="btn-back">← 대시보드로</a>
+    </div>
+
+    <div class="card-panel mb-3">
+        <div class="d-flex flex-wrap align-items-end gap-3">
+            <div>
+                <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">구분</label>
+                <select id="filterMode" class="form-select form-select-sm" style="width:130px">
+                    <option value="paper">모의매매</option>
+                    <option value="live">🔴 실거래</option>
+                </select>
+            </div>
+            <div>
+                <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">종목코드</label>
+                <input type="text" id="filterTicker" class="form-control form-control-sm" style="width:150px" placeholder="예: 005930">
+            </div>
+            <div>
+                <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">판단</label>
+                <select id="filterDecision" class="form-select form-select-sm" style="width:130px">
+                    <option value="">전체</option>
+                    <option value="BUY">BUY</option>
+                    <option value="DCA_BUY">DCA_BUY</option>
+                    <option value="SELL">SELL</option>
+                    <option value="HOLD">HOLD</option>
+                    <option value="SKIP">SKIP</option>
+                </select>
+            </div>
+            <button class="btn-search" onclick="applyFilter()">검색</button>
+            <span id="totalCountMsg" class="text-muted" style="font-size:0.78rem"></span>
+        </div>
+    </div>
+
+    <div class="card-panel">
+        <div class="table-wrap">
+            <table class="trade-table">
+                <thead>
+                    <tr>
+                        <th>시각</th>
+                        <th>종목</th>
+                        <th style="text-align:center">판단</th>
+                        <th>근거</th>
+                        <th>가격</th>
+                        <th>수량</th>
+                        <th>금액</th>
+                        <th>손익</th>
+                    </tr>
+                </thead>
+                <tbody id="logsBody">
+                    <tr class="loading-row"><td colspan="8">로딩 중...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="pagination-bar">
+            <button class="btn-search" id="prevBtn" onclick="prevPage()" disabled>← 이전</button>
+            <span id="pageRangeMsg" class="text-muted" style="font-size:0.78rem"></span>
+            <button class="btn-search" id="nextBtn" onclick="nextPage()" disabled>다음 →</button>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    const PAGE_SIZE = 50;
+    let currentOffset = 0;
+    let currentTotal = 0;
+
+    function fmtKrw(v) {
+        if (v === null || v === undefined) return '<span class="empty-val">—</span>';
+        const n = Number(v);
+        return isNaN(n) ? '<span class="empty-val">—</span>' : Math.round(n).toLocaleString() + '원';
+    }
+
+    function fmtQty(v) {
+        if (v === null || v === undefined) return '<span class="empty-val">—</span>';
+        const n = Number(v);
+        return isNaN(n) ? '<span class="empty-val">—</span>' : n.toFixed(4);
+    }
+
+    function pnlSpan(krw, pct) {
+        if (krw === null || krw === undefined) return '<span class="empty-val">—</span>';
+        const cls = krw > 0 ? 'pnl-pos' : (krw < 0 ? 'pnl-neg' : '');
+        const sign = krw > 0 ? '+' : '';
+        const pctText = (pct !== null && pct !== undefined) ? ` (${sign}${Number(pct).toFixed(2)}%)` : '';
+        return `<span class="${cls}">${sign}${Math.round(krw).toLocaleString()}원${pctText}</span>`;
+    }
+
+    function decisionBadge(decision) {
+        return `<span class="decision-badge decision-${decision}">${decision}</span>`;
+    }
+
+    function stockLink(ticker) {
+        const url = `https://www.tossinvest.com/stocks/A${ticker}/order`;
+        return `<a href="${url}" target="_blank" rel="noopener" style="color:inherit; text-decoration:none" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${ticker}</a>`;
+    }
+
+    async function loadLogs() {
+        const body = document.getElementById('logsBody');
+        const mode = document.getElementById('filterMode').value;
+        const ticker = document.getElementById('filterTicker').value.trim();
+        const decision = document.getElementById('filterDecision').value;
+        const params = new URLSearchParams({ mode, limit: PAGE_SIZE, offset: currentOffset });
+        if (ticker) params.set('ticker', ticker);
+        if (decision) params.set('decision', decision);
+
+        try {
+            const res = await fetch(`/api/toss-trade/logs?${params.toString()}`);
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+
+            const orders = json.orders || [];
+            currentTotal = json.total || 0;
+
+            if (orders.length) {
+                body.innerHTML = orders.map(o => `
+                    <tr>
+                        <td>${o.created_at || '—'}</td>
+                        <td>${stockLink(o.ticker)}</td>
+                        <td style="text-align:center">${decisionBadge(o.decision)}</td>
+                        <td>${o.reason || '—'}</td>
+                        <td>${fmtKrw(o.price)}</td>
+                        <td>${fmtQty(o.qty)}</td>
+                        <td>${fmtKrw(o.amount_krw)}</td>
+                        <td>${pnlSpan(o.pnl_krw, o.pnl_pct)}</td>
+                    </tr>
+                `).join('');
+            } else {
+                body.innerHTML = '<tr class="loading-row"><td colspan="8">조건에 맞는 매매 판단 기록이 없습니다.</td></tr>';
+            }
+
+            document.getElementById('totalCountMsg').textContent = `총 ${currentTotal.toLocaleString()}건`;
+            const start = currentTotal ? currentOffset + 1 : 0;
+            const end = Math.min(currentOffset + PAGE_SIZE, currentTotal);
+            document.getElementById('pageRangeMsg').textContent = currentTotal ? `${start}–${end} / ${currentTotal}` : '';
+            document.getElementById('prevBtn').disabled = currentOffset <= 0;
+            document.getElementById('nextBtn').disabled = currentOffset + PAGE_SIZE >= currentTotal;
+        } catch (e) {
+            body.innerHTML = `<tr class="loading-row"><td colspan="8" class="text-danger">오류: ${e.message}</td></tr>`;
+        }
+    }
+
+    function applyFilter() {
+        currentOffset = 0;
+        loadLogs();
+    }
+    document.getElementById('filterMode').addEventListener('change', applyFilter);
+
+    function prevPage() {
+        currentOffset = Math.max(0, currentOffset - PAGE_SIZE);
+        loadLogs();
+    }
+
+    function nextPage() {
+        currentOffset += PAGE_SIZE;
+        loadLogs();
+    }
+
+    loadLogs();
+</script>
+</body>
+</html>
