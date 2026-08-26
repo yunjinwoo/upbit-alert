@@ -594,6 +594,66 @@ def force_buy(ticker: str, broker=None) -> dict:
     }
 
 
+def force_sell(ticker: str, broker=None) -> dict:
+    """대시보드 "강제 매도" 버튼 — 손절/익절 조건과 무관하게 보유 중인 종목을 지금 즉시 전량
+    시장가로 매도(모의)한다. 손절 연속확인이나 물타기 대기를 기다리지 않고 바로 정리하고 싶을 때
+    쓴다. 보유 중이 아니거나 실패(시세 조회 실패 등)해도 예외를 던지지 않고 trade_order_log에
+    SKIP으로 기록 후 결과를 반환한다."""
+    broker = broker or PaperBroker()
+    position = get_paper_position(broker.broker_name, broker.mode, ticker)
+    if not position or not position.get('qty'):
+        message = f"{ticker} 보유 포지션이 없습니다."
+        save_trade_order_log(
+            broker=broker.broker_name, mode=broker.mode, ticker=ticker,
+            decision='SKIP', reason=f"강제매도(수동) 실패: {message}",
+            price=None, qty=None, amount_krw=None,
+            cash_balance_after=broker.get_cash_balance(), pnl_krw=None, pnl_pct=None,
+        )
+        return {'success': False, 'message': message, 'ticker': ticker, 'price': None, 'qty': None, 'amount_krw': None}
+
+    sell_qty = position['qty']
+    avg_buy_price = position['avg_buy_price']
+    result = broker.sell_market(ticker, sell_qty, reason='강제매도(수동)')
+
+    pnl_krw = pnl_pct = None
+    if result.success and result.price and avg_buy_price:
+        pnl_krw = (result.price - avg_buy_price) * (result.qty or sell_qty)
+        pnl_pct = (result.price - avg_buy_price) / avg_buy_price * 100
+
+    # PaperBroker.sell_market()은 내부적으로 이미 추적 행(전량 매도 시 삭제, 일부만 체결 시 남은
+    # 수량으로 갱신)까지 처리한다. 실거래는 sell_market이 실주문만 내고 추적 행은 안 건드리므로
+    # (app/core/brokers/upbit_live_broker.py — buy_market과 동일한 이유) 여기서 실제 잔고를 다시
+    # 조회해 반영한다. 체결 확인이 지연될 수 있어(sell_market이 요청한 수량 전부가 아니라 locked를
+    # 제외한 일부만 매도했을 수도 있음) force_buy와 동일하게 짧게 재시도한다.
+    if result.success and broker.mode == 'live':
+        matched = None
+        for attempt in range(5):  # 최대 5회(0,1,2,3초 간격) = 최초 조회 포함 총 ~6초까지 재시도
+            positions_now = broker.get_positions()
+            matched = next((p for p in positions_now if p.ticker == ticker), None)
+            if matched is None or matched.qty < sell_qty - 1e-9:
+                break  # 잔고에 매도가 반영됨(전량 매도돼 사라졌거나 수량이 줄었음)
+            if attempt < 4:
+                time.sleep(1.5)
+        if matched and matched.qty > 1e-9:
+            upsert_paper_position(broker.broker_name, broker.mode, ticker, matched.qty, matched.avg_buy_price)
+        else:
+            delete_paper_position(broker.broker_name, broker.mode, ticker)
+
+    final_decision = 'SELL' if result.success else 'SKIP'
+    reason = result.message if result.success else f"강제매도(수동) 실패: {result.message}"
+    cash_after = broker.get_cash_balance()
+    save_trade_order_log(
+        broker=broker.broker_name, mode=broker.mode, ticker=ticker,
+        decision=final_decision, reason=reason,
+        price=result.price, qty=result.qty, amount_krw=result.amount_krw,
+        cash_balance_after=cash_after, pnl_krw=pnl_krw, pnl_pct=pnl_pct,
+    )
+    return {
+        'success': result.success, 'message': result.message,
+        'ticker': ticker, 'price': result.price, 'qty': result.qty, 'amount_krw': result.amount_krw,
+    }
+
+
 def run_auto_trade_loop(interval_sec: int = None):
     # interval_sec을 명시적으로 넘기면(테스트 등 특수 목적) 그 값으로 고정, 안 넘기면 매 사이클
     # DB(trade_strategy_settings.loop_interval_sec)를 다시 읽어 대시보드에서 바꾼 주기를 그때그때 반영한다.

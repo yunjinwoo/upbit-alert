@@ -70,7 +70,7 @@ from app.core.stock_monitor import (
     SECTOR_NAMES,
 )
 from app.core.upbit_market_analysis import run_coin_screening
-from app.core.auto_trader import get_dashboard_summary, run_trade_cycle, force_buy, get_live_dashboard_summary
+from app.core.auto_trader import get_dashboard_summary, run_trade_cycle, force_buy, force_sell, get_live_dashboard_summary
 from app.core.brokers.base import TradeCycleBusyError
 from app.core.brokers.upbit_live_broker import UpbitLiveBroker
 from app.core.toss_auto_trader import (
@@ -813,6 +813,32 @@ def force_buy_live_api():
         return jsonify({'status': 'error', 'message': str(e)}), 400
     except Exception as e:
         return jsonify({'status': 'error', 'message': f'강제매수 중 오류 발생: {str(e)}'}), 500
+    finally:
+        lock.release()
+
+@app.route('/api/auto-trade/live/force-sell', methods=['POST'])
+def force_sell_live_api():
+    """실거래 강제 매도 — 손절/익절 조건과 무관하게 지정한 종목의 보유 수량 전량을 지금 즉시
+    시장가로 실매도합니다. 실거래 실행 스위치가 꺼져 있으면 UpbitLiveBroker가 차단합니다.
+    body: {ticker: str}"""
+    if not Config.UPBIT_ACCESS_KEY or not Config.UPBIT_SECRET_KEY:
+        return jsonify({'status': 'error', 'message': '.env에 UPBIT_ACCESS_KEY/UPBIT_SECRET_KEY가 설정되어 있지 않습니다.'}), 400
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip().upper()
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    if not ticker.startswith('KRW-'):
+        ticker = f'KRW-{ticker}'
+    lock = _acquire_live_trade_lock('upbit')
+    if lock is None:
+        return jsonify({'status': 'error', 'message': '이미 업비트 실거래 사이클이 실행 중입니다. 잠시 후 다시 시도하세요.'}), 409
+    try:
+        result = force_sell(ticker, broker=UpbitLiveBroker())
+        return jsonify({'status': 'success', **result})
+    except RuntimeError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'강제매도 중 오류 발생: {str(e)}'}), 500
     finally:
         lock.release()
 
