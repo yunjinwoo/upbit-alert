@@ -29,6 +29,11 @@
         .filter-chip input { cursor: pointer; }
         .filter-count { color: #94a3b8; font-size: 0.76rem; }
 
+        .summary-tiles { display: flex; gap: 22px; flex-wrap: wrap; }
+        .summary-tile { min-width: 110px; }
+        .summary-tile .summary-num { font-size: 1.05rem; font-weight: 700; color: #1a1a2e; }
+        .summary-tile .summary-label { font-size: 0.72rem; color: #94a3b8; }
+
         .screen-wrap { overflow-x: auto; }
         table.screen-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
         .screen-table th {
@@ -45,7 +50,8 @@
         .change-neg { color: #1d4ed8; font-weight: 600; }
         .badge-on { background: #dcfce7; color: #15803d; font-size: 0.7rem; padding: 2px 7px; border-radius: 10px; }
         .badge-off { color: #cbd5e1; font-size: 0.7rem; }
-        .chart-link { color: #4da6ff; text-decoration: none; font-size: 0.78rem; }
+        .chart-link { color: #4da6ff; text-decoration: none; font-size: 0.78rem; margin-right: 8px; }
+        .chart-link:last-child { margin-right: 0; }
         .chart-link:hover { text-decoration: underline; }
         .loading-row td { text-align: center; color: #94a3b8; padding: 30px; }
         .empty-val { color: #cbd5e1; }
@@ -64,6 +70,16 @@
             <button class="btn-search" id="fetchBtn" onclick="fetchNow()">지금 수집</button>
         </div>
     </div>
+
+    <div class="card-panel mb-2" id="marketSummary" style="padding:12px 18px">
+        <div style="font-size:0.85rem; font-weight:600; color:#1a1a2e; margin-bottom:8px">📊 시장 요약 (수집된 종목 기준 자체 지수)</div>
+        <div id="marketSummaryBody" class="text-muted" style="font-size:0.82rem">데이터 로딩 중...</div>
+    </div>
+
+    <details class="card-panel mb-2" id="historyPanel" style="padding:10px 18px">
+        <summary style="cursor:pointer; font-size:0.85rem; font-weight:600; color:#1a1a2e">🗓 수집 이력</summary>
+        <div class="mt-2" style="font-size:0.78rem" id="historyList">불러오는 중...</div>
+    </details>
 
     <div class="card-panel">
         <div class="filter-bar">
@@ -130,6 +146,56 @@
         return flag ? `<span class="badge-on">${onLabel}</span>` : '<span class="badge-off">—</span>';
     }
 
+    function renderMarketSummary() {
+        const box = document.getElementById('marketSummaryBody');
+        if (!_rows.length) {
+            box.textContent = '데이터가 없습니다. "지금 수집" 버튼을 눌러주세요.';
+            return;
+        }
+
+        const up = _rows.filter(r => r.change_rate > 0).length;
+        const down = _rows.filter(r => r.change_rate < 0).length;
+        const flat = _rows.length - up - down;
+
+        // 거래대금 가중 평균 등락률 — 업비트 UBCI 같은 공식 지수는 아니지만,
+        // 지금 수집된 종목들의 등락 흐름을 대략적으로 체감할 수 있는 자체 지표
+        const totalValue = _rows.reduce((s, r) => s + (r.trade_value || 0), 0);
+        const weightedChange = totalValue > 0
+            ? _rows.reduce((s, r) => s + (r.change_rate || 0) * (r.trade_value || 0), 0) / totalValue
+            : 0;
+        const wChangeCls = weightedChange > 0 ? 'change-pos' : (weightedChange < 0 ? 'change-neg' : '');
+        const wChangeSign = weightedChange > 0 ? '+' : '';
+
+        const breakoutCnt = _rows.filter(r => r.breakout_4h).length;
+        const cloudCnt = _rows.filter(r => r.above_cloud).length;
+        const ma200Cnt = _rows.filter(r => r.near_ma200).length;
+
+        box.innerHTML = `
+            <div class="summary-tiles">
+                <div class="summary-tile">
+                    <div class="summary-num ${wChangeCls}">${wChangeSign}${weightedChange.toFixed(2)}%</div>
+                    <div class="summary-label">거래대금가중 평균등락률</div>
+                </div>
+                <div class="summary-tile">
+                    <div class="summary-num">🔺${up} 🔻${down} ➖${flat}</div>
+                    <div class="summary-label">상승 / 하락 / 보합</div>
+                </div>
+                <div class="summary-tile">
+                    <div class="summary-num">${breakoutCnt}개</div>
+                    <div class="summary-label">🚀 4시간봉 돌파</div>
+                </div>
+                <div class="summary-tile">
+                    <div class="summary-num">${cloudCnt}개</div>
+                    <div class="summary-label">☁️ 구름 위</div>
+                </div>
+                <div class="summary-tile">
+                    <div class="summary-num">${ma200Cnt}개</div>
+                    <div class="summary-label">📍 200선 근접</div>
+                </div>
+            </div>
+        `;
+    }
+
     async function load() {
         const body = document.getElementById('screenBody');
         body.innerHTML = '<tr class="loading-row"><td colspan="8">로딩 중...</td></tr>';
@@ -144,9 +210,49 @@
             } else {
                 document.getElementById('updatedAt').textContent = '';
             }
+            renderMarketSummary();
             renderTable();
         } catch (e) {
             body.innerHTML = `<tr class="loading-row"><td colspan="8" class="text-danger">오류: ${e.message}</td></tr>`;
+        }
+    }
+
+    async function loadHistory() {
+        const box = document.getElementById('historyList');
+        try {
+            const res = await fetch('api/job-log?job_name=coin_screening&days=14');
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+            if (!json.data.length) {
+                box.textContent = '아직 수집 이력이 없습니다.';
+                return;
+            }
+            box.innerHTML = `
+                <table style="width:100%; border-collapse:collapse">
+                    <thead>
+                        <tr style="color:#94a3b8; text-align:left">
+                            <th style="padding:3px 6px">수집 시각</th>
+                            <th style="padding:3px 6px">방식</th>
+                            <th style="padding:3px 6px">결과</th>
+                            <th style="padding:3px 6px">저장 건수</th>
+                            <th style="padding:3px 6px">소요시간</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${json.data.map(r => `
+                            <tr style="border-top:1px solid #f1f5f9">
+                                <td style="padding:3px 6px">${r.start_time}</td>
+                                <td style="padding:3px 6px">${r.trigger_type === 'manual' ? '수동' : '자동'}</td>
+                                <td style="padding:3px 6px">${r.success ? '✅ 성공' : `❌ 실패${r.error_message ? ' - ' + r.error_message : ''}`}</td>
+                                <td style="padding:3px 6px">${r.count ?? '—'}</td>
+                                <td style="padding:3px 6px">${r.duration_sec ? Math.round(r.duration_sec) + '초' : '—'}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+        } catch (e) {
+            box.textContent = `이력 조회 실패: ${e.message}`;
         }
     }
 
@@ -220,15 +326,28 @@
         });
     });
 
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
     async function fetchNow() {
         const btn = document.getElementById('fetchBtn');
         btn.disabled = true;
         btn.textContent = '수집 중... (전 종목, 1~2분 소요)';
         try {
-            const res = await fetch('api/coin-screening/fetch', { method: 'POST' });
-            const json = await res.json();
-            if (json.status !== 'success') throw new Error(json.message);
+            const startRes = await fetch('api/coin-screening/fetch', { method: 'POST' });
+            const startJson = await startRes.json();
+            if (startJson.status !== 'started') throw new Error(startJson.message || '수집 시작 실패');
+            const taskId = startJson.task_id;
+
+            // 전 종목 조회라 1~2분 걸림 — 동기로 기다리면 nginx 프록시 타임아웃(504)에 걸리므로 폴링 방식으로 진행 상태 확인
+            while (true) {
+                await sleep(3000);
+                const statusRes = await fetch(`api/coin-screening/fetch/status/${taskId}`);
+                const statusJson = await statusRes.json();
+                if (statusJson.status === 'done') break;
+                if (statusJson.status === 'error') throw new Error(statusJson.message);
+            }
             await load();
+            await loadHistory();
         } catch (e) {
             alert('수집 실패: ' + e.message);
         } finally {
@@ -238,6 +357,7 @@
     }
 
     load();
+    loadHistory();
 </script>
 </body>
 </html>
