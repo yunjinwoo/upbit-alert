@@ -441,7 +441,18 @@ def get_live_dashboard_summary() -> dict:
     # 여기서 evaluate_exits()를 한 번 더(읽기 전용) 돌려서 다음 사이클에 실제로 어떤 판단이 내려질지
     # 미리 보여준다(순수 함수라 DB/주문에 영향 없음).
     strategy_cfg = _effective_strategy_config()
+    per_position_cap_krw = get_trade_strategy_settings(broker.broker_name)['per_position_cap_krw']
     tracking_rows = {row['ticker']: row for row in get_paper_positions(broker.broker_name, broker.mode)}
+
+    def _invested_fields(qty, avg_buy_price):
+        """가드레일 1단계 — 이 종목에 지금 묶여 있는 투입원금(평단×수량)과 상한 대비 비율.
+        업비트 평단은 그동안의 모든 물타기가 반영된 값이라, 평단×수량 = 현재 이 종목에 들어가 있는
+        실제 원금이다(이미 판 부분은 빠져 있음). 지금은 표시만 하고 자동 차단은 안 한다."""
+        cost_basis = (qty or 0) * (avg_buy_price or 0)
+        return {
+            'cost_basis': cost_basis,
+            'invested_ratio': (cost_basis / per_position_cap_krw) if per_position_cap_krw else None,
+        }
 
     def _held_extra_fields(ticker, pos):
         tracked = tracking_rows.get(ticker)
@@ -476,6 +487,7 @@ def get_live_dashboard_summary() -> dict:
             cand['eval_amount'] = price * pos.qty if price else None
             cand['pnl_pct'] = (price - pos.avg_buy_price) / pos.avg_buy_price * 100 if price and pos.avg_buy_price else None
             cand.update(_held_extra_fields(ticker, pos))
+            cand.update(_invested_fields(pos.qty, pos.avg_buy_price))
             preview = preview_by_ticker.get(ticker)
             cand['next_action'] = preview.action if preview else None
             cand['next_status'] = preview.status if preview else None
@@ -484,6 +496,7 @@ def get_live_dashboard_summary() -> dict:
             cand['qty'] = cand['avg_buy_price'] = cand['current_price'] = cand['eval_amount'] = cand['pnl_pct'] = None
             cand['dca_enabled'] = False
             cand['dca_count'] = 0
+            cand['cost_basis'] = cand['invested_ratio'] = None
             cand['next_action'] = cand['next_status'] = None
 
     # 승인했(었)거나 이미 봇이 추적 중인데 오늘 스크리닝 후보 목록엔 없는(예: 예전에 매수해서
@@ -507,6 +520,7 @@ def get_live_dashboard_summary() -> dict:
             'next_action': preview.action if preview else None,
             'next_status': preview.status if preview else None,
             **_held_extra_fields(ticker, pos),
+            **_invested_fields(pos.qty, pos.avg_buy_price),
         })
 
     engine_settings = get_trade_engine_settings(broker.broker_name, broker.mode)
@@ -519,6 +533,7 @@ def get_live_dashboard_summary() -> dict:
         'candidates': candidates,
         'extra_positions': extra_positions,
         'dca_max_count': strategy_cfg.TRADE_DCA_MAX_COUNT,
+        'per_position_cap_krw': per_position_cap_krw,
     }
 
 

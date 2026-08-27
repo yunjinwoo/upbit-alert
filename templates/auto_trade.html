@@ -76,6 +76,13 @@
         .status-dca_pending { background: #dbeafe; color: #1d4ed8; }
         .status-dca_done { background: #f3e8ff; color: #7e22ce; }
         .empty-val { color: #cbd5e1; }
+        .invest-gauge { display: inline-block; width: 96px; height: 8px; border-radius: 5px; background: #eef2f7; overflow: hidden; vertical-align: middle; }
+        .invest-gauge > span { display: block; height: 100%; border-radius: 5px; }
+        .invest-gauge-ok > span { background: #34d399; }
+        .invest-gauge-warn > span { background: #fbbf24; }
+        .invest-gauge-over > span { background: #ef4444; }
+        .invest-label { font-size: 0.66rem; color: #64748b; display: block; margin-top: 2px; }
+        .invest-label.over { color: #b91c1c; font-weight: 700; }
         .detail-toggle { cursor: pointer; }
         .detail-toggle:hover { text-decoration: underline; }
         .cand-detail-row td { background: #f8fafc; text-align: left; white-space: normal; }
@@ -141,13 +148,14 @@
                         <th>평단가</th>
                         <th>평가금액</th>
                         <th>평가손익</th>
+                        <th style="text-align:center">투입원금 / 상한</th>
                         <th style="text-align:center">상태</th>
                         <th style="text-align:center">물타기</th>
                         <th style="text-align:center">매매</th>
                     </tr>
                 </thead>
                 <tbody id="liveCandidatesBody">
-                    <tr class="loading-row"><td colspan="10">로딩 중...</td></tr>
+                    <tr class="loading-row"><td colspan="11">로딩 중...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -205,6 +213,13 @@
                     <input type="number" id="setDcaMaxCount" class="form-control form-control-sm" style="width:110px" min="1" step="1">
                 </div>
             </div>
+            <div class="settings-group">
+                <div class="settings-group-label">가드레일</div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">1종목당 투입원금 상한(원)</label>
+                    <input type="number" id="setPerPositionCap" class="form-control form-control-sm" style="width:150px" min="1" step="10000">
+                </div>
+            </div>
             <div class="d-flex align-items-center gap-2 pb-1">
                 <button class="btn-search" onclick="saveStrategySettings()">저장</button>
                 <span id="settingsSavedMsg" class="text-muted" style="font-size:0.76rem"></span>
@@ -220,6 +235,9 @@
             포지션이 손절 조건까지 충족된 뒤에도, 평단 대비 이 %까지는 매도 대신 대기했다가 도달 시
             1종목당 매수금액만큼 추가매수하는 기준이고, <b>물타기 최대 횟수</b>는 포지션당 이 추가매수를
             몇 번까지 반복 허용할지입니다.
+            <br>* <b>1종목당 투입원금 상한(가드레일)</b>: 한 종목에 묶인 원금(평단×수량)이 이 금액을 넘는지
+            "🔴 실거래" 표의 <b>투입원금 / 상한</b> 게이지로 보여줍니다. <b>현재는 표시만 하고 자동으로 매수를
+            막거나 매도하지는 않습니다</b>(1단계). 80% 이상이면 노랑, 초과하면 빨강으로 표시됩니다.
         </div>
     </div>
 
@@ -398,7 +416,22 @@
         return '<span class="decision-badge decision-HOLD">정상 보유중</span>';
     }
 
-    function liveRowHtml(ticker, row, checkboxHtml, dcaMaxCount) {
+    // 가드레일 1단계 — 이 종목에 지금 묶여 있는 투입원금(평단×수량)이 상한 대비 어느 정도인지.
+    // 지금은 눈으로 확인만 하기 위한 표시다(자동 차단/자동매도 없음). 여유돈 생길 때마다 물타서
+    // 한 종목이 비대해지는 걸 조기에 알아채는 게 목적.
+    function investGaugeHtml(row, cap) {
+        if (!row.held || row.cost_basis == null || !cap) return '<span class="empty-val">—</span>';
+        const ratio = row.cost_basis / cap;
+        const pct = Math.min(ratio * 100, 100);
+        const cls = ratio >= 1 ? 'invest-gauge-over' : (ratio >= 0.8 ? 'invest-gauge-warn' : 'invest-gauge-ok');
+        const over = ratio >= 1;
+        const cb = fmtKrw(row.cost_basis).replace(/<[^>]+>/g, '');
+        const capTxt = fmtKrw(cap).replace(/<[^>]+>/g, '');
+        return `<span class="invest-gauge ${cls}"><span style="width:${pct}%"></span></span>`
+             + `<span class="invest-label${over ? ' over' : ''}">${cb} / ${capTxt} (${Math.round(ratio * 100)}%${over ? ' 초과' : ''})</span>`;
+    }
+
+    function liveRowHtml(ticker, row, checkboxHtml, dcaMaxCount, perPositionCap) {
         const held = !!row.held;
         const dcaCount = row.dca_count || 0;
         const dcaExhausted = dcaCount >= dcaMaxCount;
@@ -423,6 +456,7 @@
                 <td>${held ? fmtKrw(row.avg_buy_price) : '<span class="empty-val">—</span>'}</td>
                 <td>${held ? fmtKrw(row.eval_amount) : '<span class="empty-val">—</span>'}</td>
                 <td>${held && row.eval_amount != null ? pnlSpan(row.eval_amount - row.qty * row.avg_buy_price, row.pnl_pct) : '<span class="empty-val">—</span>'}</td>
+                <td style="text-align:center">${investGaugeHtml(row, perPositionCap)}</td>
                 <td style="text-align:center">${liveStatusBadge(row, dcaMaxCount)}</td>
                 <td style="text-align:center">${dcaCheckbox}</td>
                 <td style="text-align:center; white-space:nowrap">${tradeButtons}</td>
@@ -448,23 +482,24 @@
 
             const dcaMaxCount = json.dca_max_count ?? 1;  // ??만 사용 — 0(물타기 완전 비활성화)은 유효한
                                                             // 값이므로 ||로 1로 뭉개면 안 됨(0/0회를 1회 가능처럼 표시하는 버그)
+            const perPositionCap = json.per_position_cap_krw ?? null;
             const rows = [];
             for (const c of (json.candidates || [])) {
                 const cb = `<input type="checkbox" ${c.approved ? 'checked' : ''} onchange="toggleLiveCandidateApproval('${c.ticker}', this)">`;
-                rows.push(liveRowHtml(c.ticker, c, cb, dcaMaxCount));
+                rows.push(liveRowHtml(c.ticker, c, cb, dcaMaxCount, perPositionCap));
             }
             for (const p of (json.extra_positions || [])) {
                 const cb = `<input type="checkbox" ${p.approved ? 'checked' : ''} onchange="toggleLiveCandidateApproval('${p.ticker}', this)">`;
-                rows.push(liveRowHtml(p.ticker, { ...p, held: true }, cb, dcaMaxCount));
+                rows.push(liveRowHtml(p.ticker, { ...p, held: true }, cb, dcaMaxCount, perPositionCap));
             }
 
             body.innerHTML = rows.length
                 ? rows.join('')
-                : '<tr class="loading-row"><td colspan="10">아래 "🎯 매매 대상 코인" 표에서 관심 등록을 먼저 체크하세요.</td></tr>';
+                : '<tr class="loading-row"><td colspan="11">아래 "🎯 매매 대상 코인" 표에서 관심 등록을 먼저 체크하세요.</td></tr>';
 
             renderAllCandidates(json.all_candidates || []);
         } catch (e) {
-            body.innerHTML = `<tr class="loading-row"><td colspan="10" class="text-danger">오류: ${e.message}</td></tr>`;
+            body.innerHTML = `<tr class="loading-row"><td colspan="11" class="text-danger">오류: ${e.message}</td></tr>`;
         }
     }
 
@@ -689,7 +724,7 @@
         }
     }
 
-    const SETTINGS_INPUT_IDS = ['setMaxPosition', 'setMaxPositions', 'setStopLoss', 'setTakeProfit', 'setLoopInterval', 'setStopConfirm', 'setDcaTrigger', 'setDcaMaxCount'];
+    const SETTINGS_INPUT_IDS = ['setMaxPosition', 'setMaxPositions', 'setStopLoss', 'setTakeProfit', 'setLoopInterval', 'setStopConfirm', 'setDcaTrigger', 'setDcaMaxCount', 'setPerPositionCap'];
 
     function populateSettingsInputs(settings) {
         // 사용자가 입력창 하나를 타이핑 중인 동안엔 이번 새로고침으로 값을 덮어쓰지 않음
@@ -702,6 +737,7 @@
         document.getElementById('setStopConfirm').value = settings.stop_loss_confirm_cycles ?? '';
         document.getElementById('setDcaTrigger').value = settings.dca_trigger_pct ?? '';
         document.getElementById('setDcaMaxCount').value = settings.dca_max_count ?? '';
+        document.getElementById('setPerPositionCap').value = settings.per_position_cap_krw ?? '';
     }
 
     async function saveStrategySettings() {
@@ -714,6 +750,7 @@
             stop_loss_confirm_cycles: Number(document.getElementById('setStopConfirm').value),
             dca_trigger_pct: Number(document.getElementById('setDcaTrigger').value),
             dca_max_count: Number(document.getElementById('setDcaMaxCount').value),
+            per_position_cap_krw: Number(document.getElementById('setPerPositionCap').value),
         };
         const msg = document.getElementById('settingsSavedMsg');
         msg.textContent = '저장 중...';

@@ -960,6 +960,11 @@ def set_trade_strategy_settings_api():
             if v < 10:
                 raise ValueError('정밀조건 검사 주기는 최소 10초 이상이어야 합니다.')
             kwargs['condition_check_interval_sec'] = v
+        if 'per_position_cap_krw' in body:
+            v = float(body['per_position_cap_krw'])
+            if v <= 0:
+                raise ValueError('1종목당 투입원금 상한은 0보다 커야 합니다.')
+            kwargs['per_position_cap_krw'] = v
 
         settings = set_trade_strategy_settings(**kwargs)
         return jsonify({'status': 'success', 'settings': settings})
