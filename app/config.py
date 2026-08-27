@@ -98,6 +98,9 @@ class Config:
     TRADE_STOP_LOSS_CONFIRM_CYCLES = 1    # 트레일링 손절 조건이 몇 사이클 연속 유지돼야 실제 매도할지(1=즉시)
     TRADE_DCA_TRIGGER_PCT = 10.0          # 물타기(추가매수, 포지션별 체크박스로 켠 경우) 트리거 — 평단 대비 하락률(%)
     TRADE_DCA_MAX_COUNT = 2                # 포지션당 물타기(추가매수) 최대 허용 횟수(무제한 방지 안전장치)
+    TRADE_PER_POSITION_CAP_KRW = 300_000   # 1종목당 총 투입원금(평단×수량) 상한 — 현재는 대시보드에 "투입/상한"
+                                            # 게이지로 표시만 함(가드레일 1단계). 자동 차단은 아직 안 함.
+                                            # 여유돈 생길 때마다 무한정 물타서 한 종목이 비대해지는 걸 눈으로 잡기 위함.
     TRADE_CONDITION_CHECK_INTERVAL_SEC = 60  # 정밀 매수조건(일봉/5분봉/1분봉) 검사 루프 주기(초) —
                                               # 매매 루프(TRADE_LOOP_INTERVAL_SEC)와 별개로, 대시보드에서
                                               # "정밀검사" 체크한 종목만 대상으로 이 주기로 캔들을 재조회함

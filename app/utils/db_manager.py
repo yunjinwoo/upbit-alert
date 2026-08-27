@@ -585,6 +585,7 @@ def init_db():
             dca_trigger_pct REAL NOT NULL DEFAULT 10.0,
             dca_max_count INTEGER NOT NULL DEFAULT 2,
             condition_check_interval_sec INTEGER NOT NULL DEFAULT 60,
+            per_position_cap_krw REAL NOT NULL DEFAULT 300000,
             updated_at TEXT,
             UNIQUE(broker)
         )
@@ -706,6 +707,8 @@ def init_db():
         # 정밀 매수조건(일봉/5분봉/1분봉) 검사 기능 — 기존 배포 테이블에 컬럼 추가
         'ALTER TABLE trade_candidate_approval ADD COLUMN condition_watch INTEGER NOT NULL DEFAULT 0',
         'ALTER TABLE trade_strategy_settings ADD COLUMN condition_check_interval_sec INTEGER NOT NULL DEFAULT 60',
+        # 가드레일 1단계: 1종목당 총 투입원금 상한 — 지금은 대시보드 표시(게이지)에만 쓰이고 자동 차단은 안 함.
+        'ALTER TABLE trade_strategy_settings ADD COLUMN per_position_cap_krw REAL NOT NULL DEFAULT 300000',
 
     ]
     for sql in migrations:
@@ -749,6 +752,7 @@ def init_db():
                 dca_trigger_pct REAL NOT NULL DEFAULT 10.0,
                 dca_max_count INTEGER NOT NULL DEFAULT 2,
                 condition_check_interval_sec INTEGER NOT NULL DEFAULT 60,
+                per_position_cap_krw REAL NOT NULL DEFAULT 300000,
                 updated_at TEXT,
                 UNIQUE(broker)
             )''',
@@ -4141,6 +4145,7 @@ def get_trade_strategy_settings(broker: str = 'upbit') -> dict:
             'dca_trigger_pct': Config.TRADE_DCA_TRIGGER_PCT,
             'dca_max_count': Config.TRADE_DCA_MAX_COUNT,
             'condition_check_interval_sec': Config.TRADE_CONDITION_CHECK_INTERVAL_SEC,
+            'per_position_cap_krw': Config.TRADE_PER_POSITION_CAP_KRW,
             'updated_at': None,
         }
     return {
@@ -4153,6 +4158,7 @@ def get_trade_strategy_settings(broker: str = 'upbit') -> dict:
         'dca_trigger_pct': row['dca_trigger_pct'],
         'dca_max_count': row['dca_max_count'],
         'condition_check_interval_sec': row['condition_check_interval_sec'],
+        'per_position_cap_krw': row['per_position_cap_krw'] if 'per_position_cap_krw' in row.keys() else Config.TRADE_PER_POSITION_CAP_KRW,
         'updated_at': row['updated_at'],
     }
 
@@ -4161,7 +4167,8 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
                                  stop_loss_pct: float = None, take_profit_pct: float = None,
                                  loop_interval_sec: int = None, stop_loss_confirm_cycles: int = None,
                                  dca_trigger_pct: float = None, dca_max_count: int = None,
-                                 condition_check_interval_sec: int = None, broker: str = 'upbit') -> dict:
+                                 condition_check_interval_sec: int = None, per_position_cap_krw: float = None,
+                                 broker: str = 'upbit') -> dict:
     """매매 전략 파라미터 저장(upsert, 브로커별 1행, 부분 갱신 — None인 필드는 기존값 유지). 저장된 값을 반환."""
     current = get_trade_strategy_settings(broker)
     merged = {
@@ -4174,6 +4181,7 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
         'dca_trigger_pct': dca_trigger_pct if dca_trigger_pct is not None else current['dca_trigger_pct'],
         'dca_max_count': dca_max_count if dca_max_count is not None else current['dca_max_count'],
         'condition_check_interval_sec': condition_check_interval_sec if condition_check_interval_sec is not None else current['condition_check_interval_sec'],
+        'per_position_cap_krw': per_position_cap_krw if per_position_cap_krw is not None else current['per_position_cap_krw'],
     }
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -4182,8 +4190,8 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
         INSERT INTO trade_strategy_settings
             (broker, max_position_krw, max_concurrent_positions, stop_loss_pct, take_profit_pct,
              loop_interval_sec, stop_loss_confirm_cycles, dca_trigger_pct, dca_max_count,
-             condition_check_interval_sec, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             condition_check_interval_sec, per_position_cap_krw, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(broker) DO UPDATE SET
             max_position_krw=excluded.max_position_krw,
             max_concurrent_positions=excluded.max_concurrent_positions,
@@ -4194,10 +4202,12 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
             dca_trigger_pct=excluded.dca_trigger_pct,
             dca_max_count=excluded.dca_max_count,
             condition_check_interval_sec=excluded.condition_check_interval_sec,
+            per_position_cap_krw=excluded.per_position_cap_krw,
             updated_at=excluded.updated_at
     ''', (broker, merged['max_position_krw'], merged['max_concurrent_positions'], merged['stop_loss_pct'],
           merged['take_profit_pct'], merged['loop_interval_sec'], merged['stop_loss_confirm_cycles'],
-          merged['dca_trigger_pct'], merged['dca_max_count'], merged['condition_check_interval_sec'], timestamp))
+          merged['dca_trigger_pct'], merged['dca_max_count'], merged['condition_check_interval_sec'],
+          merged['per_position_cap_krw'], timestamp))
     conn.commit()
     conn.close()
     merged['updated_at'] = timestamp
