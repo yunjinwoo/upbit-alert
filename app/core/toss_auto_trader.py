@@ -375,7 +375,17 @@ def get_live_dashboard_summary() -> dict:
             cand['pnl_pct'] = None
 
     strategy_cfg = _effective_strategy_config()
+    per_position_cap_krw = get_trade_strategy_settings(broker.broker_name)['per_position_cap_krw']
     tracking_rows = {row['ticker']: row for row in get_paper_positions(broker.broker_name, broker.mode)}
+
+    def _invested_fields(qty, avg_buy_price):
+        """가드레일 1단계 — 이 종목에 지금 묶여 있는 투입원금(평단×수량)과 상한 대비 비율.
+        app/core/auto_trader.get_live_dashboard_summary()의 동명 헬퍼와 동일. 지금은 표시만."""
+        cost_basis = (qty or 0) * (avg_buy_price or 0)
+        return {
+            'cost_basis': cost_basis,
+            'invested_ratio': (cost_basis / per_position_cap_krw) if per_position_cap_krw else None,
+        }
 
     def _held_extra_fields(ticker, pos):
         tracked = tracking_rows.get(ticker)
@@ -410,6 +420,7 @@ def get_live_dashboard_summary() -> dict:
             cand['eval_amount'] = price * pos.qty if price else None
             cand['pnl_pct'] = (price - pos.avg_buy_price) / pos.avg_buy_price * 100 if price and pos.avg_buy_price else None
             cand.update(_held_extra_fields(ticker, pos))
+            cand.update(_invested_fields(pos.qty, pos.avg_buy_price))
             preview = preview_by_ticker.get(ticker)
             cand['next_action'] = preview.action if preview else None
             cand['next_status'] = preview.status if preview else None
@@ -418,6 +429,7 @@ def get_live_dashboard_summary() -> dict:
             cand['qty'] = cand['avg_buy_price'] = cand['current_price'] = cand['eval_amount'] = cand['pnl_pct'] = None
             cand['dca_enabled'] = False
             cand['dca_count'] = 0
+            cand['cost_basis'] = cand['invested_ratio'] = None
             cand['next_action'] = cand['next_status'] = None
 
     candidate_tickers = {c['ticker'] for c in candidates}
@@ -438,6 +450,7 @@ def get_live_dashboard_summary() -> dict:
             'next_action': preview.action if preview else None,
             'next_status': preview.status if preview else None,
             **_held_extra_fields(ticker, pos),
+            **_invested_fields(pos.qty, pos.avg_buy_price),
         })
 
     engine_settings = get_trade_engine_settings(broker.broker_name, broker.mode)
@@ -450,6 +463,7 @@ def get_live_dashboard_summary() -> dict:
         'candidates': candidates,
         'extra_positions': extra_positions,
         'dca_max_count': strategy_cfg.TRADE_DCA_MAX_COUNT,
+        'per_position_cap_krw': per_position_cap_krw,
     }
 
 
@@ -511,28 +525,23 @@ def force_buy(ticker: str, broker=None) -> dict:
 
 
 def run_auto_trade_loop(interval_sec: int = None):
-    fixed_interval = interval_sec
-    logger.info(
-        f"🤖 토스증권 모의매매(dry-run) 엔진 시작 — 실주문 없음. "
-        f"초기자본 {Config.TRADE_INITIAL_CASH_KRW:,.0f}원. 매매 기준은 대시보드에서 실시간 조정 가능."
+    """⚠️ 폐지됨 — 토스증권 모의매매(paper) 자동매매 루프는 더 이상 돌지 않는다.
+
+    업비트(app/core/auto_trader.run_auto_trade_loop)와 동일하게, 이제 토스도 실거래 2단계
+    (매매 대상 → 실거래 승인)만 쓴다. deploy.yml에서 toss-trade-bot 자동시작을 뺐지만, 서버에
+    유령 PM2 프로세스가 남아 계속 가상 매매 이력을 쌓는 걸 막기 위해 루프 자체를 여기서 차단한다.
+    백엔드(TossBroker/DB/run_trade_cycle)와 수동 "지금 즉시 실행", 실거래 루프(run_live_trade_loop)는
+    영향 없다.
+
+    프로세스는 즉시 종료하지 않고 idle 상태로 유지한다 — 바로 exit하면 PM2 autorestart가 재시작을
+    폭주시키므로. 이 프로세스(toss-trade-bot)는 PM2에서 제거해야 한다: pm2 delete toss-trade-bot && pm2 save.
+    (다시 켜려면 — 권장하지 않음 — 이 함수를 git 이력에서 복원)"""
+    logger.warning(
+        "⚠️ 토스증권 모의매매(paper) 자동매매 루프는 폐지됨 — idle 유지, 매매/이력 기록 없음. "
+        "PM2에서 제거하세요: pm2 delete toss-trade-bot && pm2 save"
     )
-
     while True:
-        current_interval = fixed_interval or get_trade_strategy_settings(BROKER)['loop_interval_sec']
-
-        if not get_trade_engine_settings(BROKER)['enabled']:
-            logger.info("⏸️ 토스 자동매매 엔진 일시중지 상태 — 이번 사이클 건너뜀 (대시보드에서 다시 켤 수 있음)")
-            time.sleep(current_interval)
-            continue
-
-        try:
-            run_trade_cycle(trigger_type='auto')
-        except Exception as e:
-            logger.error(f"토스 자동매매 루프 오류: {e}")
-        finally:
-            set_engine_last_cycle_at(BROKER)  # mode 기본값 'paper' — TossBroker.mode와 동일
-
-        time.sleep(current_interval)
+        time.sleep(3600)
 
 
 def run_live_trade_loop(interval_sec: int = None):

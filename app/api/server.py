@@ -1079,13 +1079,13 @@ def toss_trade_logs_view():
 def get_toss_trade_logs_api():
     """매매 판단/체결 이력을 페이지네이션해서 조회. 쿼리파라미터: limit(기본 50, 최대 200),
     offset(기본 0), ticker(선택, 예: 005930), decision(선택, BUY/SELL/HOLD/SKIP/DCA_BUY),
-    mode(선택, 'paper'(기본)/'live' — 실거래 이력을 보려면 mode=live)."""
+    mode(선택, 'live'(기본)/'paper' — 토스 모의매매는 폐지돼 기본이 live다)."""
     try:
         limit = min(int(request.args.get('limit', 50)), 200)
         offset = max(int(request.args.get('offset', 0)), 0)
         ticker = (request.args.get('ticker') or '').strip() or None
         decision = (request.args.get('decision') or '').strip() or None
-        mode = (request.args.get('mode') or 'paper').strip() or 'paper'
+        mode = (request.args.get('mode') or 'live').strip() or 'live'
         orders = get_trade_order_log('toss', mode, limit=limit, offset=offset, ticker=ticker, decision=decision)
         total = count_trade_order_log('toss', mode, ticker=ticker, decision=decision)
         return jsonify({'status': 'success', 'orders': orders, 'total': total, 'limit': limit, 'offset': offset})
@@ -1193,6 +1193,11 @@ def set_toss_trade_strategy_settings_api():
             if v < 10:
                 raise ValueError('정밀조건 검사 주기는 최소 10초 이상이어야 합니다.')
             kwargs['condition_check_interval_sec'] = v
+        if 'per_position_cap_krw' in body:
+            v = float(body['per_position_cap_krw'])
+            if v <= 0:
+                raise ValueError('1종목당 투입원금 상한은 0보다 커야 합니다.')
+            kwargs['per_position_cap_krw'] = v
 
         settings = set_trade_strategy_settings(broker='toss', **kwargs)
         return jsonify({'status': 'success', 'settings': settings})
