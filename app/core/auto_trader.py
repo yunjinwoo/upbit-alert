@@ -670,30 +670,22 @@ def force_sell(ticker: str, broker=None) -> dict:
 
 
 def run_auto_trade_loop(interval_sec: int = None):
-    # interval_sec을 명시적으로 넘기면(테스트 등 특수 목적) 그 값으로 고정, 안 넘기면 매 사이클
-    # DB(trade_strategy_settings.loop_interval_sec)를 다시 읽어 대시보드에서 바꾼 주기를 그때그때 반영한다.
-    fixed_interval = interval_sec
-    logger.info(
-        f"🤖 업비트 모의매매(dry-run) 엔진 시작 — 실주문 없음. "
-        f"초기자본 {Config.TRADE_INITIAL_CASH_KRW:,.0f}원. 매매 기준은 대시보드에서 실시간 조정 가능."
+    """⚠️ 폐지됨 — 업비트 모의매매(paper) 자동매매 루프는 더 이상 돌지 않는다.
+
+    이제 업비트는 실거래 2단계(매매 대상 → 실거래 승인)만 쓴다. PR #51에서 화면과 배포 자동시작
+    (deploy.yml의 trade-bot)을 제거했지만, 서버에 유령 PM2 프로세스가 남아 5분마다 가상 매매
+    이력을 계속 쌓는 문제가 있어 루프 자체를 여기서 막는다. 백엔드(PaperBroker/DB/run_trade_cycle)와
+    수동 "지금 즉시 실행", 실거래 루프(run_live_trade_loop)는 영향 없다.
+
+    프로세스는 즉시 종료하지 않고 idle 상태로 유지한다 — 바로 exit하면 PM2 autorestart가 재시작을
+    폭주시키므로. 이 프로세스(trade-bot)는 PM2에서 제거해야 한다: pm2 delete trade-bot && pm2 save.
+    (다시 켜려면 — 권장하지 않음 — 이 함수를 git 이력에서 복원)"""
+    logger.warning(
+        "⚠️ 업비트 모의매매(paper) 자동매매 루프는 폐지됨 — idle 유지, 매매/이력 기록 없음. "
+        "PM2에서 제거하세요: pm2 delete trade-bot && pm2 save"
     )
-
     while True:
-        current_interval = fixed_interval or get_trade_strategy_settings()['loop_interval_sec']
-
-        # 대시보드(/auto-trade)의 실행/일시중지 토글을 매 사이클마다 확인 — 껐다 켜도 프로세스
-        # 재시작 없이(최대 current_interval 지연으로) 반영된다. 꺼진 동안은 판단/체결/로그 기록 전부 건너뜀.
-        if not get_trade_engine_settings()['enabled']:
-            logger.info("⏸️ 자동매매 엔진 일시중지 상태 — 이번 사이클 건너뜀 (대시보드에서 다시 켤 수 있음)")
-            time.sleep(current_interval)
-            continue
-
-        try:
-            run_trade_cycle(trigger_type='auto')  # job_run_log 기록은 run_trade_cycle 내부에서 처리
-        except Exception as e:
-            logger.error(f"자동매매 루프 오류: {e}")
-
-        time.sleep(current_interval)
+        time.sleep(3600)
 
 
 def run_live_trade_loop(interval_sec: int = None):

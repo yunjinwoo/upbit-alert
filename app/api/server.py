@@ -678,13 +678,13 @@ def auto_trade_logs_view():
 def get_auto_trade_logs_api():
     """매매 판단/체결 이력을 페이지네이션해서 조회. 쿼리파라미터: limit(기본 50, 최대 200),
     offset(기본 0), ticker(선택, 예: KRW-BTC), decision(선택, BUY/SELL/HOLD/SKIP/DCA_BUY),
-    mode(선택, 'paper'(기본)/'live' — 실거래 이력을 보려면 mode=live)."""
+    mode(선택, 'live'(기본)/'paper' — 업비트 모의매매는 폐지돼 기본이 live다)."""
     try:
         limit = min(int(request.args.get('limit', 50)), 200)
         offset = max(int(request.args.get('offset', 0)), 0)
         ticker = (request.args.get('ticker') or '').strip() or None
         decision = (request.args.get('decision') or '').strip() or None
-        mode = (request.args.get('mode') or 'paper').strip() or 'paper'
+        mode = (request.args.get('mode') or 'live').strip() or 'live'
         orders = get_trade_order_log('upbit', mode, limit=limit, offset=offset, ticker=ticker, decision=decision)
         total = count_trade_order_log('upbit', mode, ticker=ticker, decision=decision)
         return jsonify({'status': 'success', 'orders': orders, 'total': total, 'limit': limit, 'offset': offset})
