@@ -19,7 +19,7 @@ from app.utils.slack import send_slack_msg
 from app.core.brokers.base import TradeCycleBusyError
 from app.core.brokers.toss_broker import TossBroker
 from app.core.brokers.toss_live_broker import TossLiveBroker
-from app.core.trade_strategy import evaluate_entries, evaluate_exits
+from app.core.trade_strategy import evaluate_entries, evaluate_exits, invested_gauge_fields
 from app.core import toss_market_analysis
 from app.utils.db_manager import (
     get_or_create_paper_account,
@@ -378,15 +378,6 @@ def get_live_dashboard_summary() -> dict:
     per_position_cap_krw = get_trade_strategy_settings(broker.broker_name)['per_position_cap_krw']
     tracking_rows = {row['ticker']: row for row in get_paper_positions(broker.broker_name, broker.mode)}
 
-    def _invested_fields(qty, avg_buy_price):
-        """가드레일 1단계 — 이 종목에 지금 묶여 있는 투입원금(평단×수량)과 상한 대비 비율.
-        app/core/auto_trader.get_live_dashboard_summary()의 동명 헬퍼와 동일. 지금은 표시만."""
-        cost_basis = (qty or 0) * (avg_buy_price or 0)
-        return {
-            'cost_basis': cost_basis,
-            'invested_ratio': (cost_basis / per_position_cap_krw) if per_position_cap_krw else None,
-        }
-
     def _held_extra_fields(ticker, pos):
         tracked = tracking_rows.get(ticker)
         return {
@@ -420,7 +411,7 @@ def get_live_dashboard_summary() -> dict:
             cand['eval_amount'] = price * pos.qty if price else None
             cand['pnl_pct'] = (price - pos.avg_buy_price) / pos.avg_buy_price * 100 if price and pos.avg_buy_price else None
             cand.update(_held_extra_fields(ticker, pos))
-            cand.update(_invested_fields(pos.qty, pos.avg_buy_price))
+            cand.update(invested_gauge_fields(pos.qty, pos.avg_buy_price, per_position_cap_krw))
             preview = preview_by_ticker.get(ticker)
             cand['next_action'] = preview.action if preview else None
             cand['next_status'] = preview.status if preview else None
@@ -450,7 +441,7 @@ def get_live_dashboard_summary() -> dict:
             'next_action': preview.action if preview else None,
             'next_status': preview.status if preview else None,
             **_held_extra_fields(ticker, pos),
-            **_invested_fields(pos.qty, pos.avg_buy_price),
+            **invested_gauge_fields(pos.qty, pos.avg_buy_price, per_position_cap_krw),
         })
 
     engine_settings = get_trade_engine_settings(broker.broker_name, broker.mode)
@@ -524,7 +515,7 @@ def force_buy(ticker: str, broker=None) -> dict:
     }
 
 
-def run_auto_trade_loop(interval_sec: int = None):
+def run_auto_trade_loop():
     """⚠️ 폐지됨 — 토스증권 모의매매(paper) 자동매매 루프는 더 이상 돌지 않는다.
 
     업비트(app/core/auto_trader.run_auto_trade_loop)와 동일하게, 이제 토스도 실거래 2단계

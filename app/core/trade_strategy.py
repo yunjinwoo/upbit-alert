@@ -175,3 +175,14 @@ def evaluate_entries(candidates: List[dict], positions: List[dict], cash_balance
         held_tickers.add(ticker)
 
     return decisions
+
+
+def invested_gauge_fields(qty, avg_buy_price, per_position_cap_krw) -> dict:
+    """가드레일 1단계 대시보드 표시용 — 이 종목에 지금 묶여 있는 투입원금(평단×수량)과 상한 대비
+    비율. 순수 계산만 한다(DB/네트워크 접근 없음). 지금은 표시 전용이라 매매 판단에는 안 쓰인다.
+    업비트/토스 get_live_dashboard_summary()가 공통으로 호출한다."""
+    cost_basis = (qty or 0) * (avg_buy_price or 0)
+    return {
+        'cost_basis': cost_basis,
+        'invested_ratio': (cost_basis / per_position_cap_krw) if per_position_cap_krw else None,
+    }
