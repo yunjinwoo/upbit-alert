@@ -19,7 +19,7 @@ from app.core.brokers.base import TradeCycleBusyError
 from app.core.brokers.paper_broker import PaperBroker
 from app.core.brokers.upbit_live_broker import UpbitLiveBroker
 from app.core.brokers.upbit_account import get_real_krw_balance
-from app.core.trade_strategy import evaluate_entries, evaluate_exits
+from app.core.trade_strategy import evaluate_entries, evaluate_exits, invested_gauge_fields
 from app.utils.db_manager import (
     get_or_create_paper_account,
     get_paper_positions,
@@ -444,15 +444,9 @@ def get_live_dashboard_summary() -> dict:
     per_position_cap_krw = get_trade_strategy_settings(broker.broker_name)['per_position_cap_krw']
     tracking_rows = {row['ticker']: row for row in get_paper_positions(broker.broker_name, broker.mode)}
 
-    def _invested_fields(qty, avg_buy_price):
-        """가드레일 1단계 — 이 종목에 지금 묶여 있는 투입원금(평단×수량)과 상한 대비 비율.
-        업비트 평단은 그동안의 모든 물타기가 반영된 값이라, 평단×수량 = 현재 이 종목에 들어가 있는
-        실제 원금이다(이미 판 부분은 빠져 있음). 지금은 표시만 하고 자동 차단은 안 한다."""
-        cost_basis = (qty or 0) * (avg_buy_price or 0)
-        return {
-            'cost_basis': cost_basis,
-            'invested_ratio': (cost_basis / per_position_cap_krw) if per_position_cap_krw else None,
-        }
+    # 투입원금 게이지 필드: invested_gauge_fields(qty, avg_buy_price, per_position_cap_krw)
+    # (app/core/trade_strategy.py — 토스와 공용). 업비트 평단은 그동안의 모든 물타기가 반영된
+    # 값이라 평단×수량 = 현재 이 종목에 들어가 있는 실제 원금이다(이미 판 부분은 빠져 있음).
 
     def _held_extra_fields(ticker, pos):
         tracked = tracking_rows.get(ticker)
@@ -487,7 +481,7 @@ def get_live_dashboard_summary() -> dict:
             cand['eval_amount'] = price * pos.qty if price else None
             cand['pnl_pct'] = (price - pos.avg_buy_price) / pos.avg_buy_price * 100 if price and pos.avg_buy_price else None
             cand.update(_held_extra_fields(ticker, pos))
-            cand.update(_invested_fields(pos.qty, pos.avg_buy_price))
+            cand.update(invested_gauge_fields(pos.qty, pos.avg_buy_price, per_position_cap_krw))
             preview = preview_by_ticker.get(ticker)
             cand['next_action'] = preview.action if preview else None
             cand['next_status'] = preview.status if preview else None
@@ -520,7 +514,7 @@ def get_live_dashboard_summary() -> dict:
             'next_action': preview.action if preview else None,
             'next_status': preview.status if preview else None,
             **_held_extra_fields(ticker, pos),
-            **_invested_fields(pos.qty, pos.avg_buy_price),
+            **invested_gauge_fields(pos.qty, pos.avg_buy_price, per_position_cap_krw),
         })
 
     engine_settings = get_trade_engine_settings(broker.broker_name, broker.mode)
@@ -669,7 +663,7 @@ def force_sell(ticker: str, broker=None) -> dict:
     }
 
 
-def run_auto_trade_loop(interval_sec: int = None):
+def run_auto_trade_loop():
     """⚠️ 폐지됨 — 업비트 모의매매(paper) 자동매매 루프는 더 이상 돌지 않는다.
 
     이제 업비트는 실거래 2단계(매매 대상 → 실거래 승인)만 쓴다. PR #51에서 화면과 배포 자동시작
