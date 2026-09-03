@@ -75,6 +75,9 @@
         .status-stop_pending { background: #fef3c7; color: #92400e; }
         .status-dca_pending { background: #dbeafe; color: #1d4ed8; }
         .status-dca_done { background: #f3e8ff; color: #7e22ce; }
+        .signal-badge { font-size: 0.68rem; font-weight: 700; padding: 2px 7px; border-radius: 10px; white-space: nowrap; display: inline-block; margin: 1px; }
+        .signal-badge-warn { background: #fee2e2; color: #b91c1c; }
+        .signal-badge-mild { background: #fef3c7; color: #92400e; }
         .empty-val { color: #cbd5e1; }
         .invest-gauge { display: inline-block; width: 96px; height: 8px; border-radius: 5px; background: #eef2f7; overflow: hidden; vertical-align: middle; }
         .invest-gauge > span { display: block; height: 100%; border-radius: 5px; }
@@ -295,6 +298,47 @@
         </div>
     </div>
 
+    <div class="card-panel mb-3">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+            <div class="section-title mb-0">⚠️ 하락위험 코인 (관심 등록 — 모니터링용)</div>
+            <span id="downsideUpdatedAt" class="text-muted" style="font-size:0.74rem"></span>
+        </div>
+        <div class="mt-2 mb-1" style="font-size:0.78rem; display:flex; flex-wrap:wrap; gap:0.1rem 0.9rem; align-items:center">
+            <span class="text-muted">신호 필터(선택한 것 모두 가진 종목만):</span>
+            {% for s in downside_signals %}
+            <label style="cursor:pointer"><input type="checkbox" class="downside-filter" value="{{ s.key }}" onchange="renderDownsideCandidates()"> {{ s.label }}</label>
+            {% endfor %}
+        </div>
+        <div class="table-wrap">
+            <table class="trade-table">
+                <thead>
+                    <tr>
+                        <th style="text-align:center">관심 등록</th>
+                        <th>종목</th>
+                        <th>스크리닝 시점가</th>
+                        <th>등락률(24h)</th>
+                        <th>거래대금(24h)</th>
+                        <th>하락 신호</th>
+                        <th style="text-align:center">보유손익</th>
+                        <th>스크리닝 갱신시각</th>
+                    </tr>
+                </thead>
+                <tbody id="downsideCandidatesBody">
+                    <tr class="loading-row"><td colspan="8">로딩 중...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="mt-2 text-muted" style="font-size:0.72rem">
+            * "🎯 매매 대상 코인"의 거울상 — 전체 KRW 마켓 중
+            <b>하락 신호({% for s in downside_signals if s.gates %}{{ s.label }}{% if not loop.last %} / {% endif %}{% endfor %})</b>가
+            하나라도 켜진 종목입니다(RSI 과열은 상승장에서도 떠서 뱃지·필터 전용).
+            4시간봉 기준 <code>coin_screening_daily</code> 같은 스냅샷이며, <b>켜진 신호 개수 많은 순</b>으로
+            정렬됩니다. 하락장엔 후보가 많아질 수 있어 <b>거래대금 상위 120개</b>까지만 표시합니다.
+            <br>* <b>표시 전용입니다</b> — 관심 등록해도 봇의 매매 판단/주문에는 영향이 없습니다(자동 매도 없음).
+            관심 등록분을 봇이 어떻게 처리할지는 다음 단계에서 정합니다(<code>docs/auto-trade-downside-watch.md</code>).
+        </div>
+    </div>
+
     <div class="mt-3 mb-4 text-muted" style="font-size:0.72rem">
         * 매매 판단/체결 이력(BUY/SELL/HOLD/SKIP 전부)은 <a href="{{ url_for('auto_trade_logs_view') }}">📜 매매 이력</a> 페이지에서 따로 조회할 수 있습니다.
     </div>
@@ -498,8 +542,86 @@
                 : '<tr class="loading-row"><td colspan="11">아래 "🎯 매매 대상 코인" 표에서 관심 등록을 먼저 체크하세요.</td></tr>';
 
             renderAllCandidates(json.all_candidates || []);
+            renderDownsideCandidates(json.downside_candidates || []);
         } catch (e) {
             body.innerHTML = `<tr class="loading-row"><td colspan="11" class="text-danger">오류: ${e.message}</td></tr>`;
+        }
+    }
+
+    // ── 하락위험 코인 관심목록 (docs/auto-trade-downside-watch.md) — 표시 전용.
+    // 신호 key/라벨의 유일한 소스는 db_manager.DOWNSIDE_SIGNALS — server.py가 컨텍스트로 넘겨준다.
+    const DOWNSIDE_SIGNAL_LABELS = {
+        {% for s in downside_signals %}{{ s.key | tojson }}: {{ s.label | tojson }},
+        {% endfor %}
+    };
+    let _downsideCandidates = [];  // 마지막 응답 캐시 — 신호 필터 체크박스는 재조회 없이 이걸로 다시 그린다
+
+    function renderDownsideCandidates(list) {
+        if (Array.isArray(list)) _downsideCandidates = list;
+        const body = document.getElementById('downsideCandidatesBody');
+        if (!body) return;
+        const activeFilters = [...document.querySelectorAll('.downside-filter:checked')].map(el => el.value);
+        const rows = _downsideCandidates.filter(c => activeFilters.every(f => (c.signals || []).includes(f)));
+
+        const updatedEl = document.getElementById('downsideUpdatedAt');
+        if (_downsideCandidates.length) {
+            const latest = _downsideCandidates.reduce((a, b) => (a.updated_at > b.updated_at ? a : b));
+            updatedEl.textContent = `${rows.length}/${_downsideCandidates.length}개 · 최근 스크리닝: ${latest.updated_at}`;
+        } else {
+            updatedEl.textContent = '';
+        }
+
+        if (!rows.length) {
+            body.innerHTML = `<tr class="loading-row"><td colspan="8">${
+                _downsideCandidates.length ? '선택한 신호를 모두 가진 종목이 없습니다.' : '하락 신호가 켜진 종목이 없습니다.'
+            }</td></tr>`;
+            return;
+        }
+        body.innerHTML = rows.map(c => {
+            const changeCls = c.change_rate > 0 ? 'pnl-pos' : (c.change_rate < 0 ? 'pnl-neg' : '');
+            const changeSign = c.change_rate > 0 ? '+' : '';
+            const badges = (c.signals || []).map(s => {
+                const cls = s === 'rsi_overbought' ? 'signal-badge-mild' : 'signal-badge-warn';
+                return `<span class="signal-badge ${cls}">${DOWNSIDE_SIGNAL_LABELS[s] || s}</span>`;
+            }).join(' ');
+            const heldTag = c.already_held ? ' <span class="decision-badge decision-HOLD">보유중</span>' : '';
+            return `
+                <tr>
+                    <td style="text-align:center">
+                        <input type="checkbox" ${c.downside_watchlist ? 'checked' : ''} onchange="toggleDownsideWatchlist('${c.ticker}', this)">
+                    </td>
+                    <td>
+                        <div style="font-weight:600">${coinLink(c.ticker, c.name || c.ticker)}${heldTag}</div>
+                        <div style="font-size:0.68rem; color:#94a3b8; font-family:monospace">${c.ticker}</div>
+                    </td>
+                    <td>${fmtKrw(c.price)}</td>
+                    <td class="${changeCls}">${changeSign}${c.change_rate}%</td>
+                    <td>${fmtEok(c.trade_value)}</td>
+                    <td>${badges}</td>
+                    <td style="text-align:center">${heldPnlBadge(c)}</td>
+                    <td>${c.updated_at || '—'}</td>
+                </tr>`;
+        }).join('');
+    }
+
+    async function toggleDownsideWatchlist(ticker, checkbox) {
+        const nextWatchlisted = checkbox.checked;
+        checkbox.disabled = true;
+        try {
+            const res = await fetch('api/auto-trade/live/downside/watchlist', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ticker, watchlisted: nextWatchlisted }),
+            });
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+            const hit = _downsideCandidates.find(c => c.ticker === ticker);
+            if (hit) hit.downside_watchlist = nextWatchlisted;
+        } catch (e) {
+            alert('하락위험 관심 등록 저장 실패: ' + e.message);
+            checkbox.checked = !nextWatchlisted;
+        } finally {
+            checkbox.disabled = false;
         }
     }
 

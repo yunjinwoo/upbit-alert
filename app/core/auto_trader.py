@@ -28,6 +28,10 @@ from app.utils.db_manager import (
     set_position_dca_enabled,
     delete_paper_position,
     get_coin_screening_candidates,
+    get_coin_downside_candidates,
+    get_downside_watchlist_tickers,
+    DOWNSIDE_SIGNAL_KEYS,
+    DOWNSIDE_GATE_KEYS,
     save_trade_order_log,
     save_job_run_log,
     get_trade_engine_settings,
@@ -517,6 +521,26 @@ def get_live_dashboard_summary() -> dict:
             **invested_gauge_fields(pos.qty, pos.avg_buy_price, per_position_cap_krw),
         })
 
+    # ── 하락위험 코인 관심목록(Downside Watch) — 진입 후보의 거울상. 표시 전용이라
+    # 매매 판단/주문과 완전히 분리돼 있고, evaluate_exits/_reconcile_live_positions는 안 건드린다.
+    # docs/auto-trade-downside-watch.md. Phase 2(관심 등록분을 봇이 처리)는 별도.
+    downside_watchlist_tickers = get_downside_watchlist_tickers(broker.broker_name, broker.mode)
+    downside_candidates = get_coin_downside_candidates()
+    for cand in downside_candidates:
+        ticker = cand['ticker']
+        cand['signals'] = [k for k in DOWNSIDE_SIGNAL_KEYS if cand.get(k)]
+        # 정렬용 개수는 gates=True 신호만 센다(rsi_overbought는 상승장에도 떠서 제외).
+        cand['signal_count'] = sum(1 for k in DOWNSIDE_GATE_KEYS if cand.get(k))
+        cand['downside_watchlist'] = ticker in downside_watchlist_tickers
+        pos = real_positions.get(ticker)
+        cand['already_held'] = pos is not None
+        if pos:
+            price = cached_price(ticker)
+            cand['pnl_pct'] = (price - pos.avg_buy_price) / pos.avg_buy_price * 100 if price and pos.avg_buy_price else None
+        else:
+            cand['pnl_pct'] = None
+    downside_candidates.sort(key=lambda c: c['signal_count'], reverse=True)  # 동수는 기존 거래대금 순 유지(안정 정렬)
+
     engine_settings = get_trade_engine_settings(broker.broker_name, broker.mode)
     return {
         'engine_enabled': engine_settings['enabled'],
@@ -526,6 +550,7 @@ def get_live_dashboard_summary() -> dict:
         'all_candidates': all_candidates,
         'candidates': candidates,
         'extra_positions': extra_positions,
+        'downside_candidates': downside_candidates,
         'dca_max_count': strategy_cfg.TRADE_DCA_MAX_COUNT,
         'per_position_cap_krw': per_position_cap_krw,
     }
