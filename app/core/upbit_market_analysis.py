@@ -58,6 +58,13 @@ def calc_indicators(df: pd.DataFrame) -> dict:
         'above_cloud': False,
         'breakout_4h': False, 'breakout_vol_ratio': None, 'breakout_candle_rate': None,
         'momentum_confluence': False,
+        # ── 하락위험(Downside Watch) 신호 — 진입 3신호의 반대편. docs/auto-trade-downside-watch.md
+        'below_ma200': False,      # 종가가 200선 대비 -COIN_MA200_NEAR_PCT 아래(명확한 이탈)
+        'below_cloud': False,      # 종가가 일목균형표 구름 하단 아래
+        'ema_dead_cross': False,   # EMA5가 EMA20 하향 돌파(이번 캔들) 또는 EMA20<EMA60 역배열
+        'macd_neg': False,         # MACD 히스토그램 음수
+        'rsi_overbought': False,   # RSI > 70 (뱃지/필터 전용 — 단독으로 목록 등재는 안 함)
+        'rsi': None, 'macd_hist': None,
     }
     if n < 3:
         return result
@@ -70,6 +77,27 @@ def calc_indicators(df: pd.DataFrame) -> dict:
     idx_now = n - 2   # 마지막 확정 캔들
     close_now = closes.iloc[idx_now]
 
+    # ── EMA/RSI/MACD — 모멘텀 컨플루언스(진입)와 하락위험 신호(청산)가 공유. 200선 계산이
+    # 안 될 만큼 데이터가 짧아도(신규 상장 등) EMA60 워밍업만 되면 계산한다.
+    ema_short = ema_mid = ema_long = None
+    rsi_now = macd_hist_now = None
+    if idx_now >= EMA_LONG:
+        ema_short = _ema(closes, EMA_SHORT)
+        ema_mid = _ema(closes, EMA_MID)
+        ema_long = _ema(closes, EMA_LONG)
+        rsi_now = float(_rsi(closes, RSI_PERIOD).iloc[idx_now])
+        macd_hist_now = float(_macd_histogram(closes, MACD_FAST, MACD_SLOW, MACD_SIGNAL).iloc[idx_now])
+        result['rsi'] = round(rsi_now, 2)
+        result['macd_hist'] = round(macd_hist_now, 6)
+        result['macd_neg'] = bool(macd_hist_now < 0)
+        result['rsi_overbought'] = bool(rsi_now > RSI_OVERBOUGHT)
+        # 데드크로스: EMA5가 EMA20을 이번 캔들에 하향 돌파했거나, EMA20이 이미 EMA60 아래(역배열)
+        result['ema_dead_cross'] = bool(
+            (ema_short.iloc[idx_now] < ema_mid.iloc[idx_now]
+             and ema_short.iloc[idx_now - 1] >= ema_mid.iloc[idx_now - 1])
+            or ema_mid.iloc[idx_now] < ema_long.iloc[idx_now]
+        )
+
     # ── 200이동평균선 근접 여부
     if idx_now + 1 >= MA200_PERIOD:
         ma200 = closes.iloc[idx_now - MA200_PERIOD + 1: idx_now + 1].mean()
@@ -77,20 +105,18 @@ def calc_indicators(df: pd.DataFrame) -> dict:
         result['ma200'] = round(float(ma200), 6)
         result['ma200_dist_pct'] = round(float(dist_pct), 2)
         result['near_ma200'] = bool(abs(dist_pct) <= Config.COIN_MA200_NEAR_PCT)
+        result['below_ma200'] = bool(dist_pct < -Config.COIN_MA200_NEAR_PCT)
 
         # ── 모멘텀 컨플루언스: 200선 위 + EMA 5/20/60 골든크로스(이번 캔들에 막 교차) + RSI<70 +
         # MACD 히스토그램 양수. idx_now+1>=200이 이미 보장돼 있어 EMA60/RSI14/MACD(12,26,9) 워밍업은
         # 항상 충분하다(별도 데이터량 체크 불필요).
-        ema_short = _ema(closes, EMA_SHORT)
-        ema_mid = _ema(closes, EMA_MID)
-        ema_long = _ema(closes, EMA_LONG)
         golden_cross = bool(
             ema_short.iloc[idx_now] > ema_mid.iloc[idx_now]
             and ema_short.iloc[idx_now - 1] <= ema_mid.iloc[idx_now - 1]
             and ema_mid.iloc[idx_now] > ema_long.iloc[idx_now]
         )
-        rsi_ok = bool(_rsi(closes, RSI_PERIOD).iloc[idx_now] < RSI_OVERBOUGHT)
-        macd_ok = bool(_macd_histogram(closes, MACD_FAST, MACD_SLOW, MACD_SIGNAL).iloc[idx_now] > 0)
+        rsi_ok = bool(rsi_now < RSI_OVERBOUGHT)
+        macd_ok = bool(macd_hist_now > 0)
         result['momentum_confluence'] = bool(close_now > ma200) and golden_cross and rsi_ok and macd_ok
 
     # ── 일목균형표 구름 위 여부 (26봉 전에 계산된 선행스팬을 지금 캔들과 비교)
@@ -106,7 +132,9 @@ def calc_indicators(df: pd.DataFrame) -> dict:
         senkou_a = (tenkan + kijun) / 2
         senkou_b = donchian_mid(ICHIMOKU_SENKOU_B, cloud_idx)
         cloud_top = max(senkou_a, senkou_b)
+        cloud_bottom = min(senkou_a, senkou_b)
         result['above_cloud'] = bool(close_now > cloud_top)
+        result['below_cloud'] = bool(close_now < cloud_bottom)
 
     # ── 4시간봉 돌파 (거래량 급증 + 상승 + "처음") 여부
     lookback = Config.COIN_BREAKOUT_VOL_LOOKBACK

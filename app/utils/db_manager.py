@@ -600,6 +600,8 @@ def init_db():
     # watchlist: 실거래(live) 전용 1단계 필터 — "🎯 매매 대상 코인" 표에서 관심 등록한 종목만
     # "🔴 실거래" 표(2단계, approved로 실제 매수 승인)에 나타난다. approved와 별개 opt-in이라
     # watchlist 없이 approved만 켜는 건 UI상 불가능(이중 안전장치, app/core/auto_trader.py 참고).
+    # downside_watchlist: "⚠️ 하락위험 코인" 표의 관심 등록 — watchlist와 완전히 독립. Phase 1은
+    # 표시 전용이라 매매 로직엔 영향 없음(docs/auto-trade-downside-watch.md).
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS trade_candidate_approval (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -609,6 +611,7 @@ def init_db():
             approved INTEGER NOT NULL DEFAULT 0,
             condition_watch INTEGER NOT NULL DEFAULT 0,
             watchlist INTEGER NOT NULL DEFAULT 0,
+            downside_watchlist INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT,
             UNIQUE(broker, mode, ticker)
         )
@@ -824,6 +827,18 @@ def init_db():
         # calc_indicators() 참고.
         'ALTER TABLE coin_screening_daily ADD COLUMN momentum_confluence INTEGER',
         'ALTER TABLE stock_screening_daily ADD COLUMN momentum_confluence INTEGER',
+
+        # 하락위험 코인 관심목록(Downside Watch) — 진입 3신호의 반대편 신호를 같은 스냅샷에 저장.
+        # docs/auto-trade-downside-watch.md. 업비트만 우선(토스는 나중에 동일 패턴 이식).
+        'ALTER TABLE coin_screening_daily ADD COLUMN below_ma200 INTEGER',
+        'ALTER TABLE coin_screening_daily ADD COLUMN below_cloud INTEGER',
+        'ALTER TABLE coin_screening_daily ADD COLUMN ema_dead_cross INTEGER',
+        'ALTER TABLE coin_screening_daily ADD COLUMN macd_neg INTEGER',
+        'ALTER TABLE coin_screening_daily ADD COLUMN rsi_overbought INTEGER',
+        'ALTER TABLE coin_screening_daily ADD COLUMN rsi REAL',
+        'ALTER TABLE coin_screening_daily ADD COLUMN macd_hist REAL',
+        # "하락위험 관심 등록" 체크박스 — 기존 watchlist(매수 관심)와 완전히 독립된 컬럼.
+        'ALTER TABLE trade_candidate_approval ADD COLUMN downside_watchlist INTEGER NOT NULL DEFAULT 0',
     ]
     for sql in migrations:
         try:
@@ -3731,8 +3746,10 @@ def save_coin_screening(rows: list):
             INSERT INTO coin_screening_daily
                 (ticker, name, price, change_rate, trade_value,
                  ma200, ma200_dist_pct, near_ma200, above_cloud,
-                 breakout_4h, breakout_vol_ratio, breakout_candle_rate, momentum_confluence, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 breakout_4h, breakout_vol_ratio, breakout_candle_rate, momentum_confluence,
+                 below_ma200, below_cloud, ema_dead_cross, macd_neg, rsi_overbought, rsi, macd_hist,
+                 updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(ticker) DO UPDATE SET
                 name=excluded.name, price=excluded.price, change_rate=excluded.change_rate,
                 trade_value=excluded.trade_value,
@@ -3741,11 +3758,18 @@ def save_coin_screening(rows: list):
                 breakout_4h=excluded.breakout_4h, breakout_vol_ratio=excluded.breakout_vol_ratio,
                 breakout_candle_rate=excluded.breakout_candle_rate,
                 momentum_confluence=excluded.momentum_confluence,
+                below_ma200=excluded.below_ma200, below_cloud=excluded.below_cloud,
+                ema_dead_cross=excluded.ema_dead_cross, macd_neg=excluded.macd_neg,
+                rsi_overbought=excluded.rsi_overbought, rsi=excluded.rsi, macd_hist=excluded.macd_hist,
                 updated_at=excluded.updated_at
         ''', (r['ticker'], r.get('name'), r.get('price'), r.get('change_rate'), r.get('trade_value'),
               r.get('ma200'), r.get('ma200_dist_pct'), int(bool(r.get('near_ma200'))), int(bool(r.get('above_cloud'))),
               int(bool(r.get('breakout_4h'))), r.get('breakout_vol_ratio'), r.get('breakout_candle_rate'),
-              int(bool(r.get('momentum_confluence'))), timestamp))
+              int(bool(r.get('momentum_confluence'))),
+              int(bool(r.get('below_ma200'))), int(bool(r.get('below_cloud'))),
+              int(bool(r.get('ema_dead_cross'))), int(bool(r.get('macd_neg'))),
+              int(bool(r.get('rsi_overbought'))), r.get('rsi'), r.get('macd_hist'),
+              timestamp))
     conn.commit()
     conn.close()
 
@@ -3772,6 +3796,49 @@ def get_coin_screening_candidates() -> list:
         WHERE breakout_4h = 1 OR (near_ma200 = 1 AND above_cloud = 1) OR momentum_confluence = 1
         ORDER BY trade_value DESC
     ''')
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+DOWNSIDE_CANDIDATE_LIMIT = 120  # 하락장에선 macd_neg/below_cloud가 마켓 대부분에서 켜져 후보가
+                                # 200+개까지 나올 수 있다 — live-summary 응답/DOM이 비대해지지 않게
+                                # 거래대금 상위 N개로 자른다(실제로 볼 만한 유동성 있는 종목 위주).
+
+# 하락위험(Downside Watch) 신호 정의 — **유일한 소스**. 신호 추가/이름변경/라벨수정은 여기서만.
+# calc_indicators()(app/core/upbit_market_analysis.py)가 각 key를 계산해 coin_screening_daily에
+# 저장하고, 아래 세 소비처가 전부 이 목록을 참조한다:
+#   1) get_coin_downside_candidates()  — gates=True 신호의 OR 로 WHERE 절을 만든다
+#   2) auto_trader.get_live_dashboard_summary() — signals(뱃지)/signal_count(정렬) 계산
+#   3) templates/auto_trade.html — 신호 필터 체크박스 + 뱃지 라벨 (server.py가 컨텍스트로 전달)
+# gates=False(rsi_overbought)는 상승장에도 떠서 단독 등재/정렬 기준에선 빼고 뱃지·필터로만 쓴다.
+DOWNSIDE_SIGNALS = [
+    {'key': 'below_ma200',    'label': '200선이탈', 'gates': True},
+    {'key': 'below_cloud',    'label': '구름아래',   'gates': True},
+    {'key': 'ema_dead_cross', 'label': '데드크로스', 'gates': True},
+    {'key': 'macd_neg',       'label': 'MACD-',     'gates': True},
+    {'key': 'rsi_overbought', 'label': 'RSI과열',    'gates': False},
+]
+DOWNSIDE_SIGNAL_KEYS = tuple(s['key'] for s in DOWNSIDE_SIGNALS)
+DOWNSIDE_GATE_KEYS = tuple(s['key'] for s in DOWNSIDE_SIGNALS if s['gates'])
+
+
+def get_coin_downside_candidates() -> list:
+    """하락위험 코인 관심목록 후보 조회 — DOWNSIDE_SIGNALS의 gates=True 신호(200선 이탈 / 구름
+    아래 / 데드크로스 / MACD 음전) 중 하나라도 켜진 종목. rsi_overbought(gates=False)는 상승장
+    에서도 떠서 단독 등재 기준에서 제외(뱃지/프론트 필터 전용). 거래대금 상위
+    DOWNSIDE_CANDIDATE_LIMIT개로 제한. docs/auto-trade-downside-watch.md 참고."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    # DOWNSIDE_GATE_KEYS는 코드 상수(사용자 입력 아님)라 컬럼명 직접 삽입 안전.
+    where = ' OR '.join(f'{key} = 1' for key in DOWNSIDE_GATE_KEYS)
+    cursor.execute(f'''
+        SELECT * FROM coin_screening_daily
+        WHERE {where}
+        ORDER BY trade_value DESC
+        LIMIT ?
+    ''', (DOWNSIDE_CANDIDATE_LIMIT,))
     rows = cursor.fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -4295,6 +4362,35 @@ def set_candidate_watchlist(broker: str, mode: str, ticker: str, watchlisted: bo
         VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(broker, mode, ticker) DO UPDATE SET
             watchlist=excluded.watchlist, updated_at=excluded.updated_at
+    ''', (broker, mode, ticker, 1 if watchlisted else 0, timestamp))
+    conn.commit()
+    conn.close()
+
+
+def get_downside_watchlist_tickers(broker: str, mode: str) -> set:
+    """"하락위험 관심 등록" 체크박스가 켜진 티커 집합 조회 — 매수 관심(watchlist)과 독립.
+    docs/auto-trade-downside-watch.md 참고. (Phase 1은 표시 전용 — 매매 로직에 영향 없음.)"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        'SELECT ticker FROM trade_candidate_approval WHERE broker = ? AND mode = ? AND downside_watchlist = 1',
+        (broker, mode)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return {r[0] for r in rows}
+
+
+def set_candidate_downside_watchlist(broker: str, mode: str, ticker: str, watchlisted: bool) -> None:
+    """"하락위험 관심 등록" 체크박스 상태 저장(upsert) — watchlist/approved와 독립적인 컬럼."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('''
+        INSERT INTO trade_candidate_approval (broker, mode, ticker, downside_watchlist, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(broker, mode, ticker) DO UPDATE SET
+            downside_watchlist=excluded.downside_watchlist, updated_at=excluded.updated_at
     ''', (broker, mode, ticker, 1 if watchlisted else 0, timestamp))
     conn.commit()
     conn.close()

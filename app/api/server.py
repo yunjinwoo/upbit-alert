@@ -40,6 +40,8 @@ from app.utils.db_manager import (
     set_trade_engine_enabled,
     set_candidate_approval,
     set_candidate_watchlist,
+    set_candidate_downside_watchlist,
+    DOWNSIDE_SIGNALS,
     set_trade_strategy_settings,
     set_position_dca_enabled,
     set_candidate_condition_watch,
@@ -665,7 +667,7 @@ def fetch_coin_screening_status_api(task_id):
 @app.route('/auto-trade')
 def auto_trade_view():
     """업비트 자동매매(모의) 대시보드 — 읽기 전용. 매매 판단/실행은 별도 프로세스(python main.py trade)에서만 발생."""
-    return render_template('auto_trade.html', active_page='auto_trade')
+    return render_template('auto_trade.html', active_page='auto_trade', downside_signals=DOWNSIDE_SIGNALS)
 
 @app.route('/auto-trade/logs')
 def auto_trade_logs_view():
@@ -763,6 +765,22 @@ def set_live_candidate_watchlist_api():
         return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
     try:
         set_candidate_watchlist('upbit', 'live', ticker, watchlisted)
+        return jsonify({'status': 'success', 'ticker': ticker, 'watchlisted': watchlisted})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/auto-trade/live/downside/watchlist', methods=['POST'])
+def set_live_downside_watchlist_api():
+    """"⚠️ 하락위험 코인" 표의 "관심 등록" 체크박스 상태 저장(매수 관심 watchlist와 완전 별도).
+    Phase 1은 표시 전용 — 등록해도 봇의 매매 판단/주문에는 영향이 없다.
+    docs/auto-trade-downside-watch.md. body: {ticker: str, watchlisted: bool}"""
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get('ticker') or '').strip()
+    watchlisted = bool(body.get('watchlisted'))
+    if not ticker:
+        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
+    try:
+        set_candidate_downside_watchlist('upbit', 'live', ticker, watchlisted)
         return jsonify({'status': 'success', 'ticker': ticker, 'watchlisted': watchlisted})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
