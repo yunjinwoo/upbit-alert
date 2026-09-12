@@ -223,6 +223,22 @@
                     <input type="number" id="setPerPositionCap" class="form-control form-control-sm" style="width:150px" min="1" step="10000">
                 </div>
             </div>
+            <div class="settings-group">
+                <div class="settings-group-label">RSI 매도 (15분봉)</div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">
+                        <input type="checkbox" id="setRsiExitEnabled" style="margin-right:4px">사용
+                    </label>
+                </div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">RSI 기간</label>
+                    <input type="number" id="setRsiExitPeriod" class="form-control form-control-sm" style="width:90px" min="2" step="1">
+                </div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">과매수 기준(이상)</label>
+                    <input type="number" id="setRsiExitOverbought" class="form-control form-control-sm" style="width:100px" min="1" max="100" step="0.5">
+                </div>
+            </div>
             <div class="d-flex align-items-center gap-2 pb-1">
                 <button class="btn-search" onclick="saveStrategySettings()">저장</button>
                 <span id="settingsSavedMsg" class="text-muted" style="font-size:0.76rem"></span>
@@ -241,6 +257,9 @@
             <br>* <b>1종목당 투입원금 상한(가드레일)</b>: 한 종목에 묶인 원금(평단×수량)이 이 금액을 넘는지
             "🔴 실거래" 표의 <b>투입원금 / 상한</b> 게이지로 보여줍니다. <b>현재는 표시만 하고 자동으로 매수를
             막거나 매도하지는 않습니다</b>(1단계). 80% 이상이면 노랑, 초과하면 빨강으로 표시됩니다.
+            <br>* <b>RSI 매도(15분봉)</b>: 켜면 보유 종목의 15분봉 RSI가 "과매수 기준" 이상일 때
+            손익률·트레일링 손절과 무관하게 <b>즉시 매도</b>합니다(손절처럼 연속확인을 기다리지 않고
+            익절과 같은 우선순위로 즉시 체결). 기본은 꺼짐이고, RSI 기간은 보통 14를 씁니다.
         </div>
     </div>
 
@@ -846,7 +865,7 @@
         }
     }
 
-    const SETTINGS_INPUT_IDS = ['setMaxPosition', 'setMaxPositions', 'setStopLoss', 'setTakeProfit', 'setLoopInterval', 'setStopConfirm', 'setDcaTrigger', 'setDcaMaxCount', 'setPerPositionCap'];
+    const SETTINGS_INPUT_IDS = ['setMaxPosition', 'setMaxPositions', 'setStopLoss', 'setTakeProfit', 'setLoopInterval', 'setStopConfirm', 'setDcaTrigger', 'setDcaMaxCount', 'setPerPositionCap', 'setRsiExitEnabled', 'setRsiExitPeriod', 'setRsiExitOverbought'];
 
     function populateSettingsInputs(settings) {
         // 사용자가 입력창 하나를 타이핑 중인 동안엔 이번 새로고침으로 값을 덮어쓰지 않음
@@ -860,6 +879,9 @@
         document.getElementById('setDcaTrigger').value = settings.dca_trigger_pct ?? '';
         document.getElementById('setDcaMaxCount').value = settings.dca_max_count ?? '';
         document.getElementById('setPerPositionCap').value = settings.per_position_cap_krw ?? '';
+        document.getElementById('setRsiExitEnabled').checked = !!settings.rsi_exit_enabled;
+        document.getElementById('setRsiExitPeriod').value = settings.rsi_exit_period ?? '';
+        document.getElementById('setRsiExitOverbought').value = settings.rsi_exit_overbought ?? '';
     }
 
     async function saveStrategySettings() {
@@ -873,6 +895,9 @@
             dca_trigger_pct: Number(document.getElementById('setDcaTrigger').value),
             dca_max_count: Number(document.getElementById('setDcaMaxCount').value),
             per_position_cap_krw: Number(document.getElementById('setPerPositionCap').value),
+            rsi_exit_enabled: document.getElementById('setRsiExitEnabled').checked,
+            rsi_exit_period: Number(document.getElementById('setRsiExitPeriod').value),
+            rsi_exit_overbought: Number(document.getElementById('setRsiExitOverbought').value),
         };
         const msg = document.getElementById('settingsSavedMsg');
         msg.textContent = '저장 중...';

@@ -5,10 +5,14 @@
   - 진입: coin_screening_daily에서 걸러진 후보 중 미보유 종목을 고정 금액으로 매수
   - 청산(트레일링 손절 + 연속 확인 + 항상-먼저-물타기):
     1) 익절(평단 대비 +take_profit_pct)은 항상 우선 확인 — 무조건 즉시 매도
-    2) 트레일링 손절: 진입가가 아니라 "보유 중 최고가(peak_price)" 대비 하락률이 stop_loss_pct
+    2) RSI 과매수 매도(rsi_exit_enabled 켜져 있을 때만): 15분봉 RSI가 rsi_exit_overbought 이상이면
+       손익/트레일링과 무관하게 즉시 매도 — 손절처럼 연속 확인을 기다리지 않는다(익절과 동급 우선순위).
+       RSI 값 자체는 app/core/exit_conditions.py가 계산하고 auto_trader.py가 미리 조회해 rsi_map으로
+       넘긴다(evaluate_exits는 순수 함수로 유지하기 위해 여기서 직접 캔들을 조회하지 않음).
+    3) 트레일링 손절: 진입가가 아니라 "보유 중 최고가(peak_price)" 대비 하락률이 stop_loss_pct
        이상이면 손절 조건 성립. 이 조건이 stop_loss_confirm_cycles회 연속으로 유지돼야 실제로
        매도한다(1캔들 노이즈로 바로 잘리는 걸 완화) — 그 전까지는 HOLD로 "대기 중" 상태만 기록.
-    3) 연속 확인까지 끝났는데 그 포지션이 아직 물타기를 dca_max_count회 다 안 썼으면(종목별
+    4) 연속 확인까지 끝났는데 그 포지션이 아직 물타기를 dca_max_count회 다 안 썼으면(종목별
        체크박스와 무관하게 항상), 곧바로 손절하지 않고 평단 대비 -dca_trigger_pct(기본 -10%)까지
        한 번 더 기다린다. 거기 도달하면 매도 대신 "매매기준(포지션당 매수금액)"으로 추가매수
        (DCA_BUY)해서 평단을 낮추고, 트레일링 기준점(peak_price)과 연속 카운트를 리셋해 그 새
@@ -40,15 +44,20 @@ class TradeDecision:
     status: Optional[str] = None
 
 
-def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional[float]], cfg) -> List[TradeDecision]:
-    """보유 포지션마다 익절/트레일링 손절(연속 확인 포함)/물타기 여부를 판단한다.
+def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional[float]], cfg,
+                    rsi_map: dict = None) -> List[TradeDecision]:
+    """보유 포지션마다 익절/RSI 과매수 매도/트레일링 손절(연속 확인 포함)/물타기 여부를 판단한다.
 
     물타기는 종목별 dca_enabled 체크박스와 무관하게 항상 먼저 시도한다 — 손절 조건이 연속확인까지
     끝나도, dca_max_count회를 아직 안 썼으면 곧바로 팔지 않고 -dca_trigger_pct까지 한 번 더
     기다렸다가 물탄다. dca_max_count번을 다 쓴 뒤에야(또는 dca_max_count가 0이면 처음부터) 일반
     손절이 적용된다 — "무조건 한 번은 물타 본다"는 정책. dca_enabled 필드는 더 이상 이 판단에
-    쓰이지 않는다(대시보드 체크박스는 과거 이력 표시용으로만 남아있을 수 있음)."""
+    쓰이지 않는다(대시보드 체크박스는 과거 이력 표시용으로만 남아있을 수 있음).
+
+    rsi_map: {ticker: RSI값|None} — cfg.TRADE_RSI_EXIT_ENABLED가 켜져 있을 때 auto_trader.py가
+    미리 조회해 넘긴다(app/core/exit_conditions.py 참고). 꺼져 있거나 값이 없으면 이 판단은 건너뛴다."""
     decisions = []
+    rsi_map = rsi_map or {}
     for pos in positions:
         ticker = pos['ticker']
         qty = pos['qty']
@@ -75,7 +84,18 @@ def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional
             ))
             continue
 
-        # ② 트레일링 손절 조건(최고가 대비 하락률) 미충족 — 정상 보유, 연속 카운트 리셋
+        # ② RSI 과매수 매도 — 켜져 있고 값이 있으면 손익/트레일링과 무관하게 즉시 매도(연속확인 없음)
+        if getattr(cfg, 'TRADE_RSI_EXIT_ENABLED', False):
+            rsi_now = rsi_map.get(ticker)
+            rsi_overbought = getattr(cfg, 'TRADE_RSI_EXIT_OVERBOUGHT', None)
+            if rsi_now is not None and rsi_overbought is not None and rsi_now >= rsi_overbought:
+                decisions.append(TradeDecision(
+                    ticker, 'SELL', reason=f'rsi_exit(RSI {rsi_now:.1f}>={rsi_overbought:.1f})',
+                    price=price, qty=qty, pnl_krw=pnl_krw, pnl_pct=pnl_pct,
+                ))
+                continue
+
+        # ③ 트레일링 손절 조건(최고가 대비 하락률) 미충족 — 정상 보유, 연속 카운트 리셋
         if drawdown_from_peak_pct < cfg.TRADE_STOP_LOSS_PCT:
             decisions.append(TradeDecision(
                 ticker, 'HOLD', reason=f'pnl {pnl_pct:.2f}% (최고가대비 -{drawdown_from_peak_pct:.2f}%)',
@@ -84,7 +104,7 @@ def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional
             ))
             continue
 
-        # ③ 트레일링 손절 조건 충족 — 연속 확인 카운트 증가
+        # ④ 트레일링 손절 조건 충족 — 연속 확인 카운트 증가
         new_streak = streak + 1
         if new_streak < cfg.TRADE_STOP_LOSS_CONFIRM_CYCLES:
             decisions.append(TradeDecision(
@@ -94,7 +114,7 @@ def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional
             ))
             continue
 
-        # ④ 연속 확인까지 끝남 — 아직 dca_max_count에 안 닿았으면(체크박스와 무관) -dca_trigger_pct까지
+        # ⑤ 연속 확인까지 끝남 — 아직 dca_max_count에 안 닿았으면(체크박스와 무관) -dca_trigger_pct까지
         # 한 번 더 대기, 다 썼으면 손절
         if dca_count < dca_max_count:
             if pnl_pct <= -cfg.TRADE_DCA_TRIGGER_PCT:

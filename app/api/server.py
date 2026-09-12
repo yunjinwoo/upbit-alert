@@ -929,7 +929,8 @@ def set_trade_strategy_settings_api():
     사이클수/물타기 트리거 %) 저장. 실행 중인 `python main.py trade` 프로세스가 다음 사이클부터
     새 값을 적용하므로 재시작이 필요 없습니다. body는 아래 필드 중 바꿀 것만 보내면 됩니다(부분 갱신):
     {max_position_krw, max_concurrent_positions, stop_loss_pct, take_profit_pct, loop_interval_sec,
-     stop_loss_confirm_cycles, dca_trigger_pct, dca_max_count}"""
+     stop_loss_confirm_cycles, dca_trigger_pct, dca_max_count, rsi_exit_enabled, rsi_exit_period,
+     rsi_exit_overbought}"""
     body = request.get_json(silent=True) or {}
     try:
         kwargs = {}
@@ -983,6 +984,18 @@ def set_trade_strategy_settings_api():
             if v <= 0:
                 raise ValueError('1종목당 투입원금 상한은 0보다 커야 합니다.')
             kwargs['per_position_cap_krw'] = v
+        if 'rsi_exit_enabled' in body:
+            kwargs['rsi_exit_enabled'] = bool(body['rsi_exit_enabled'])
+        if 'rsi_exit_period' in body:
+            v = int(body['rsi_exit_period'])
+            if v <= 1:
+                raise ValueError('RSI 계산 기간은 2 이상이어야 합니다.')
+            kwargs['rsi_exit_period'] = v
+        if 'rsi_exit_overbought' in body:
+            v = float(body['rsi_exit_overbought'])
+            if not (0 < v <= 100):
+                raise ValueError('RSI 과매수 기준은 0보다 크고 100 이하여야 합니다.')
+            kwargs['rsi_exit_overbought'] = v
 
         settings = set_trade_strategy_settings(**kwargs)
         return jsonify({'status': 'success', 'settings': settings})

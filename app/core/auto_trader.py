@@ -12,6 +12,8 @@ import time
 from datetime import datetime
 from types import SimpleNamespace
 
+import pyupbit
+
 from app.config import Config
 from app.utils.logger import get_logger
 from app.utils.slack import send_slack_msg
@@ -20,6 +22,7 @@ from app.core.brokers.paper_broker import PaperBroker
 from app.core.brokers.upbit_live_broker import UpbitLiveBroker
 from app.core.brokers.upbit_account import get_real_krw_balance
 from app.core.trade_strategy import evaluate_entries, evaluate_exits, invested_gauge_fields
+from app.core.exit_conditions import compute_rsi
 from app.utils.db_manager import (
     get_or_create_paper_account,
     get_paper_positions,
@@ -53,6 +56,8 @@ logger = get_logger()
 JOB_NAME = "auto_trade_upbit_paper"
 JOB_NAME_LIVE = "auto_trade_upbit_live"
 
+RSI_EXIT_INTERVAL = 'minute15'  # RSI 매도조건은 15분봉 기준(사용자 요청) — 대시보드에서 바꿀 수 없는 고정값
+
 
 def _effective_strategy_config() -> SimpleNamespace:
     """DB에 저장된 매매 전략 파라미터(없으면 app/config.py의 TRADE_* 기본값)를
@@ -68,7 +73,32 @@ def _effective_strategy_config() -> SimpleNamespace:
         TRADE_STOP_LOSS_CONFIRM_CYCLES=s['stop_loss_confirm_cycles'],
         TRADE_DCA_TRIGGER_PCT=s['dca_trigger_pct'],
         TRADE_DCA_MAX_COUNT=s['dca_max_count'],
+        TRADE_RSI_EXIT_ENABLED=s['rsi_exit_enabled'],
+        TRADE_RSI_EXIT_PERIOD=s['rsi_exit_period'],
+        TRADE_RSI_EXIT_OVERBOUGHT=s['rsi_exit_overbought'],
     )
+
+
+def _build_rsi_map(tickers, cfg) -> dict:
+    """RSI 매도조건(cfg.TRADE_RSI_EXIT_ENABLED)이 켜져 있을 때만 보유 종목들의 15분봉 RSI를 조회해
+    {ticker: RSI값|None} 맵을 만든다. evaluate_exits()를 순수 함수로 유지하기 위해(직접 네트워크
+    접근 없음) 호출부(run_trade_cycle 등)에서 미리 만들어 넘긴다.
+
+    대상이 "지금 보유 중인 포지션"뿐이라(최대 동시보유 종목수로 제한됨) entry_condition_checker.py처럼
+    별도 루프로 뺄 필요 없이 매 사이클 직접 조회해도 API 호출량 부담이 크지 않다."""
+    if not cfg.TRADE_RSI_EXIT_ENABLED or not tickers:
+        return {}
+    period = int(cfg.TRADE_RSI_EXIT_PERIOD)
+    count = period * 5 + 5  # EWM 평활이 안정될 만큼 워밍업 여유를 둠
+    rsi_map = {}
+    for ticker in tickers:
+        try:
+            df = pyupbit.get_ohlcv(ticker, interval=RSI_EXIT_INTERVAL, count=count)
+            rsi_map[ticker] = compute_rsi(df, period)
+        except Exception as e:
+            logger.error(f"[{ticker}] RSI 매도조건 캔들 조회 실패: {e}")
+            rsi_map[ticker] = None
+    return rsi_map
 
 
 def _execute(decision, broker):
@@ -198,9 +228,10 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
         if is_live:
             _reconcile_live_positions(broker)  # 실제 잔고 → paper_positions(mode='live') 트래킹 행 동기화
 
-        # ① 청산 판단 (손절/익절) — 먼저 처리해 현금을 회수한 뒤 진입 판단에 반영
+        # ① 청산 판단 (손절/익절/RSI 과매수) — 먼저 처리해 현금을 회수한 뒤 진입 판단에 반영
         positions = get_paper_positions(broker.broker_name, broker.mode)
-        exit_decisions = evaluate_exits(positions, broker.get_current_price, strategy_cfg)
+        rsi_map = _build_rsi_map([p['ticker'] for p in positions], strategy_cfg)
+        exit_decisions = evaluate_exits(positions, broker.get_current_price, strategy_cfg, rsi_map=rsi_map)
         exit_results = [_execute(decision, broker) for decision in exit_decisions]
         sold_this_cycle = any(
             d.action == 'SELL' and r is not None and r.success
@@ -333,7 +364,8 @@ def get_dashboard_summary() -> dict:
     # 미리 보여주기 위해, 실행 로직과 완전히 같은 evaluate_exits()를 읽기 전용으로 한 번 더 돌린다
     # (순수 함수라 DB/주문에 영향 없음 — 실제 갱신은 run_trade_cycle()의 다음 실행에서만 일어남).
     strategy_cfg = _effective_strategy_config()
-    preview_by_ticker = {d.ticker: d for d in evaluate_exits(positions, cached_price, strategy_cfg)}
+    rsi_map = _build_rsi_map([p['ticker'] for p in positions], strategy_cfg)
+    preview_by_ticker = {d.ticker: d for d in evaluate_exits(positions, cached_price, strategy_cfg, rsi_map=rsi_map)}
     for pos in positions:
         preview = preview_by_ticker.get(pos['ticker'])
         pos['next_action'] = preview.action if preview else None
@@ -469,7 +501,8 @@ def get_live_dashboard_summary() -> dict:
         preview_positions.append({
             'ticker': ticker, 'qty': pos.qty, 'avg_buy_price': pos.avg_buy_price, **extra,
         })
-    preview_by_ticker = {d.ticker: d for d in evaluate_exits(preview_positions, cached_price, strategy_cfg)}
+    rsi_map = _build_rsi_map([p['ticker'] for p in preview_positions], strategy_cfg)
+    preview_by_ticker = {d.ticker: d for d in evaluate_exits(preview_positions, cached_price, strategy_cfg, rsi_map=rsi_map)}
 
     candidates = [c for c in all_candidates if c['ticker'] in watchlist_tickers]
     for cand in candidates:

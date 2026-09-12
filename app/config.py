@@ -107,3 +107,7 @@ class Config:
     TRADE_SLACK_ALERT = True               # 체결(매수/매도/물타기) 시 Slack 알림 발송 여부 — "[🔴 실거래]"/"[모의매매]"
                                             # 라벨로 구분해서 보냄(app/core/auto_trader.py의 _execute 참고). SLACK_TOKEN
                                             # 미설정 시 send_slack_msg가 조용히 스킵하므로 켜둬도 안전함.
+    TRADE_RSI_EXIT_ENABLED = False          # RSI 과매수 매도조건 on/off (기본 비활성화 — 켜기 전까진 동작 안 바뀜)
+    TRADE_RSI_EXIT_PERIOD = 14              # RSI 계산 기간
+    TRADE_RSI_EXIT_OVERBOUGHT = 80.0        # 이 값 이상이면 손익/트레일링과 무관하게 즉시 매도(15분봉 기준,
+                                            # app/core/exit_conditions.py)

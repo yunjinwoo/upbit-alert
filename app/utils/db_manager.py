@@ -572,6 +572,9 @@ def init_db():
     # stop_loss_confirm_cycles: 트레일링 손절 조건이 몇 사이클 연속으로 유지돼야 실제로 매도할지(기본 1=즉시,
     # 기존 동작과 동일). dca_trigger_pct: 물타기(추가매수) 체크된 포지션이 몇 % 하락(평단 대비)했을 때
     # 추가매수를 실행할지(기본 10%). dca_max_count: 포지션당 물타기 최대 허용 횟수(기본 2회, 무제한 방지).
+    # rsi_exit_*: RSI 과매수 매도조건(기본 비활성화) — 켜면 15분봉 RSI(rsi_exit_period)가
+    # rsi_exit_overbought 이상일 때 손익/트레일링과 무관하게 즉시 매도한다(app/core/exit_conditions.py,
+    # app/core/trade_strategy.py의 evaluate_exits() 참고).
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS trade_strategy_settings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -586,6 +589,9 @@ def init_db():
             dca_max_count INTEGER NOT NULL DEFAULT 2,
             condition_check_interval_sec INTEGER NOT NULL DEFAULT 60,
             per_position_cap_krw REAL NOT NULL DEFAULT 300000,
+            rsi_exit_enabled INTEGER NOT NULL DEFAULT 0,
+            rsi_exit_period INTEGER NOT NULL DEFAULT 14,
+            rsi_exit_overbought REAL NOT NULL DEFAULT 80.0,
             updated_at TEXT,
             UNIQUE(broker)
         )
@@ -712,6 +718,10 @@ def init_db():
         'ALTER TABLE trade_strategy_settings ADD COLUMN condition_check_interval_sec INTEGER NOT NULL DEFAULT 60',
         # 가드레일 1단계: 1종목당 총 투입원금 상한 — 지금은 대시보드 표시(게이지)에만 쓰이고 자동 차단은 안 함.
         'ALTER TABLE trade_strategy_settings ADD COLUMN per_position_cap_krw REAL NOT NULL DEFAULT 300000',
+        # RSI 과매수 매도조건(기본 비활성화) — 15분봉 RSI가 rsi_exit_overbought 이상이면 즉시 매도
+        'ALTER TABLE trade_strategy_settings ADD COLUMN rsi_exit_enabled INTEGER NOT NULL DEFAULT 0',
+        'ALTER TABLE trade_strategy_settings ADD COLUMN rsi_exit_period INTEGER NOT NULL DEFAULT 14',
+        'ALTER TABLE trade_strategy_settings ADD COLUMN rsi_exit_overbought REAL NOT NULL DEFAULT 80.0',
 
     ]
     for sql in migrations:
@@ -756,6 +766,9 @@ def init_db():
                 dca_max_count INTEGER NOT NULL DEFAULT 2,
                 condition_check_interval_sec INTEGER NOT NULL DEFAULT 60,
                 per_position_cap_krw REAL NOT NULL DEFAULT 300000,
+                rsi_exit_enabled INTEGER NOT NULL DEFAULT 0,
+                rsi_exit_period INTEGER NOT NULL DEFAULT 14,
+                rsi_exit_overbought REAL NOT NULL DEFAULT 80.0,
                 updated_at TEXT,
                 UNIQUE(broker)
             )''',
@@ -4213,6 +4226,9 @@ def get_trade_strategy_settings(broker: str = 'upbit') -> dict:
             'dca_max_count': Config.TRADE_DCA_MAX_COUNT,
             'condition_check_interval_sec': Config.TRADE_CONDITION_CHECK_INTERVAL_SEC,
             'per_position_cap_krw': Config.TRADE_PER_POSITION_CAP_KRW,
+            'rsi_exit_enabled': Config.TRADE_RSI_EXIT_ENABLED,
+            'rsi_exit_period': Config.TRADE_RSI_EXIT_PERIOD,
+            'rsi_exit_overbought': Config.TRADE_RSI_EXIT_OVERBOUGHT,
             'updated_at': None,
         }
     return {
@@ -4226,6 +4242,9 @@ def get_trade_strategy_settings(broker: str = 'upbit') -> dict:
         'dca_max_count': row['dca_max_count'],
         'condition_check_interval_sec': row['condition_check_interval_sec'],
         'per_position_cap_krw': row['per_position_cap_krw'] if 'per_position_cap_krw' in row.keys() else Config.TRADE_PER_POSITION_CAP_KRW,
+        'rsi_exit_enabled': bool(row['rsi_exit_enabled']) if 'rsi_exit_enabled' in row.keys() else Config.TRADE_RSI_EXIT_ENABLED,
+        'rsi_exit_period': row['rsi_exit_period'] if 'rsi_exit_period' in row.keys() else Config.TRADE_RSI_EXIT_PERIOD,
+        'rsi_exit_overbought': row['rsi_exit_overbought'] if 'rsi_exit_overbought' in row.keys() else Config.TRADE_RSI_EXIT_OVERBOUGHT,
         'updated_at': row['updated_at'],
     }
 
@@ -4235,6 +4254,8 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
                                  loop_interval_sec: int = None, stop_loss_confirm_cycles: int = None,
                                  dca_trigger_pct: float = None, dca_max_count: int = None,
                                  condition_check_interval_sec: int = None, per_position_cap_krw: float = None,
+                                 rsi_exit_enabled: bool = None, rsi_exit_period: int = None,
+                                 rsi_exit_overbought: float = None,
                                  broker: str = 'upbit') -> dict:
     """매매 전략 파라미터 저장(upsert, 브로커별 1행, 부분 갱신 — None인 필드는 기존값 유지). 저장된 값을 반환."""
     current = get_trade_strategy_settings(broker)
@@ -4249,6 +4270,9 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
         'dca_max_count': dca_max_count if dca_max_count is not None else current['dca_max_count'],
         'condition_check_interval_sec': condition_check_interval_sec if condition_check_interval_sec is not None else current['condition_check_interval_sec'],
         'per_position_cap_krw': per_position_cap_krw if per_position_cap_krw is not None else current['per_position_cap_krw'],
+        'rsi_exit_enabled': rsi_exit_enabled if rsi_exit_enabled is not None else current['rsi_exit_enabled'],
+        'rsi_exit_period': rsi_exit_period if rsi_exit_period is not None else current['rsi_exit_period'],
+        'rsi_exit_overbought': rsi_exit_overbought if rsi_exit_overbought is not None else current['rsi_exit_overbought'],
     }
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -4257,8 +4281,9 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
         INSERT INTO trade_strategy_settings
             (broker, max_position_krw, max_concurrent_positions, stop_loss_pct, take_profit_pct,
              loop_interval_sec, stop_loss_confirm_cycles, dca_trigger_pct, dca_max_count,
-             condition_check_interval_sec, per_position_cap_krw, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             condition_check_interval_sec, per_position_cap_krw,
+             rsi_exit_enabled, rsi_exit_period, rsi_exit_overbought, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(broker) DO UPDATE SET
             max_position_krw=excluded.max_position_krw,
             max_concurrent_positions=excluded.max_concurrent_positions,
@@ -4269,12 +4294,16 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
             dca_trigger_pct=excluded.dca_trigger_pct,
             dca_max_count=excluded.dca_max_count,
             condition_check_interval_sec=excluded.condition_check_interval_sec,
+            rsi_exit_enabled=excluded.rsi_exit_enabled,
+            rsi_exit_period=excluded.rsi_exit_period,
+            rsi_exit_overbought=excluded.rsi_exit_overbought,
             per_position_cap_krw=excluded.per_position_cap_krw,
             updated_at=excluded.updated_at
     ''', (broker, merged['max_position_krw'], merged['max_concurrent_positions'], merged['stop_loss_pct'],
           merged['take_profit_pct'], merged['loop_interval_sec'], merged['stop_loss_confirm_cycles'],
           merged['dca_trigger_pct'], merged['dca_max_count'], merged['condition_check_interval_sec'],
-          merged['per_position_cap_krw'], timestamp))
+          merged['per_position_cap_krw'], int(bool(merged['rsi_exit_enabled'])), merged['rsi_exit_period'],
+          merged['rsi_exit_overbought'], timestamp))
     conn.commit()
     conn.close()
     merged['updated_at'] = timestamp
