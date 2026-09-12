@@ -471,7 +471,7 @@
     async function loadTossLiveSummary() {
         const body = document.getElementById('liveCandidatesBody');
         try {
-            const res = await fetch('/api/toss-trade/live-summary');
+            const res = await fetch('api/toss-trade/live-summary');
             const json = await res.json();
             if (json.status !== 'success') throw new Error(json.message);
 
@@ -511,7 +511,7 @@
         const nextWatchlisted = checkbox.checked;
         checkbox.disabled = true;
         try {
-            const res = await fetch('/api/toss-trade/live/candidates/watchlist', {
+            const res = await fetch('api/toss-trade/live/candidates/watchlist', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ticker, watchlisted: nextWatchlisted }),
@@ -531,7 +531,7 @@
         const nextApproved = checkbox.checked;
         checkbox.disabled = true;
         try {
-            const res = await fetch('/api/toss-trade/live/candidates/approve', {
+            const res = await fetch('api/toss-trade/live/candidates/approve', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ticker, approved: nextApproved }),
@@ -551,7 +551,7 @@
         const nextEnabled = checkbox.checked;
         checkbox.disabled = true;
         try {
-            const res = await fetch('/api/toss-trade/live/positions/dca', {
+            const res = await fetch('api/toss-trade/live/positions/dca', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ticker, enabled: nextEnabled }),
@@ -576,7 +576,7 @@
         }
         engineToggle.disabled = true;
         try {
-            const res = await fetch('/api/toss-trade/live/toggle', {
+            const res = await fetch('api/toss-trade/live/toggle', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ enabled: nextEnabled }),
@@ -602,7 +602,7 @@
         btn.disabled = true;
         const msg = document.getElementById('liveRunNowMsg');
         try {
-            const res = await fetch('/api/toss-trade/live/force-buy', {
+            const res = await fetch('api/toss-trade/live/force-buy', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ticker }),
@@ -630,7 +630,7 @@
         const msg = document.getElementById('liveRunNowMsg');
         msg.textContent = '실행 중...';
         try {
-            const res = await fetch('/api/toss-trade/live/run-now', { method: 'POST' });
+            const res = await fetch('api/toss-trade/live/run-now', { method: 'POST' });
             const json = await res.json();
             if (json.status !== 'success') throw new Error(json.message);
             const skipNote = json.entry_skipped_due_to_sell
@@ -651,7 +651,7 @@
     // 공통 설정이라 실거래 루프도 그대로 참조한다, app/core/toss_auto_trader._effective_strategy_config 참고).
     async function loadSharedSettings() {
         try {
-            const res = await fetch('/api/toss-trade/summary');
+            const res = await fetch('api/toss-trade/summary');
             const json = await res.json();
             if (json.status !== 'success') throw new Error(json.message);
             populateSettingsInputs(json.settings || {});
@@ -693,7 +693,7 @@
         msg.textContent = '저장 중...';
         msg.className = 'text-muted';
         try {
-            const res = await fetch('/api/toss-trade/settings', {
+            const res = await fetch('api/toss-trade/settings', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
