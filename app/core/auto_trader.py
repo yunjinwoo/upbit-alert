@@ -383,7 +383,7 @@ def get_dashboard_summary() -> dict:
     for cand in candidates:
         ticker = cand['ticker']
         cand['already_held'] = ticker in held_tickers
-        cand['candidate_reason'] = 'breakout_4h' if cand.get('breakout_4h') else ('near_ma200+above_cloud' if cand.get('near_ma200') and cand.get('above_cloud') else 'momentum_confluence')
+        cand['candidate_reason'] = 'breakout_4h' if cand.get('breakout_4h') else ('breakout_1d' if cand.get('breakout_1d') else ('near_ma200+above_cloud' if cand.get('near_ma200') and cand.get('above_cloud') else 'momentum_confluence'))
         cand['approved'] = ticker in approved_tickers
         cand['condition_watch'] = ticker in condition_watch_tickers
         status = condition_status_map.get(ticker)
@@ -408,6 +408,9 @@ def get_dashboard_summary() -> dict:
         'breakout_vol_ratio_threshold': Config.UPBIT_THRESHOLDS['minutes240'],
         'breakout_vol_lookback': Config.COIN_BREAKOUT_VOL_LOOKBACK,
         'breakout_rate_threshold': Config.COIN_BREAKOUT_RATE_THRESHOLD,
+        'breakout_1d_vol_ratio_threshold': Config.UPBIT_THRESHOLDS['day'],
+        'breakout_1d_vol_lookback': Config.COIN_BREAKOUT_VOL_LOOKBACK_1D,
+        'breakout_1d_rate_threshold': Config.COIN_BREAKOUT_RATE_THRESHOLD_1D,
         'ma200_near_pct': Config.COIN_MA200_NEAR_PCT,
     }
 
@@ -463,7 +466,7 @@ def get_live_dashboard_summary() -> dict:
     for cand in all_candidates:
         ticker = cand['ticker']
         cand['watchlist'] = ticker in watchlist_tickers
-        cand['candidate_reason'] = 'breakout_4h' if cand.get('breakout_4h') else ('near_ma200+above_cloud' if cand.get('near_ma200') and cand.get('above_cloud') else 'momentum_confluence')
+        cand['candidate_reason'] = 'breakout_4h' if cand.get('breakout_4h') else ('breakout_1d' if cand.get('breakout_1d') else ('near_ma200+above_cloud' if cand.get('near_ma200') and cand.get('above_cloud') else 'momentum_confluence'))
         pos = real_positions.get(ticker)
         cand['already_held'] = pos is not None
         if pos:

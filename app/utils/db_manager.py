@@ -430,6 +430,9 @@ def init_db():
             breakout_4h INTEGER,
             breakout_vol_ratio REAL,
             breakout_candle_rate REAL,
+            breakout_1d INTEGER,
+            breakout_1d_vol_ratio REAL,
+            breakout_1d_candle_rate REAL,
             updated_at TEXT
         )
     ''')
@@ -722,6 +725,12 @@ def init_db():
         'ALTER TABLE trade_strategy_settings ADD COLUMN rsi_exit_enabled INTEGER NOT NULL DEFAULT 0',
         'ALTER TABLE trade_strategy_settings ADD COLUMN rsi_exit_period INTEGER NOT NULL DEFAULT 14',
         'ALTER TABLE trade_strategy_settings ADD COLUMN rsi_exit_overbought REAL NOT NULL DEFAULT 80.0',
+
+        # 돌파(breakout_4h)와 같은 로직의 일봉 버전 추가 — app/core/upbit_market_analysis.py 참고.
+        # 표시 전용이 아니라 get_coin_screening_candidates()의 진입 신호에도 OR로 포함된다.
+        'ALTER TABLE coin_screening_daily ADD COLUMN breakout_1d INTEGER',
+        'ALTER TABLE coin_screening_daily ADD COLUMN breakout_1d_vol_ratio REAL',
+        'ALTER TABLE coin_screening_daily ADD COLUMN breakout_1d_candle_rate REAL',
 
     ]
     for sql in migrations:
@@ -3759,10 +3768,11 @@ def save_coin_screening(rows: list):
             INSERT INTO coin_screening_daily
                 (ticker, name, price, change_rate, trade_value,
                  ma200, ma200_dist_pct, near_ma200, above_cloud,
-                 breakout_4h, breakout_vol_ratio, breakout_candle_rate, momentum_confluence,
+                 breakout_4h, breakout_vol_ratio, breakout_candle_rate,
+                 breakout_1d, breakout_1d_vol_ratio, breakout_1d_candle_rate, momentum_confluence,
                  below_ma200, below_cloud, ema_dead_cross, macd_neg, rsi_overbought, rsi, macd_hist,
                  updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(ticker) DO UPDATE SET
                 name=excluded.name, price=excluded.price, change_rate=excluded.change_rate,
                 trade_value=excluded.trade_value,
@@ -3770,6 +3780,8 @@ def save_coin_screening(rows: list):
                 near_ma200=excluded.near_ma200, above_cloud=excluded.above_cloud,
                 breakout_4h=excluded.breakout_4h, breakout_vol_ratio=excluded.breakout_vol_ratio,
                 breakout_candle_rate=excluded.breakout_candle_rate,
+                breakout_1d=excluded.breakout_1d, breakout_1d_vol_ratio=excluded.breakout_1d_vol_ratio,
+                breakout_1d_candle_rate=excluded.breakout_1d_candle_rate,
                 momentum_confluence=excluded.momentum_confluence,
                 below_ma200=excluded.below_ma200, below_cloud=excluded.below_cloud,
                 ema_dead_cross=excluded.ema_dead_cross, macd_neg=excluded.macd_neg,
@@ -3778,6 +3790,7 @@ def save_coin_screening(rows: list):
         ''', (r['ticker'], r.get('name'), r.get('price'), r.get('change_rate'), r.get('trade_value'),
               r.get('ma200'), r.get('ma200_dist_pct'), int(bool(r.get('near_ma200'))), int(bool(r.get('above_cloud'))),
               int(bool(r.get('breakout_4h'))), r.get('breakout_vol_ratio'), r.get('breakout_candle_rate'),
+              int(bool(r.get('breakout_1d'))), r.get('breakout_1d_vol_ratio'), r.get('breakout_1d_candle_rate'),
               int(bool(r.get('momentum_confluence'))),
               int(bool(r.get('below_ma200'))), int(bool(r.get('below_cloud'))),
               int(bool(r.get('ema_dead_cross'))), int(bool(r.get('macd_neg'))),
@@ -3799,14 +3812,14 @@ def get_coin_screening() -> list:
 
 
 def get_coin_screening_candidates() -> list:
-    """자동매매 진입 후보만 필터링 조회 (4시간봉 돌파, 200선 근접이면서 구름 위, 또는 200선 위+EMA
-    골든크로스+RSI+MACD 모멘텀 컨플루언스 중 하나)"""
+    """자동매매 진입 후보만 필터링 조회 (4시간봉 돌파, 일봉 돌파, 200선 근접이면서 구름 위, 또는
+    200선 위+EMA 골든크로스+RSI+MACD 모멘텀 컨플루언스 중 하나)"""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute('''
         SELECT * FROM coin_screening_daily
-        WHERE breakout_4h = 1 OR (near_ma200 = 1 AND above_cloud = 1) OR momentum_confluence = 1
+        WHERE breakout_4h = 1 OR breakout_1d = 1 OR (near_ma200 = 1 AND above_cloud = 1) OR momentum_confluence = 1
         ORDER BY trade_value DESC
     ''')
     rows = cursor.fetchall()
