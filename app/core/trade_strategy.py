@@ -183,7 +183,12 @@ def evaluate_entries(candidates: List[dict], positions: List[dict], cash_balance
             decisions.append(TradeDecision(ticker, 'SKIP', reason='시세 조회 실패'))
             continue
 
-        base_reason = 'breakout_4h' if cand.get('breakout_4h') else ('breakout_1d' if cand.get('breakout_1d') else 'near_ma200+above_cloud')
+        base_reason = (
+            'breakout_4h' if cand.get('breakout_4h')
+            else 'breakout_1d' if cand.get('breakout_1d')
+            else 'near_ma200+above_cloud_1d' if cand.get('near_ma200') and cand.get('above_cloud_1d') and not cand.get('above_cloud')
+            else 'near_ma200+above_cloud'
+        )
         reason = f'{base_reason}+정밀조건충족' if ticker in condition_watch_tickers else base_reason
         decisions.append(TradeDecision(
             ticker, 'BUY', reason=reason, price=price, amount_krw=cfg.TRADE_MAX_POSITION_KRW,

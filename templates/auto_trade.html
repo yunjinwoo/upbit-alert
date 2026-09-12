@@ -274,12 +274,13 @@
                 로딩 중...
             </div>
             <div class="mt-2 text-muted" style="font-size:0.72rem">
-                * 아래 "🎯 매매 대상 코인" 목록은 <code>coin_screening_daily</code>(4시간봉 + 돌파는 일봉도 병행,
-                <code>python main.py coin_analysis</code>가 30분 주기로 갱신)에서 이 조건 중
+                * 아래 "🎯 매매 대상 코인" 목록은 <code>coin_screening_daily</code>(4시간봉 + 돌파/구름위는
+                일봉도 병행, <code>python main.py coin_analysis</code>가 30분 주기로 갱신)에서 이 조건 중
                 <b>하나라도</b> 만족하는 종목만 뽑힙니다 — <b>①돌파(breakout_4h)</b> 또는
                 <b>②돌파(breakout_1d, 일봉)</b> 또는
-                <b>③200선 근접(near_ma200) AND 구름 위(above_cloud)</b>(둘 다 만족해야) 또는
-                <b>④모멘텀 컨플루언스(momentum_confluence)</b>.
+                <b>③200선 근접(near_ma200) AND 구름 위(above_cloud, 4시간봉)</b>(둘 다 만족해야) 또는
+                <b>④200선 근접(near_ma200) AND 구름 위(above_cloud_1d, 일봉)</b>(둘 다 만족해야) 또는
+                <b>⑤모멘텀 컨플루언스(momentum_confluence)</b>.
                 <br>* 이 임계값들은 <code>app/config.py</code> 고정값이라 대시보드에서 수정할 수 없습니다
                 (바꾸려면 코드 수정 후 <code>coin-analysis-bot</code> 재시작 필요).
             </div>
@@ -467,9 +468,11 @@
             <div>② <b>돌파(breakout_1d, 일봉)</b>: 같은 로직을 일봉 기준으로 계산 — 최근 ${t.breakout_1d_vol_lookback}개
                 일봉 평균 대비 <b>${t.breakout_1d_vol_ratio_threshold}배 이상</b> 급증 AND 캔들 상승률
                 <b>${t.breakout_1d_rate_threshold}% 이상</b> AND "처음" 돌파</div>
-            <div>③ <b>200선 근접(near_ma200) AND 구름 위(above_cloud)</b>: 종가가 200이동평균선과
-                <b>±${t.ma200_near_pct}% 이내</b>로 근접 <b>AND</b> 일목균형표 구름대 위</div>
-            <div>④ <b>모멘텀 컨플루언스(momentum_confluence)</b>: 200선 위 + EMA 5/20/60 골든크로스(이번 캔들에
+            <div>③ <b>200선 근접(near_ma200) AND 구름 위(above_cloud, 4시간봉)</b>: 종가가 200이동평균선과
+                <b>±${t.ma200_near_pct}% 이내</b>로 근접 <b>AND</b> 일목균형표(4시간봉) 구름대 위</div>
+            <div>④ <b>200선 근접(near_ma200) AND 구름 위(above_cloud_1d, 일봉)</b>: 같은 200선 근접 조건 +
+                일목균형표를 <b>일봉 기준</b>으로 계산한 구름대 위</div>
+            <div>⑤ <b>모멘텀 컨플루언스(momentum_confluence)</b>: 200선 위 + EMA 5/20/60 골든크로스(이번 캔들에
                 막 교차) + RSI&lt;70 + MACD 히스토그램 양수, 4가지가 같은 캔들에서 동시 충족</div>
         `;
     }

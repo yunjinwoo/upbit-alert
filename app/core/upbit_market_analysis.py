@@ -17,10 +17,11 @@ MA200_PERIOD = 200
 
 VOL_RATIO_THRESHOLD = Config.UPBIT_THRESHOLDS["minutes240"]  # 기존 거래량 급증 감시와 동일 임계값 재사용
 
-# 돌파(breakout_4h)와 같은 판정을 일봉으로도 병행 계산하기 위한 별도 타임프레임/임계값.
-# 200선·구름 등 다른 지표는 4시간봉만 유지하고(속도상 이유), 돌파만 일봉 버전을 추가한다.
+# 돌파(breakout_4h)/구름위(above_cloud)와 같은 판정을 일봉으로도 병행 계산하기 위한 별도
+# 타임프레임/임계값. 200선(MA200)은 4시간봉만 유지한다(200개 캔들 필요 — 속도상 이유로 제외).
 INTERVAL_1D = "day"
-CANDLE_COUNT_1D = 40            # 돌파 판정(lookback*2 여유)만 필요 — MA200 계산은 하지 않으므로 소량으로 충분
+CANDLE_COUNT_1D = 90             # 일목구름(KIJUN 26 + SENKOU_B 52 + 여유치) 계산에 충분한 개수.
+                                 # 돌파 판정(lookback*2)은 이보다 훨씬 적게 필요해 따로 늘릴 필요 없음.
 VOL_RATIO_THRESHOLD_1D = Config.UPBIT_THRESHOLDS["day"]  # 실시간 감시 일봉 임계값과 동일 소스 재사용
 
 # 세 번째 후보 조건("모멘텀 컨플루언스") — 200선 위 + EMA 5/20/60 골든크로스 + RSI<70 + MACD 히스토그램
@@ -85,6 +86,36 @@ def _calc_breakout(df: pd.DataFrame, vol_ratio_threshold: float, rate_threshold:
     return result
 
 
+def _calc_cloud(df: pd.DataFrame) -> dict:
+    """OHLCV DataFrame으로 일목균형표 구름 위/아래 여부를 계산한다 — 봉 종류(4시간봉/일봉) 무관하게
+    동작. 26봉(KIJUN) 전에 계산된 선행스팬을 지금 캔들과 비교하는 방식이라 KIJUN+SENKOU_B(78봉)
+    이상의 확정 캔들이 없으면 판정 불가로 보고 False를 반환한다."""
+    result = {'above_cloud': False, 'below_cloud': False}
+    idx_now = len(df) - 2
+    cloud_idx = idx_now - ICHIMOKU_KIJUN
+    if cloud_idx - ICHIMOKU_SENKOU_B + 1 < 0:
+        return result
+
+    highs = df['high']
+    lows = df['low']
+    close_now = df['close'].iloc[idx_now]
+
+    def donchian_mid(period, end_idx):
+        window_high = highs.iloc[end_idx - period + 1: end_idx + 1].max()
+        window_low = lows.iloc[end_idx - period + 1: end_idx + 1].min()
+        return (window_high + window_low) / 2
+
+    tenkan = donchian_mid(ICHIMOKU_TENKAN, cloud_idx)
+    kijun = donchian_mid(ICHIMOKU_KIJUN, cloud_idx)
+    senkou_a = (tenkan + kijun) / 2
+    senkou_b = donchian_mid(ICHIMOKU_SENKOU_B, cloud_idx)
+    cloud_top = max(senkou_a, senkou_b)
+    cloud_bottom = min(senkou_a, senkou_b)
+    result['above_cloud'] = bool(close_now > cloud_top)
+    result['below_cloud'] = bool(close_now < cloud_bottom)
+    return result
+
+
 def calc_indicators(df: pd.DataFrame) -> dict:
     """4시간봉 OHLCV DataFrame으로 돌파/구름/200선 근접 여부를 계산한다.
     df의 마지막 행(-1)은 아직 진행 중인 캔들이므로, 모든 계산은 마지막 확정 캔들(-2) 기준.
@@ -92,7 +123,7 @@ def calc_indicators(df: pd.DataFrame) -> dict:
     n = len(df)
     result = {
         'ma200': None, 'ma200_dist_pct': None, 'near_ma200': False,
-        'above_cloud': False,
+        'above_cloud': False, 'above_cloud_1d': False,
         'breakout_4h': False, 'breakout_vol_ratio': None, 'breakout_candle_rate': None,
         'breakout_1d': False, 'breakout_1d_vol_ratio': None, 'breakout_1d_candle_rate': None,
         'momentum_confluence': False,
@@ -108,8 +139,6 @@ def calc_indicators(df: pd.DataFrame) -> dict:
         return result
 
     closes = df['close']
-    highs = df['high']
-    lows = df['low']
 
     idx_now = n - 2   # 마지막 확정 캔들
     close_now = closes.iloc[idx_now]
@@ -157,21 +186,9 @@ def calc_indicators(df: pd.DataFrame) -> dict:
         result['momentum_confluence'] = bool(close_now > ma200) and golden_cross and rsi_ok and macd_ok
 
     # ── 일목균형표 구름 위 여부 (26봉 전에 계산된 선행스팬을 지금 캔들과 비교)
-    cloud_idx = idx_now - ICHIMOKU_KIJUN
-    if cloud_idx - ICHIMOKU_SENKOU_B + 1 >= 0:
-        def donchian_mid(period, end_idx):
-            window_high = highs.iloc[end_idx - period + 1: end_idx + 1].max()
-            window_low = lows.iloc[end_idx - period + 1: end_idx + 1].min()
-            return (window_high + window_low) / 2
-
-        tenkan = donchian_mid(ICHIMOKU_TENKAN, cloud_idx)
-        kijun = donchian_mid(ICHIMOKU_KIJUN, cloud_idx)
-        senkou_a = (tenkan + kijun) / 2
-        senkou_b = donchian_mid(ICHIMOKU_SENKOU_B, cloud_idx)
-        cloud_top = max(senkou_a, senkou_b)
-        cloud_bottom = min(senkou_a, senkou_b)
-        result['above_cloud'] = bool(close_now > cloud_top)
-        result['below_cloud'] = bool(close_now < cloud_bottom)
+    cloud = _calc_cloud(df)
+    result['above_cloud'] = cloud['above_cloud']
+    result['below_cloud'] = cloud['below_cloud']
 
     # ── 4시간봉 돌파 (거래량 급증 + 상승 + "처음") 여부
     breakout = _calc_breakout(df, VOL_RATIO_THRESHOLD, Config.COIN_BREAKOUT_RATE_THRESHOLD, Config.COIN_BREAKOUT_VOL_LOOKBACK)
@@ -183,9 +200,10 @@ def calc_indicators(df: pd.DataFrame) -> dict:
 
 
 def run_coin_screening(trigger_type: str = 'auto'):
-    """전체 KRW 마켓 코인의 4시간봉 데이터로 매매 후보 필터 지표를 계산해 DB에 저장한다(돌파만 일봉도 병행 계산).
-    실행 시각/결과는 job_run_log에도 남겨서 "언제 다시 수집됐는지" 이력을 동기화 관리 페이지에서 확인할 수 있게 한다."""
-    logger.info("코인 스크리닝 시작 (Upbit, 4시간봉 + 돌파 일봉)")
+    """전체 KRW 마켓 코인의 4시간봉 데이터로 매매 후보 필터 지표를 계산해 DB에 저장한다
+    (돌파/구름위는 일봉도 병행 계산). 실행 시각/결과는 job_run_log에도 남겨서 "언제 다시
+    수집됐는지" 이력을 동기화 관리 페이지에서 확인할 수 있게 한다."""
+    logger.info("코인 스크리닝 시작 (Upbit, 4시간봉 + 돌파/구름위 일봉)")
     start = datetime.now()
     error_message = None
     tickers = pyupbit.get_tickers(fiat="KRW")
@@ -199,8 +217,9 @@ def run_coin_screening(trigger_type: str = 'auto'):
 
             indicators = calc_indicators(df)
 
-            # 돌파(breakout_4h)와 같은 로직을 일봉으로도 병행 계산 — 4시간봉과 별개 API 호출이라
-            # 실패해도(신규 상장/데이터 부족 등) 전체 스크리닝은 계속 진행하고 breakout_1d만 False로 둔다.
+            # 돌파(breakout_4h)/구름위(above_cloud)와 같은 로직을 일봉으로도 병행 계산 — 4시간봉과
+            # 별개 API 호출이라 실패해도(신규 상장/데이터 부족 등) 전체 스크리닝은 계속 진행하고
+            # breakout_1d/above_cloud_1d만 False로 둔다.
             try:
                 df_1d = pyupbit.get_ohlcv(ticker, interval=INTERVAL_1D, count=CANDLE_COUNT_1D)
                 time.sleep(0.15)
@@ -212,8 +231,9 @@ def run_coin_screening(trigger_type: str = 'auto'):
                     indicators['breakout_1d'] = breakout_1d['breakout']
                     indicators['breakout_1d_vol_ratio'] = breakout_1d['vol_ratio']
                     indicators['breakout_1d_candle_rate'] = breakout_1d['candle_rate']
+                    indicators['above_cloud_1d'] = _calc_cloud(df_1d)['above_cloud']
             except Exception as e:
-                logger.error(f"[{ticker}] 일봉 돌파 지표 계산 실패: {e}")
+                logger.error(f"[{ticker}] 일봉 돌파/구름 지표 계산 실패: {e}")
 
             idx_now = len(df) - 2
             close_now = df['close'].iloc[idx_now]

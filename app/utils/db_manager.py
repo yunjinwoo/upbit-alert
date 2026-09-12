@@ -433,6 +433,7 @@ def init_db():
             breakout_1d INTEGER,
             breakout_1d_vol_ratio REAL,
             breakout_1d_candle_rate REAL,
+            above_cloud_1d INTEGER,
             updated_at TEXT
         )
     ''')
@@ -731,6 +732,10 @@ def init_db():
         'ALTER TABLE coin_screening_daily ADD COLUMN breakout_1d INTEGER',
         'ALTER TABLE coin_screening_daily ADD COLUMN breakout_1d_vol_ratio REAL',
         'ALTER TABLE coin_screening_daily ADD COLUMN breakout_1d_candle_rate REAL',
+
+        # 구름위(above_cloud)와 같은 로직의 일봉 버전 추가 — breakout_1d와 동일하게 진입 신호에도
+        # (near_ma200 AND above_cloud_1d) OR로 포함된다.
+        'ALTER TABLE coin_screening_daily ADD COLUMN above_cloud_1d INTEGER',
 
     ]
     for sql in migrations:
@@ -3769,10 +3774,10 @@ def save_coin_screening(rows: list):
                 (ticker, name, price, change_rate, trade_value,
                  ma200, ma200_dist_pct, near_ma200, above_cloud,
                  breakout_4h, breakout_vol_ratio, breakout_candle_rate,
-                 breakout_1d, breakout_1d_vol_ratio, breakout_1d_candle_rate, momentum_confluence,
+                 breakout_1d, breakout_1d_vol_ratio, breakout_1d_candle_rate, above_cloud_1d, momentum_confluence,
                  below_ma200, below_cloud, ema_dead_cross, macd_neg, rsi_overbought, rsi, macd_hist,
                  updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(ticker) DO UPDATE SET
                 name=excluded.name, price=excluded.price, change_rate=excluded.change_rate,
                 trade_value=excluded.trade_value,
@@ -3782,6 +3787,7 @@ def save_coin_screening(rows: list):
                 breakout_candle_rate=excluded.breakout_candle_rate,
                 breakout_1d=excluded.breakout_1d, breakout_1d_vol_ratio=excluded.breakout_1d_vol_ratio,
                 breakout_1d_candle_rate=excluded.breakout_1d_candle_rate,
+                above_cloud_1d=excluded.above_cloud_1d,
                 momentum_confluence=excluded.momentum_confluence,
                 below_ma200=excluded.below_ma200, below_cloud=excluded.below_cloud,
                 ema_dead_cross=excluded.ema_dead_cross, macd_neg=excluded.macd_neg,
@@ -3791,6 +3797,7 @@ def save_coin_screening(rows: list):
               r.get('ma200'), r.get('ma200_dist_pct'), int(bool(r.get('near_ma200'))), int(bool(r.get('above_cloud'))),
               int(bool(r.get('breakout_4h'))), r.get('breakout_vol_ratio'), r.get('breakout_candle_rate'),
               int(bool(r.get('breakout_1d'))), r.get('breakout_1d_vol_ratio'), r.get('breakout_1d_candle_rate'),
+              int(bool(r.get('above_cloud_1d'))),
               int(bool(r.get('momentum_confluence'))),
               int(bool(r.get('below_ma200'))), int(bool(r.get('below_cloud'))),
               int(bool(r.get('ema_dead_cross'))), int(bool(r.get('macd_neg'))),
@@ -3821,21 +3828,24 @@ ENTRY_SIGNALS = [
     {'key': 'breakout_4h', 'label': '돌파(4h)'},
     {'key': 'breakout_1d', 'label': '돌파(1d)'},
     {'key': 'near_ma200', 'label': '200선근접'},
-    {'key': 'above_cloud', 'label': '구름위'},
+    {'key': 'above_cloud', 'label': '구름위(4h)'},
+    {'key': 'above_cloud_1d', 'label': '구름위(1d)'},
     {'key': 'momentum_confluence', 'label': '모멘텀컨플루언스'},
 ]
 ENTRY_SIGNAL_KEYS = tuple(s['key'] for s in ENTRY_SIGNALS)
 
 
 def get_coin_screening_candidates() -> list:
-    """자동매매 진입 후보만 필터링 조회 (4시간봉 돌파, 일봉 돌파, 200선 근접이면서 구름 위, 또는
-    200선 위+EMA 골든크로스+RSI+MACD 모멘텀 컨플루언스 중 하나)"""
+    """자동매매 진입 후보만 필터링 조회 (4시간봉 돌파, 일봉 돌파, 200선 근접이면서 구름 위(4시간봉
+    또는 일봉), 또는 200선 위+EMA 골든크로스+RSI+MACD 모멘텀 컨플루언스 중 하나)"""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute('''
         SELECT * FROM coin_screening_daily
-        WHERE breakout_4h = 1 OR breakout_1d = 1 OR (near_ma200 = 1 AND above_cloud = 1) OR momentum_confluence = 1
+        WHERE breakout_4h = 1 OR breakout_1d = 1
+           OR (near_ma200 = 1 AND above_cloud = 1) OR (near_ma200 = 1 AND above_cloud_1d = 1)
+           OR momentum_confluence = 1
         ORDER BY trade_value DESC
     ''')
     rows = cursor.fetchall()
