@@ -29,6 +29,12 @@ class Config:
     COIN_BREAKOUT_RATE_THRESHOLD = 2.0  # 돌파로 인정할 캔들 자체 등락률(%) 기준
     COIN_MA200_NEAR_PCT = 3.0           # 200이평선 "근접"으로 볼 오차 범위(%)
 
+    # 코인 스크리닝 — 돌파(breakout_4h)와 같은 로직을 일봉으로도 병행 계산(breakout_1d).
+    # 거래량 배수 임계값은 실시간 감시 일봉 임계값(UPBIT_THRESHOLDS["day"])을 재사용하고,
+    # lookback/등락률만 4시간봉과 독립적으로 튜닝할 수 있게 별도 값을 둔다.
+    COIN_BREAKOUT_VOL_LOOKBACK_1D = 20     # 거래량 평균 계산에 사용할 일봉 개수
+    COIN_BREAKOUT_RATE_THRESHOLD_1D = 2.0  # 돌파(일봉)로 인정할 캔들 자체 등락률(%) 기준
+
     # KIS (Korean Investment & Securities) Settings
     KIS_APP_KEY = os.getenv("KIS_APP_KEY")
     KIS_APP_SECRET = os.getenv("KIS_APP_SECRET")

@@ -17,6 +17,12 @@ MA200_PERIOD = 200
 
 VOL_RATIO_THRESHOLD = Config.UPBIT_THRESHOLDS["minutes240"]  # 기존 거래량 급증 감시와 동일 임계값 재사용
 
+# 돌파(breakout_4h)와 같은 판정을 일봉으로도 병행 계산하기 위한 별도 타임프레임/임계값.
+# 200선·구름 등 다른 지표는 4시간봉만 유지하고(속도상 이유), 돌파만 일봉 버전을 추가한다.
+INTERVAL_1D = "day"
+CANDLE_COUNT_1D = 40            # 돌파 판정(lookback*2 여유)만 필요 — MA200 계산은 하지 않으므로 소량으로 충분
+VOL_RATIO_THRESHOLD_1D = Config.UPBIT_THRESHOLDS["day"]  # 실시간 감시 일봉 임계값과 동일 소스 재사용
+
 # 세 번째 후보 조건("모멘텀 컨플루언스") — 200선 위 + EMA 5/20/60 골든크로스 + RSI<70 + MACD 히스토그램
 # 양수, 4가지가 전부 같은 캔들에서 맞아야 통과. 4시간봉 기준으로 계산(기존 200선/구름 계산과 동일 캔들
 # 재사용 — 네트워크 호출을 추가로 늘리지 않기 위함). 유튜브 등에서 흔히 보는 "3중 EMA 골든크로스 +
@@ -48,6 +54,37 @@ def _macd_histogram(series: pd.Series, fast: int, slow: int, signal: int) -> pd.
     return macd_line - signal_line
 
 
+def _calc_breakout(df: pd.DataFrame, vol_ratio_threshold: float, rate_threshold: float, lookback: int) -> dict:
+    """OHLCV DataFrame으로 "거래량 급증 + 상승 + 처음" 돌파 여부를 계산한다 — 봉 종류(4시간봉/일봉)
+    무관하게 동작. df의 마지막 행(-1)은 진행 중인 캔들이므로 계산은 마지막 확정 캔들(-2) 기준.
+    lookback*2개 이상의 확정 캔들이 없으면 판정 불가로 보고 False/None을 반환한다."""
+    result = {'breakout': False, 'vol_ratio': None, 'candle_rate': None}
+    idx_now = len(df) - 2
+    if idx_now - 1 - lookback < 0:
+        return result
+
+    volumes = df['volume']
+    closes = df['close']
+
+    avg_vol_now = volumes.iloc[idx_now - lookback: idx_now].mean()
+    avg_vol_prev = volumes.iloc[idx_now - 1 - lookback: idx_now - 1].mean()
+    vol_ratio_now = volumes.iloc[idx_now] / avg_vol_now if avg_vol_now else 0
+    vol_ratio_prev = volumes.iloc[idx_now - 1] / avg_vol_prev if avg_vol_prev else 0
+
+    candle_open = df['open'].iloc[idx_now]
+    close_now = closes.iloc[idx_now]
+    candle_rate = (close_now - candle_open) / candle_open * 100 if candle_open else 0
+
+    result['vol_ratio'] = round(float(vol_ratio_now), 2)
+    result['candle_rate'] = round(float(candle_rate), 2)
+    result['breakout'] = bool(
+        vol_ratio_now >= vol_ratio_threshold
+        and candle_rate >= rate_threshold
+        and vol_ratio_prev < vol_ratio_threshold
+    )
+    return result
+
+
 def calc_indicators(df: pd.DataFrame) -> dict:
     """4시간봉 OHLCV DataFrame으로 돌파/구름/200선 근접 여부를 계산한다.
     df의 마지막 행(-1)은 아직 진행 중인 캔들이므로, 모든 계산은 마지막 확정 캔들(-2) 기준.
@@ -57,6 +94,7 @@ def calc_indicators(df: pd.DataFrame) -> dict:
         'ma200': None, 'ma200_dist_pct': None, 'near_ma200': False,
         'above_cloud': False,
         'breakout_4h': False, 'breakout_vol_ratio': None, 'breakout_candle_rate': None,
+        'breakout_1d': False, 'breakout_1d_vol_ratio': None, 'breakout_1d_candle_rate': None,
         'momentum_confluence': False,
         # ── 하락위험(Downside Watch) 신호 — 진입 3신호의 반대편. docs/auto-trade-downside-watch.md
         'below_ma200': False,      # 종가가 200선 대비 -COIN_MA200_NEAR_PCT 아래(명확한 이탈)
@@ -72,7 +110,6 @@ def calc_indicators(df: pd.DataFrame) -> dict:
     closes = df['close']
     highs = df['high']
     lows = df['low']
-    volumes = df['volume']
 
     idx_now = n - 2   # 마지막 확정 캔들
     close_now = closes.iloc[idx_now]
@@ -137,31 +174,18 @@ def calc_indicators(df: pd.DataFrame) -> dict:
         result['below_cloud'] = bool(close_now < cloud_bottom)
 
     # ── 4시간봉 돌파 (거래량 급증 + 상승 + "처음") 여부
-    lookback = Config.COIN_BREAKOUT_VOL_LOOKBACK
-    if idx_now - 1 - lookback >= 0:
-        avg_vol_now = volumes.iloc[idx_now - lookback: idx_now].mean()
-        avg_vol_prev = volumes.iloc[idx_now - 1 - lookback: idx_now - 1].mean()
-        vol_ratio_now = volumes.iloc[idx_now] / avg_vol_now if avg_vol_now else 0
-        vol_ratio_prev = volumes.iloc[idx_now - 1] / avg_vol_prev if avg_vol_prev else 0
-
-        candle_open = df['open'].iloc[idx_now]
-        candle_rate = (close_now - candle_open) / candle_open * 100 if candle_open else 0
-
-        result['breakout_vol_ratio'] = round(float(vol_ratio_now), 2)
-        result['breakout_candle_rate'] = round(float(candle_rate), 2)
-        result['breakout_4h'] = bool(
-            vol_ratio_now >= VOL_RATIO_THRESHOLD
-            and candle_rate >= Config.COIN_BREAKOUT_RATE_THRESHOLD
-            and vol_ratio_prev < VOL_RATIO_THRESHOLD
-        )
+    breakout = _calc_breakout(df, VOL_RATIO_THRESHOLD, Config.COIN_BREAKOUT_RATE_THRESHOLD, Config.COIN_BREAKOUT_VOL_LOOKBACK)
+    result['breakout_4h'] = breakout['breakout']
+    result['breakout_vol_ratio'] = breakout['vol_ratio']
+    result['breakout_candle_rate'] = breakout['candle_rate']
 
     return result
 
 
 def run_coin_screening(trigger_type: str = 'auto'):
-    """전체 KRW 마켓 코인의 4시간봉 데이터로 매매 후보 필터 지표를 계산해 DB에 저장한다.
+    """전체 KRW 마켓 코인의 4시간봉 데이터로 매매 후보 필터 지표를 계산해 DB에 저장한다(돌파만 일봉도 병행 계산).
     실행 시각/결과는 job_run_log에도 남겨서 "언제 다시 수집됐는지" 이력을 동기화 관리 페이지에서 확인할 수 있게 한다."""
-    logger.info("코인 스크리닝 시작 (Upbit, 4시간봉)")
+    logger.info("코인 스크리닝 시작 (Upbit, 4시간봉 + 돌파 일봉)")
     start = datetime.now()
     error_message = None
     tickers = pyupbit.get_tickers(fiat="KRW")
@@ -174,6 +198,22 @@ def run_coin_screening(trigger_type: str = 'auto'):
                 continue
 
             indicators = calc_indicators(df)
+
+            # 돌파(breakout_4h)와 같은 로직을 일봉으로도 병행 계산 — 4시간봉과 별개 API 호출이라
+            # 실패해도(신규 상장/데이터 부족 등) 전체 스크리닝은 계속 진행하고 breakout_1d만 False로 둔다.
+            try:
+                df_1d = pyupbit.get_ohlcv(ticker, interval=INTERVAL_1D, count=CANDLE_COUNT_1D)
+                time.sleep(0.15)
+                if df_1d is not None and len(df_1d) >= 8:
+                    breakout_1d = _calc_breakout(
+                        df_1d, VOL_RATIO_THRESHOLD_1D, Config.COIN_BREAKOUT_RATE_THRESHOLD_1D,
+                        Config.COIN_BREAKOUT_VOL_LOOKBACK_1D,
+                    )
+                    indicators['breakout_1d'] = breakout_1d['breakout']
+                    indicators['breakout_1d_vol_ratio'] = breakout_1d['vol_ratio']
+                    indicators['breakout_1d_candle_rate'] = breakout_1d['candle_rate']
+            except Exception as e:
+                logger.error(f"[{ticker}] 일봉 돌파 지표 계산 실패: {e}")
 
             idx_now = len(df) - 2
             close_now = df['close'].iloc[idx_now]

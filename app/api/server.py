@@ -643,7 +643,8 @@ _coin_screening_fetch_status = {}  # task_id → {status, message}
 @app.route('/api/coin-screening/fetch', methods=['POST'])
 def fetch_coin_screening_api():
     """코인 스크리닝 데이터 수집을 백그라운드로 시작합니다 (즉시 202 반환).
-    전 종목 조회에 1~2분 걸려 동기 응답 시 nginx 프록시 타임아웃(504)에 걸리므로 비동기로 처리."""
+    전 종목 조회(티커당 4시간봉/일봉 2회 호출)에 2~4분 걸려 동기 응답 시 nginx 프록시
+    타임아웃(504)에 걸리므로 비동기로 처리."""
     import uuid
     task_id = str(uuid.uuid4())[:8]
     _coin_screening_fetch_status[task_id] = {"status": "running", "message": "코인 스크리닝 수집 중..."}
