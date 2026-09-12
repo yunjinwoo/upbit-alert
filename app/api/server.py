@@ -42,6 +42,7 @@ from app.utils.db_manager import (
     set_candidate_watchlist,
     set_candidate_downside_watchlist,
     DOWNSIDE_SIGNALS,
+    ENTRY_SIGNALS,
     set_trade_strategy_settings,
     set_position_dca_enabled,
     set_candidate_condition_watch,
@@ -668,7 +669,10 @@ def fetch_coin_screening_status_api(task_id):
 @app.route('/auto-trade')
 def auto_trade_view():
     """업비트 자동매매(모의) 대시보드 — 읽기 전용. 매매 판단/실행은 별도 프로세스(python main.py trade)에서만 발생."""
-    return render_template('auto_trade.html', active_page='auto_trade', downside_signals=DOWNSIDE_SIGNALS)
+    return render_template(
+        'auto_trade.html', active_page='auto_trade',
+        downside_signals=DOWNSIDE_SIGNALS, entry_signals=ENTRY_SIGNALS,
+    )
 
 @app.route('/auto-trade/logs')
 def auto_trade_logs_view():

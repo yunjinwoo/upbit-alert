@@ -78,6 +78,7 @@
         .signal-badge { font-size: 0.68rem; font-weight: 700; padding: 2px 7px; border-radius: 10px; white-space: nowrap; display: inline-block; margin: 1px; }
         .signal-badge-warn { background: #fee2e2; color: #b91c1c; }
         .signal-badge-mild { background: #fef3c7; color: #92400e; }
+        .signal-badge-good { background: #dcfce7; color: #15803d; }
         .empty-val { color: #cbd5e1; }
         .invest-gauge { display: inline-block; width: 96px; height: 8px; border-radius: 5px; background: #eef2f7; overflow: hidden; vertical-align: middle; }
         .invest-gauge > span { display: block; height: 100%; border-radius: 5px; }
@@ -289,6 +290,12 @@
         <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
             <div class="section-title mb-0">🎯 매매 대상 코인 (관심 등록 — 1단계)</div>
             <span id="candidatesUpdatedAt" class="text-muted" style="font-size:0.74rem"></span>
+        </div>
+        <div class="mt-2 mb-1" style="font-size:0.78rem; display:flex; flex-wrap:wrap; gap:0.1rem 0.9rem; align-items:center">
+            <span class="text-muted">신호 필터(선택한 것 모두 가진 종목만):</span>
+            {% for s in entry_signals %}
+            <label style="cursor:pointer"><input type="checkbox" class="entry-filter" value="{{ s.key }}" onchange="renderAllCandidates()"> {{ s.label }}</label>
+            {% endfor %}
         </div>
         <div class="table-wrap">
             <table class="trade-table">
@@ -574,6 +581,14 @@
         }
     }
 
+    // ── 매매 대상 코인(진입 후보) 신호 필터 — 신호 key/라벨의 유일한 소스는 db_manager.ENTRY_SIGNALS,
+    // server.py가 컨텍스트로 넘겨준다. 하락위험 목록의 신호 필터와 동일한 UX(선택한 신호를 모두
+    // 가진 종목만 표시).
+    const ENTRY_SIGNAL_LABELS = {
+        {% for s in entry_signals %}{{ s.key | tojson }}: {{ s.label | tojson }},
+        {% endfor %}
+    };
+
     // ── 하락위험 코인 관심목록 (docs/auto-trade-downside-watch.md) — 표시 전용.
     // 신호 key/라벨의 유일한 소스는 db_manager.DOWNSIDE_SIGNALS — server.py가 컨텍스트로 넘겨준다.
     const DOWNSIDE_SIGNAL_LABELS = {
@@ -651,14 +666,23 @@
         }
     }
 
+    let _allCandidates = [];  // 마지막 응답 캐시 — 신호 필터 체크박스는 재조회 없이 이걸로 다시 그린다
+
     function renderAllCandidates(candidates) {
+        if (Array.isArray(candidates)) _allCandidates = candidates;
         const body = document.getElementById('allCandidatesBody');
-        if (candidates.length) {
-            const latest = candidates.reduce((a, b) => (a.updated_at > b.updated_at ? a : b));
-            document.getElementById('candidatesUpdatedAt').textContent = `${candidates.length}개 후보 · 최근 스크리닝: ${latest.updated_at}`;
-            body.innerHTML = candidates.map(c => {
+        const activeFilters = [...document.querySelectorAll('.entry-filter:checked')].map(el => el.value);
+        const rows = _allCandidates.filter(c => activeFilters.every(f => (c.signals || []).includes(f)));
+
+        if (rows.length) {
+            const latest = rows.reduce((a, b) => (a.updated_at > b.updated_at ? a : b));
+            document.getElementById('candidatesUpdatedAt').textContent = `${rows.length}/${_allCandidates.length}개 후보 · 최근 스크리닝: ${latest.updated_at}`;
+            body.innerHTML = rows.map(c => {
                 const changeCls = c.change_rate > 0 ? 'pnl-pos' : (c.change_rate < 0 ? 'pnl-neg' : '');
                 const changeSign = c.change_rate > 0 ? '+' : '';
+                const badges = (c.signals || []).map(s =>
+                    `<span class="signal-badge signal-badge-good">${ENTRY_SIGNAL_LABELS[s] || s}</span>`
+                ).join(' ') || c.candidate_reason;
                 return `
                     <tr>
                         <td style="text-align:center">
@@ -671,14 +695,18 @@
                         <td>${fmtKrw(c.price)}</td>
                         <td class="${changeCls}">${changeSign}${c.change_rate}%</td>
                         <td>${fmtEok(c.trade_value)}</td>
-                        <td>${c.candidate_reason}</td>
+                        <td>${badges}</td>
                         <td style="text-align:center">${heldPnlBadge(c)}</td>
                         <td>${c.updated_at || '—'}</td>
                     </tr>`;
             }).join('');
         } else {
-            document.getElementById('candidatesUpdatedAt').textContent = '';
-            body.innerHTML = '<tr class="loading-row"><td colspan="8">현재 조건을 만족하는 후보가 없습니다. (coin_screening_daily가 비어있다면 `python main.py coin_analysis`를 먼저 실행하세요)</td></tr>';
+            document.getElementById('candidatesUpdatedAt').textContent = _allCandidates.length ? `0/${_allCandidates.length}개` : '';
+            body.innerHTML = `<tr class="loading-row"><td colspan="8">${
+                _allCandidates.length
+                    ? '선택한 신호를 모두 가진 종목이 없습니다.'
+                    : '현재 조건을 만족하는 후보가 없습니다. (coin_screening_daily가 비어있다면 `python main.py coin_analysis`를 먼저 실행하세요)'
+            }</td></tr>`;
         }
     }
 

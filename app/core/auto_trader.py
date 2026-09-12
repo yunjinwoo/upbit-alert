@@ -35,6 +35,7 @@ from app.utils.db_manager import (
     get_downside_watchlist_tickers,
     DOWNSIDE_SIGNAL_KEYS,
     DOWNSIDE_GATE_KEYS,
+    ENTRY_SIGNAL_KEYS,
     save_trade_order_log,
     save_job_run_log,
     get_trade_engine_settings,
@@ -467,6 +468,10 @@ def get_live_dashboard_summary() -> dict:
         ticker = cand['ticker']
         cand['watchlist'] = ticker in watchlist_tickers
         cand['candidate_reason'] = 'breakout_4h' if cand.get('breakout_4h') else ('breakout_1d' if cand.get('breakout_1d') else ('near_ma200+above_cloud' if cand.get('near_ma200') and cand.get('above_cloud') else 'momentum_confluence'))
+        # 하락위험 목록과 동일한 방식의 신호 필터 체크박스용 — near_ma200/above_cloud는 "둘 다"라
+        # ma200_cloud로 합성한 뒤 ENTRY_SIGNAL_KEYS 중 켜진 것만 signals에 담는다.
+        cand['ma200_cloud'] = bool(cand.get('near_ma200')) and bool(cand.get('above_cloud'))
+        cand['signals'] = [k for k in ENTRY_SIGNAL_KEYS if cand.get(k)]
         pos = real_positions.get(ticker)
         cand['already_held'] = pos is not None
         if pos:
