@@ -60,6 +60,21 @@ JOB_NAME_LIVE = "auto_trade_upbit_live"
 RSI_EXIT_INTERVAL = 'minute15'  # RSI 매도조건은 15분봉 기준(사용자 요청) — 대시보드에서 바꿀 수 없는 고정값
 
 
+def _candidate_reason(cand: dict) -> str:
+    """진입 후보(cand)가 get_coin_screening_candidates()의 어떤 조건으로 뽑혔는지 사람이 읽을 문자열로
+    돌려준다 — 대시보드 "근거" 컬럼과 매매 판단 로그(trade_strategy.py)가 공유하는 우선순위.
+    한 후보가 여러 조건을 동시에 만족해도 대표 사유 하나만 고른다(우선순위: 돌파 > 200선+구름 조합 > 모멘텀)."""
+    if cand.get('breakout_4h'):
+        return 'breakout_4h'
+    if cand.get('breakout_1d'):
+        return 'breakout_1d'
+    if cand.get('near_ma200') and cand.get('above_cloud'):
+        return 'near_ma200+above_cloud'
+    if cand.get('near_ma200') and cand.get('above_cloud_1d'):
+        return 'near_ma200+above_cloud_1d'
+    return 'momentum_confluence'
+
+
 def _effective_strategy_config() -> SimpleNamespace:
     """DB에 저장된 매매 전략 파라미터(없으면 app/config.py의 TRADE_* 기본값)를
     trade_strategy.py가 기대하는 속성 이름(TRADE_STOP_LOSS_PCT 등)으로 감싼 네임스페이스를 만든다.
@@ -384,7 +399,7 @@ def get_dashboard_summary() -> dict:
     for cand in candidates:
         ticker = cand['ticker']
         cand['already_held'] = ticker in held_tickers
-        cand['candidate_reason'] = 'breakout_4h' if cand.get('breakout_4h') else ('breakout_1d' if cand.get('breakout_1d') else ('near_ma200+above_cloud' if cand.get('near_ma200') and cand.get('above_cloud') else 'momentum_confluence'))
+        cand['candidate_reason'] = _candidate_reason(cand)
         cand['approved'] = ticker in approved_tickers
         cand['condition_watch'] = ticker in condition_watch_tickers
         status = condition_status_map.get(ticker)
@@ -467,7 +482,7 @@ def get_live_dashboard_summary() -> dict:
     for cand in all_candidates:
         ticker = cand['ticker']
         cand['watchlist'] = ticker in watchlist_tickers
-        cand['candidate_reason'] = 'breakout_4h' if cand.get('breakout_4h') else ('breakout_1d' if cand.get('breakout_1d') else ('near_ma200+above_cloud' if cand.get('near_ma200') and cand.get('above_cloud') else 'momentum_confluence'))
+        cand['candidate_reason'] = _candidate_reason(cand)
         # 하락위험 목록과 동일한 방식의 신호 필터 체크박스용 — near_ma200/above_cloud는 실제 진입
         # 조건에서는 "둘 다" 필요하지만, 필터/뱃지 표시는 각각 따로 켜고 끌 수 있게 별개 신호로 노출한다.
         cand['signals'] = [k for k in ENTRY_SIGNAL_KEYS if cand.get(k)]
