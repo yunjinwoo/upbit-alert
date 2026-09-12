@@ -98,6 +98,9 @@
             <label class="filter-chip">
                 <input type="checkbox" id="fMa200" onchange="renderTable()"> 📍 200선 근접
             </label>
+            <label class="filter-chip">
+                <input type="checkbox" id="fRsiBreakout" onchange="renderTable()"> 🔥 RSI 과열(최근10봉)
+            </label>
             <span class="filter-count" id="filterCount"></span>
         </div>
 
@@ -114,11 +117,12 @@
                         <th data-key="above_cloud_1d" style="text-align:center">구름위(1d)</th>
                         <th data-key="breakout_4h" style="text-align:center">돌파</th>
                         <th data-key="breakout_1d" style="text-align:center">돌파(1d)</th>
+                        <th data-key="rsi_recent_breakout" style="text-align:center">RSI과열</th>
                         <th style="text-align:center">차트</th>
                     </tr>
                 </thead>
                 <tbody id="screenBody">
-                    <tr class="loading-row"><td colspan="10">로딩 중...</td></tr>
+                    <tr class="loading-row"><td colspan="11">로딩 중...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -126,6 +130,7 @@
             * 200선근접은 4시간봉 기준(마지막 확정 캔들). 돌파 = 최근 20개 4시간봉 평균 대비 거래량 3배↑ + 캔들 등락률 2%↑이면서 직전 캔들은 아직 그렇지 않았던 "처음" 케이스.
             &nbsp;|&nbsp; 돌파(1d) = 같은 로직을 일봉 기준으로 계산한 버전(임계값은 app/config.py 별도 설정).
             &nbsp;|&nbsp; 200선근접 = 200이평선(4시간봉) 대비 ±3% 이내. &nbsp;|&nbsp; 구름위(4h)/구름위(1d) = 일목균형표 구름대 상단 돌파 여부를 각각 4시간봉/일봉 기준으로 계산.
+            &nbsp;|&nbsp; RSI과열 = 최근 10개 4시간봉 중 RSI(14)가 70을 넘은 적이 있으면 표시(표시/필터 전용 — 자동매매 진입 조건에는 포함되지 않음).
             &nbsp;|&nbsp; 데이터가 비어 있으면 "지금 수집" 버튼으로 최초 수집을 실행하세요 (전 종목 조회라 다소 시간이 걸립니다).
         </div>
     </div>
@@ -180,6 +185,7 @@
         const cloudCnt = _rows.filter(r => r.above_cloud).length;
         const cloud1dCnt = _rows.filter(r => r.above_cloud_1d).length;
         const ma200Cnt = _rows.filter(r => r.near_ma200).length;
+        const rsiBreakoutCnt = _rows.filter(r => r.rsi_recent_breakout).length;
 
         box.innerHTML = `
             <div class="summary-tiles">
@@ -211,13 +217,17 @@
                     <div class="summary-num">${ma200Cnt}개</div>
                     <div class="summary-label">📍 200선 근접</div>
                 </div>
+                <div class="summary-tile">
+                    <div class="summary-num">${rsiBreakoutCnt}개</div>
+                    <div class="summary-label">🔥 RSI 과열(최근10봉)</div>
+                </div>
             </div>
         `;
     }
 
     async function load() {
         const body = document.getElementById('screenBody');
-        body.innerHTML = '<tr class="loading-row"><td colspan="10">로딩 중...</td></tr>';
+        body.innerHTML = '<tr class="loading-row"><td colspan="11">로딩 중...</td></tr>';
         try {
             const res = await fetch('api/coin-screening');
             const json = await res.json();
@@ -232,7 +242,7 @@
             renderMarketSummary();
             renderTable();
         } catch (e) {
-            body.innerHTML = `<tr class="loading-row"><td colspan="10" class="text-danger">오류: ${e.message}</td></tr>`;
+            body.innerHTML = `<tr class="loading-row"><td colspan="11" class="text-danger">오류: ${e.message}</td></tr>`;
         }
     }
 
@@ -278,7 +288,7 @@
     function renderTable() {
         const body = document.getElementById('screenBody');
         if (!_rows.length) {
-            body.innerHTML = '<tr class="loading-row"><td colspan="10">데이터가 없습니다. "지금 수집" 버튼을 눌러주세요.</td></tr>';
+            body.innerHTML = '<tr class="loading-row"><td colspan="11">데이터가 없습니다. "지금 수집" 버튼을 눌러주세요.</td></tr>';
             document.getElementById('filterCount').textContent = '';
             return;
         }
@@ -288,13 +298,15 @@
         const fCloud = document.getElementById('fCloud').checked;
         const fCloud1d = document.getElementById('fCloud1d').checked;
         const fMa200 = document.getElementById('fMa200').checked;
+        const fRsiBreakout = document.getElementById('fRsiBreakout').checked;
 
         let filtered = _rows.filter(r =>
             (!fBreakout || r.breakout_4h) &&
             (!fBreakout1d || r.breakout_1d) &&
             (!fCloud || r.above_cloud) &&
             (!fCloud1d || r.above_cloud_1d) &&
-            (!fMa200 || r.near_ma200)
+            (!fMa200 || r.near_ma200) &&
+            (!fRsiBreakout || r.rsi_recent_breakout)
         );
 
         document.getElementById('filterCount').textContent = `${filtered.length} / ${_rows.length}개 종목`;
@@ -308,7 +320,7 @@
         });
 
         if (!sorted.length) {
-            body.innerHTML = '<tr class="loading-row"><td colspan="10">조건에 맞는 종목이 없습니다.</td></tr>';
+            body.innerHTML = '<tr class="loading-row"><td colspan="11">조건에 맞는 종목이 없습니다.</td></tr>';
             return;
         }
 
@@ -332,6 +344,7 @@
                     <td style="text-align:center">${badge(r.above_cloud_1d, '구름위')}</td>
                     <td style="text-align:center">${badge(r.breakout_4h, `x${r.breakout_vol_ratio}`)}</td>
                     <td style="text-align:center">${badge(r.breakout_1d, `x${r.breakout_1d_vol_ratio}`)}</td>
+                    <td style="text-align:center">${badge(r.rsi_recent_breakout, `${r.rsi_recent_breakout_max}`)}</td>
                     <td style="text-align:center"><a class="chart-link" href="${upbitUrl}" target="_blank" rel="noopener">📈 업비트</a></td>
                 </tr>
             `;

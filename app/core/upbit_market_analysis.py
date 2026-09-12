@@ -134,6 +134,9 @@ def calc_indicators(df: pd.DataFrame) -> dict:
         'macd_neg': False,         # MACD 히스토그램 음수
         'rsi_overbought': False,   # RSI > 70 (뱃지/필터 전용 — 단독으로 목록 등재는 안 함)
         'rsi': None, 'macd_hist': None,
+        # ── 최근 N개 4시간봉 중 RSI가 임계값을 넘은 적 있는지 — 모멘텀 과열 스크리닝 필터 전용
+        # (coin_screening.html에서만 사용, 자동매매 진입 조건에는 포함하지 않음)
+        'rsi_recent_breakout': False, 'rsi_recent_breakout_max': None,
     }
     if n < 3:
         return result
@@ -151,10 +154,19 @@ def calc_indicators(df: pd.DataFrame) -> dict:
         ema_short = _ema(closes, EMA_SHORT)
         ema_mid = _ema(closes, EMA_MID)
         ema_long = _ema(closes, EMA_LONG)
-        rsi_now = float(_rsi(closes, RSI_PERIOD).iloc[idx_now])
+        rsi_series = _rsi(closes, RSI_PERIOD)
+        rsi_now = float(rsi_series.iloc[idx_now])
         macd_hist_now = float(_macd_histogram(closes, MACD_FAST, MACD_SLOW, MACD_SIGNAL).iloc[idx_now])
         result['rsi'] = round(rsi_now, 2)
         result['macd_hist'] = round(macd_hist_now, 6)
+
+        # ── 최근 COIN_RSI_BREAKOUT_LOOKBACK개 확정 캔들 중 RSI가 COIN_RSI_BREAKOUT_THRESHOLD를
+        # 넘은 적이 있는지(지금은 식었어도 최근에 과열됐던 종목을 잡아내는 용도)
+        lookback = Config.COIN_RSI_BREAKOUT_LOOKBACK
+        window_start = max(0, idx_now - lookback + 1)
+        recent_rsi = rsi_series.iloc[window_start: idx_now + 1]
+        result['rsi_recent_breakout'] = bool((recent_rsi >= Config.COIN_RSI_BREAKOUT_THRESHOLD).any())
+        result['rsi_recent_breakout_max'] = round(float(recent_rsi.max()), 2)
         result['macd_neg'] = bool(macd_hist_now < 0)
         result['rsi_overbought'] = bool(rsi_now > RSI_OVERBOUGHT)
         # 데드크로스: EMA5가 EMA20을 이번 캔들에 하향 돌파했거나, EMA20이 이미 EMA60 아래(역배열)

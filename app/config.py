@@ -29,6 +29,11 @@ class Config:
     COIN_BREAKOUT_RATE_THRESHOLD = 2.0  # 돌파로 인정할 캔들 자체 등락률(%) 기준
     COIN_MA200_NEAR_PCT = 3.0           # 200이평선 "근접"으로 볼 오차 범위(%)
 
+    # 코인 스크리닝 — 최근 N개 4시간봉 중 RSI가 임계값을 넘은 적 있는지(모멘텀 과열 감지, 표시/필터
+    # 전용 — 자동매매 진입 조건에는 포함하지 않음. coin_screening.html 필터로만 사용)
+    COIN_RSI_BREAKOUT_THRESHOLD = 70.0  # 이 값을 넘으면 "돌파"로 인정
+    COIN_RSI_BREAKOUT_LOOKBACK = 10     # 판정에 볼 4시간봉 개수(최근 확정 캔들 기준)
+
     # 코인 스크리닝 — 돌파(breakout_4h)와 같은 로직을 일봉으로도 병행 계산(breakout_1d).
     # 거래량 배수 임계값은 실시간 감시 일봉 임계값(UPBIT_THRESHOLDS["day"])을 재사용하고,
     # lookback/등락률만 4시간봉과 독립적으로 튜닝할 수 있게 별도 값을 둔다.
