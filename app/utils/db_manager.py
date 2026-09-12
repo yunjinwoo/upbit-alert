@@ -3811,6 +3811,22 @@ def get_coin_screening() -> list:
     return [dict(r) for r in rows]
 
 
+# 진입 신호 정의 — DOWNSIDE_SIGNALS(하락위험 신호)와 대칭되는, 매매 대상(진입 후보) 쪽의 유일한 소스.
+# near_ma200/above_cloud는 실제 진입 조건(get_coin_screening_candidates())에서는 "둘 다 만족"해야
+# 후보가 되지만, 화면 필터/뱃지에서는 따로 켜고 끌 수 있게 별개 신호로 노출한다(체크박스를 여러 개
+# 켜면 켠 것 전부를 가진 종목만 보이는 AND 필터라, 둘 다 켜면 기존과 동일한 결과가 된다).
+# auto_trader.get_live_dashboard_summary()가 각 후보에 signals를 채우고, templates/auto_trade.html이
+# 신호 필터 체크박스 + 뱃지 라벨로 그대로 사용한다(하락위험 목록과 동일 UX).
+ENTRY_SIGNALS = [
+    {'key': 'breakout_4h', 'label': '돌파(4h)'},
+    {'key': 'breakout_1d', 'label': '돌파(1d)'},
+    {'key': 'near_ma200', 'label': '200선근접'},
+    {'key': 'above_cloud', 'label': '구름위'},
+    {'key': 'momentum_confluence', 'label': '모멘텀컨플루언스'},
+]
+ENTRY_SIGNAL_KEYS = tuple(s['key'] for s in ENTRY_SIGNALS)
+
+
 def get_coin_screening_candidates() -> list:
     """자동매매 진입 후보만 필터링 조회 (4시간봉 돌파, 일봉 돌파, 200선 근접이면서 구름 위, 또는
     200선 위+EMA 골든크로스+RSI+MACD 모멘텀 컨플루언스 중 하나)"""
