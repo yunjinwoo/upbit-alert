@@ -160,7 +160,7 @@
         if (decision) params.set('decision', decision);
 
         try {
-            const res = await fetch(`api/toss-trade/logs?${params.toString()}`);
+            const res = await fetch(`{{ url_for('get_toss_trade_logs_api') }}?${params.toString()}`);
             const json = await res.json();
             if (json.status !== 'success') throw new Error(json.message);
 
