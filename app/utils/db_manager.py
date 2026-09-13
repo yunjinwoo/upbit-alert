@@ -737,6 +737,11 @@ def init_db():
         # (near_ma200 AND above_cloud_1d) OR로 포함된다.
         'ALTER TABLE coin_screening_daily ADD COLUMN above_cloud_1d INTEGER',
 
+        # 최근 N개 4시간봉 중 RSI가 임계값을 넘은 적 있는지(모멘텀 과열 스크리닝) — 표시/필터
+        # 전용이라 get_coin_screening_candidates()의 진입 신호에는 포함하지 않는다.
+        'ALTER TABLE coin_screening_daily ADD COLUMN rsi_recent_breakout INTEGER',
+        'ALTER TABLE coin_screening_daily ADD COLUMN rsi_recent_breakout_max REAL',
+
     ]
     for sql in migrations:
         try:
@@ -3776,8 +3781,9 @@ def save_coin_screening(rows: list):
                  breakout_4h, breakout_vol_ratio, breakout_candle_rate,
                  breakout_1d, breakout_1d_vol_ratio, breakout_1d_candle_rate, above_cloud_1d, momentum_confluence,
                  below_ma200, below_cloud, ema_dead_cross, macd_neg, rsi_overbought, rsi, macd_hist,
+                 rsi_recent_breakout, rsi_recent_breakout_max,
                  updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(ticker) DO UPDATE SET
                 name=excluded.name, price=excluded.price, change_rate=excluded.change_rate,
                 trade_value=excluded.trade_value,
@@ -3792,6 +3798,8 @@ def save_coin_screening(rows: list):
                 below_ma200=excluded.below_ma200, below_cloud=excluded.below_cloud,
                 ema_dead_cross=excluded.ema_dead_cross, macd_neg=excluded.macd_neg,
                 rsi_overbought=excluded.rsi_overbought, rsi=excluded.rsi, macd_hist=excluded.macd_hist,
+                rsi_recent_breakout=excluded.rsi_recent_breakout,
+                rsi_recent_breakout_max=excluded.rsi_recent_breakout_max,
                 updated_at=excluded.updated_at
         ''', (r['ticker'], r.get('name'), r.get('price'), r.get('change_rate'), r.get('trade_value'),
               r.get('ma200'), r.get('ma200_dist_pct'), int(bool(r.get('near_ma200'))), int(bool(r.get('above_cloud'))),
@@ -3802,6 +3810,7 @@ def save_coin_screening(rows: list):
               int(bool(r.get('below_ma200'))), int(bool(r.get('below_cloud'))),
               int(bool(r.get('ema_dead_cross'))), int(bool(r.get('macd_neg'))),
               int(bool(r.get('rsi_overbought'))), r.get('rsi'), r.get('macd_hist'),
+              int(bool(r.get('rsi_recent_breakout'))), r.get('rsi_recent_breakout_max'),
               timestamp))
     conn.commit()
     conn.close()
