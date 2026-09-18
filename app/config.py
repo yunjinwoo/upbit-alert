@@ -122,3 +122,15 @@ class Config:
     TRADE_RSI_EXIT_PERIOD = 14              # RSI 계산 기간
     TRADE_RSI_EXIT_OVERBOUGHT = 80.0        # 이 값 이상이면 손익/트레일링과 무관하게 즉시 매도(15분봉 기준,
                                             # app/core/exit_conditions.py)
+
+    # 매매 성과 화면(/auto-trade/performance)의 수수료 추정용 요율. trade_order_log의 pnl_krw는
+    # 체결가 단순 차액이라 수수료·세금이 빠져 있고, 원본에 실제 부과액이 없어서 이 요율로 추정치만
+    # 계산한다(화면에 요율을 같이 표시해 추정임을 밝힘). 매매 판단에는 전혀 쓰이지 않는 표시 전용 값이라
+    # 실제 계좌 조건과 다르면 이 숫자만 고치면 된다.
+    # 업비트 원화마켓: 매수/매도 각 0.05%.
+    TRADE_FEE_RATE_UPBIT_BUY = 0.0005
+    TRADE_FEE_RATE_UPBIT_SELL = 0.0005
+    # 국내주식(토스증권): 매수는 위탁수수료만, 매도는 위탁수수료 + 증권거래세(농특세 포함)까지.
+    # 세율은 제도 변경이 잦으니 계좌 조건에 맞춰 확인하고 조정할 것.
+    TRADE_FEE_RATE_TOSS_BUY = 0.00015
+    TRADE_FEE_RATE_TOSS_SELL = 0.00015 + 0.0018

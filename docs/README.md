@@ -16,6 +16,7 @@
 | [auto-trade-toss-paper.md](auto-trade-toss-paper.md) | 🧪 검증 완료 / 실거래 전환 안 함 | 2단계 — 토스증권(국내주식) 모의매매 엔진 |
 | [auto-trade-recovery-dca.md](auto-trade-recovery-dca.md) | 📝 설계 초안 (Q3·Q4 결정 대기) | 회복형 분할 물타기 — 깊은 하락에서 소액 분할매수 → 소폭 반등 익절 반복 + 하드캡 |
 | [auto-trade-downside-watch.md](auto-trade-downside-watch.md) | 🔨 Phase 1 구현 완료 (미커밋) · Phase 2 미정 | 하락위험 코인 관심목록 — 매수 파이프라인의 거울상, 표시 전용 |
+| [auto-trade-performance.md](auto-trade-performance.md) | ✅ 구현 완료 | 매매 성과 화면 — 매수→매도를 한 사이클로 묶어 승률·누적 손익·진입 신호별 기여도 조회 (읽기 전용) |
 
 관련 게이지 기능(종목당 투입원금 상한 표시)은 `auto-trade-recovery-dca.md`의 1단계로 이미 머지됨(PR #59).
 

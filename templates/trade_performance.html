@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ page_title }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f4f7f6; font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; }
+        .main-navbar { background-color: #1a1a2e; }
+        .main-navbar .navbar-brand { color: #fff; font-weight: bold; }
+        .main-navbar .nav-link { color: rgba(255,255,255,0.75) !important; font-size: 0.82rem; }
+        .main-navbar .nav-link:hover,
+        .main-navbar .nav-link.active { color: #fff !important; }
+        .main-navbar .nav-link.active { border-bottom: 2px solid #4da6ff; }
+
+        .dashboard-container { margin-top: 24px; margin-bottom: 60px; }
+        .card-panel { background: white; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); padding: 16px 18px; }
+        .panel-title { font-size: 0.92rem; font-weight: 700; color: #1a1a2e; margin-bottom: 10px; }
+
+        .btn-search {
+            background: #1a1a2e; color: #fff; border: none; border-radius: 8px;
+            padding: 5px 16px; font-size: 0.83rem; cursor: pointer; font-weight: 600;
+        }
+        .btn-search:hover { background: #2d2d4e; color: #fff; }
+        .btn-search:disabled { opacity: 0.6; cursor: not-allowed; }
+        .btn-back {
+            background: #fff; color: #1a1a2e; border: 1px solid #e2e8f0; border-radius: 8px;
+            padding: 5px 14px; font-size: 0.83rem; font-weight: 600; text-decoration: none; display: inline-block;
+        }
+        .btn-back:hover { background: #f1f5f9; color: #1a1a2e; }
+        .btn-range {
+            background: #fff; color: #475569; border: 1px solid #e2e8f0; border-radius: 8px;
+            padding: 4px 11px; font-size: 0.78rem; cursor: pointer;
+        }
+        .btn-range:hover, .btn-range.active { background: #1a1a2e; color: #fff; border-color: #1a1a2e; }
+
+        /* 요약 지표 타일 */
+        .stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px; }
+        .stat-tile { background: #f8fafc; border: 1px solid #eef2f6; border-radius: 10px; padding: 10px 12px; }
+        .stat-label { font-size: 0.72rem; color: #64748b; margin-bottom: 3px; }
+        .stat-value { font-size: 1.12rem; font-weight: 700; color: #1a1a2e; line-height: 1.25; }
+        .stat-sub { font-size: 0.71rem; color: #94a3b8; margin-top: 2px; }
+
+        .table-wrap { overflow-x: auto; }
+        table.trade-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+        .trade-table th {
+            background: #1a1a2e; color: #fff; padding: 7px 10px; text-align: right;
+            white-space: nowrap; font-weight: 600; position: sticky; top: 0; z-index: 1;
+        }
+        .trade-table th:first-child, .trade-table td:first-child { text-align: left; }
+        .trade-table td { padding: 5px 10px; border-bottom: 1px solid #f1f5f9; text-align: right; white-space: nowrap; }
+        .trade-table tr:hover td { background: #f8fafc; }
+        /* 손익 색상은 기존 화면(auto_trade_logs.html)과 동일하게 이익 빨강 / 손실 파랑 */
+        .pnl-pos { color: #b91c1c; font-weight: 600; }
+        .pnl-neg { color: #1d4ed8; font-weight: 600; }
+        .empty-val { color: #cbd5e1; }
+        .loading-row td { text-align: center; color: #94a3b8; padding: 24px; }
+
+        .signal-badge {
+            font-size: 0.7rem; font-weight: 700; padding: 2px 8px; border-radius: 10px;
+            background: #eef2ff; color: #4338ca; white-space: nowrap;
+        }
+        .exit-badge { font-size: 0.7rem; font-weight: 700; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
+        .exit-take_profit { background: #fee2e2; color: #b91c1c; }
+        .exit-stop_loss { background: #dbeafe; color: #1d4ed8; }
+        .exit-rsi_exit { background: #fef3c7; color: #b45309; }
+        .exit-other { background: #f1f5f9; color: #64748b; }
+        .dca-badge { font-size: 0.68rem; font-weight: 700; padding: 1px 6px; border-radius: 8px; background: #f3e8ff; color: #7e22ce; }
+
+        .note-box { font-size: 0.76rem; color: #64748b; line-height: 1.7; }
+        .chart-box { position: relative; height: 300px; }
+    </style>
+</head>
+<body>
+
+{% include '_navbar.html' %}
+
+<div class="container-fluid dashboard-container px-4" style="max-width:1400px">
+
+    <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+        <h2 class="mb-0" style="font-size:1.2rem; font-weight:700; color:#1a1a2e">
+            📊 {{ broker_label }} 매매 성과
+            <span class="text-muted" style="font-size:0.8rem; font-weight:400">(매수→매도를 한 사이클로 묶어 실현손익만 집계)</span>
+        </h2>
+        <div class="d-flex gap-2">
+            <a href="{{ url_for(logs_endpoint) }}" class="btn-back">📜 매매 이력</a>
+            <a href="{{ url_for(dashboard_endpoint) }}" class="btn-back">← 대시보드로</a>
+        </div>
+    </div>
+
+    <div class="card-panel mb-3">
+        <div class="d-flex flex-wrap align-items-end gap-3">
+            <div>
+                <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">청산일 시작</label>
+                <input type="date" id="filterFrom" class="form-control form-control-sm" style="width:160px">
+            </div>
+            <div>
+                <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">청산일 종료</label>
+                <input type="date" id="filterTo" class="form-control form-control-sm" style="width:160px">
+            </div>
+            <div class="d-flex gap-1">
+                <button class="btn-range" data-days="7" onclick="setRange(7, this)">7일</button>
+                <button class="btn-range" data-days="30" onclick="setRange(30, this)">30일</button>
+                <button class="btn-range" data-days="90" onclick="setRange(90, this)">90일</button>
+                <button class="btn-range active" data-days="0" onclick="setRange(0, this)">전체</button>
+            </div>
+            <button class="btn-search" onclick="loadPerformance()">조회</button>
+            <div class="form-check mb-1">
+                <input class="form-check-input" type="checkbox" id="useNetToggle" onchange="renderAll()">
+                <label class="form-check-label" for="useNetToggle" style="font-size:0.78rem; color:#475569"
+                       title="{{ fee_note }}">수수료 추정치 반영</label>
+            </div>
+            <span id="statusMsg" class="text-muted" style="font-size:0.78rem"></span>
+        </div>
+    </div>
+
+    <div class="card-panel mb-3">
+        <div class="panel-title">요약</div>
+        <div class="stat-grid" id="statGrid">
+            <div class="text-muted" style="font-size:0.8rem">로딩 중...</div>
+        </div>
+    </div>
+
+    <div class="card-panel mb-3">
+        <div class="panel-title">누적 실현손익 추이 <span class="text-muted" style="font-weight:400; font-size:0.78rem">(막대 = 그날 실현손익, 선 = 누적)</span></div>
+        <div class="chart-box"><canvas id="pnlChart"></canvas></div>
+    </div>
+
+    <div class="row g-3 mb-3">
+        <div class="col-lg-7">
+            <div class="card-panel h-100">
+                <div class="panel-title">진입 신호별 성과</div>
+                <div class="table-wrap">
+                    <table class="trade-table">
+                        <thead>
+                            <tr>
+                                <th>진입 신호</th><th>건수</th><th>승</th><th>패</th><th>승률</th>
+                                <th>누적손익</th><th>평균수익률</th><th>평균보유</th><th>정밀조건</th>
+                            </tr>
+                        </thead>
+                        <tbody id="signalBody"><tr class="loading-row"><td colspan="9">로딩 중...</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-5">
+            <div class="card-panel h-100">
+                <div class="panel-title">청산 사유별 성과</div>
+                <div class="table-wrap">
+                    <table class="trade-table">
+                        <thead>
+                            <tr><th>청산 사유</th><th>건수</th><th>비중</th><th>승률</th><th>누적손익</th><th>평균수익률</th></tr>
+                        </thead>
+                        <tbody id="exitBody"><tr class="loading-row"><td colspan="6">로딩 중...</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-3">
+        <div class="col-lg-7">
+            <div class="card-panel h-100">
+                <div class="panel-title">종목별 성과</div>
+                <div class="table-wrap" style="max-height:320px">
+                    <table class="trade-table">
+                        <thead>
+                            <tr><th>종목</th><th>건수</th><th>승</th><th>패</th><th>승률</th><th>누적손익</th><th>평균수익률</th></tr>
+                        </thead>
+                        <tbody id="tickerBody"><tr class="loading-row"><td colspan="7">로딩 중...</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-5">
+            <div class="card-panel h-100">
+                <div class="panel-title">물타기(추가매수) 여부별 성과</div>
+                <div class="table-wrap">
+                    <table class="trade-table">
+                        <thead>
+                            <tr><th>구분</th><th>건수</th><th>승률</th><th>누적손익</th><th>평균수익률</th><th>평균보유</th></tr>
+                        </thead>
+                        <tbody id="dcaBody"><tr class="loading-row"><td colspan="6">로딩 중...</td></tr></tbody>
+                    </table>
+                </div>
+                <div class="note-box mt-2">
+                    물타기를 거친 사이클이 실제로 회복해서 나왔는지 확인하는 표입니다.
+                    "무조건 한 번은 물타 본다"는 현재 정책이 손익에 도움이 되는지 여기서 보세요.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card-panel mb-3">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+            <div class="panel-title mb-0">청산 사이클 목록</div>
+            <button class="btn-back" onclick="exportCsv()">CSV 내보내기</button>
+        </div>
+        <div class="table-wrap" style="max-height:520px">
+            <table class="trade-table">
+                <thead>
+                    <tr>
+                        <th>진입시각</th><th>청산시각</th><th>종목</th><th>진입 신호</th><th>청산 사유</th>
+                        <th>보유</th><th>매수금액</th><th>매도금액</th><th>손익</th>
+                    </tr>
+                </thead>
+                <tbody id="cycleBody"><tr class="loading-row"><td colspan="9">로딩 중...</td></tr></tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="card-panel">
+        <div class="note-box">
+            <b>집계 기준</b><br>
+            * 실현손익은 매도(SELL) 기록만 집계합니다. 보유 중(HOLD) 기록에도 손익이 남지만 그건 평가손익(미실현)이라 제외합니다.<br>
+            * 진입 신호는 그 포지션을 연 매수 기록의 근거입니다. 매수 기록을 찾을 수 없는 매도는 <b>미확인</b>으로 따로 셉니다.<br>
+            * <code>+정밀조건충족</code>이 붙은 진입은 같은 신호로 묶고, 그 건수만 "정밀조건" 열에 따로 보여줍니다.<br>
+            * 물타기(추가매수)는 새 사이클을 만들지 않고 그 포지션의 매수금액과 물타기 횟수에 합산됩니다.<br>
+            * <b>수수료·세금은 원본 기록에 없어 요율 가정으로 추정한 값입니다</b> ({{ fee_note }}). 실제 계좌 조건과 다르면 <code>app/config.py</code>의 <code>TRADE_FEE_RATE_*</code>를 고치세요.<br>
+            * 이 화면은 읽기 전용입니다. 조회만 할 뿐 주문은 발생하지 않습니다.
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+    const API_URL = "{{ url_for(api_endpoint) }}";
+    const TICKER_LINK = "{{ ticker_link }}";
+    const QTY_DECIMALS = {{ qty_decimals }};
+
+    let cachedData = null;   // 마지막으로 받아온 집계 결과 (수수료 토글은 재조회 없이 이것만 다시 그림)
+    let pnlChart = null;
+
+    // ── 표기 헬퍼 ───────────────────────────────────────────────
+    const EMPTY = '<span class="empty-val">—</span>';
+
+    function fmtKrw(v, withSign) {
+        if (v === null || v === undefined || isNaN(Number(v))) return EMPTY;
+        const n = Math.round(Number(v));
+        const sign = withSign && n > 0 ? '+' : '';
+        return `${sign}${n.toLocaleString()}원`;
+    }
+
+    function pnlHtml(v) {
+        if (v === null || v === undefined || isNaN(Number(v))) return EMPTY;
+        const n = Number(v);
+        const cls = n > 0 ? 'pnl-pos' : (n < 0 ? 'pnl-neg' : '');
+        return `<span class="${cls}">${fmtKrw(n, true)}</span>`;
+    }
+
+    function fmtPct(v, withSign) {
+        if (v === null || v === undefined || isNaN(Number(v))) return EMPTY;
+        const n = Number(v);
+        const sign = withSign && n > 0 ? '+' : '';
+        return `${sign}${n.toFixed(2)}%`;
+    }
+
+    function pctHtml(v) {
+        if (v === null || v === undefined || isNaN(Number(v))) return EMPTY;
+        const n = Number(v);
+        const cls = n > 0 ? 'pnl-pos' : (n < 0 ? 'pnl-neg' : '');
+        return `<span class="${cls}">${fmtPct(n, true)}</span>`;
+    }
+
+    function fmtRatio(v) {
+        if (v === null || v === undefined || isNaN(Number(v))) return EMPTY;
+        return Number(v).toFixed(2);
+    }
+
+    function fmtHours(v) {
+        if (v === null || v === undefined || isNaN(Number(v))) return EMPTY;
+        const h = Number(v);
+        if (h < 1) return `${Math.round(h * 60)}분`;
+        if (h < 48) return `${h.toFixed(1)}시간`;
+        return `${(h / 24).toFixed(1)}일`;
+    }
+
+    function escHtml(s) {
+        return String(s === null || s === undefined ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function tickerLink(ticker) {
+        const url = TICKER_LINK.replace('{ticker}', encodeURIComponent(ticker || ''));
+        return `<a href="${url}" target="_blank" rel="noopener" style="color:inherit; text-decoration:none"
+                   onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${escHtml(ticker)}</a>`;
+    }
+
+    function signalBadge(signal) {
+        return `<span class="signal-badge">${escHtml(signal)}</span>`;
+    }
+
+    function exitBadge(kind) {
+        const known = ['take_profit', 'stop_loss', 'rsi_exit'];
+        const cls = known.includes(kind) ? `exit-${kind}` : 'exit-other';
+        return `<span class="exit-badge ${cls}">${escHtml(kind)}</span>`;
+    }
+
+    // 수수료 반영 토글이 켜져 있으면 순손익(net)을, 아니면 총손익을 쓴다
+    function useNet() { return document.getElementById('useNetToggle').checked; }
+    function groupPnl(row) { return useNet() ? row.net_pnl_krw : row.total_pnl_krw; }
+    function cyclePnl(c) { return useNet() && c.net_pnl_krw !== null && c.net_pnl_krw !== undefined ? c.net_pnl_krw : c.pnl_krw; }
+
+    // ── 렌더링 ─────────────────────────────────────────────────
+    function renderSummary(s) {
+        const grid = document.getElementById('statGrid');
+        const totalPnl = useNet() ? s.net_pnl_krw : s.total_pnl_krw;
+        const best = s.best_trade, worst = s.worst_trade;
+
+        const tiles = [
+            ['청산 건수', `${(s.closed_count || 0).toLocaleString()}건`, s.open_count ? `보유 중 ${s.open_count}건은 제외` : '보유 중인 포지션 없음'],
+            ['승률', s.win_rate === null ? EMPTY : fmtPct(s.win_rate), `${s.win_count || 0}승 ${s.loss_count || 0}패`],
+            ['누적 실현손익', pnlHtml(totalPnl), useNet() ? `수수료 추정 ${fmtKrw(s.total_fee_krw)} 차감` : '수수료 미반영'],
+            ['평균 수익률', pctHtml(s.avg_pnl_pct), '청산 건당 평균'],
+            ['손익비', fmtRatio(s.payoff_ratio), `평균이익 ${fmtKrw(s.avg_win_krw)} / 평균손실 ${fmtKrw(s.avg_loss_krw)}`],
+            ['Profit Factor', fmtRatio(s.profit_factor), '총이익 ÷ 총손실 (1 미만이면 손실 구간)'],
+            ['최대 낙폭(MDD)', s.max_drawdown_krw ? `<span class="pnl-neg">-${Math.round(s.max_drawdown_krw).toLocaleString()}원</span>` : fmtKrw(0), '누적손익 고점 대비 최대 하락폭'],
+            ['최대 연승 / 연패', `${s.max_win_streak || 0} / ${s.max_loss_streak || 0}`, '연속 기록'],
+            ['평균 보유시간', fmtHours(s.avg_holding_hours), '진입 → 청산'],
+            ['최고 수익 거래', best ? pnlHtml(best.pnl_krw) : EMPTY, best ? `${escHtml(best.ticker)} · ${escHtml(best.entry_signal)}` : ''],
+            ['최대 손실 거래', worst ? pnlHtml(worst.pnl_krw) : EMPTY, worst ? `${escHtml(worst.ticker)} · ${escHtml(worst.entry_signal)}` : ''],
+        ];
+
+        grid.innerHTML = tiles.map(([label, value, sub]) => `
+            <div class="stat-tile">
+                <div class="stat-label">${label}</div>
+                <div class="stat-value">${value}</div>
+                <div class="stat-sub">${sub || '&nbsp;'}</div>
+            </div>
+        `).join('');
+    }
+
+    function renderChart(daily) {
+        const canvas = document.getElementById('pnlChart');
+        if (pnlChart) { pnlChart.destroy(); pnlChart = null; }
+        if (!daily || !daily.length) {
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            return;
+        }
+
+        const labels = daily.map(d => d.date);
+        const dailyPnl = daily.map(d => useNet() ? d.net_pnl_krw : d.pnl_krw);
+        const cumPnl = daily.map(d => useNet() ? d.cum_net_pnl_krw : d.cum_pnl_krw);
+
+        pnlChart = new Chart(canvas, {
+            data: {
+                labels,
+                datasets: [
+                    {
+                        type: 'bar', label: '일별 실현손익', data: dailyPnl, order: 2,
+                        backgroundColor: dailyPnl.map(v => v >= 0 ? 'rgba(185,28,28,0.45)' : 'rgba(29,78,216,0.45)'),
+                        yAxisID: 'y',
+                    },
+                    {
+                        type: 'line', label: '누적 실현손익', data: cumPnl, order: 1,
+                        borderColor: '#1a1a2e', backgroundColor: 'rgba(26,26,46,0.08)',
+                        borderWidth: 2, pointRadius: 2, tension: 0.2, fill: true, yAxisID: 'y',
+                    },
+                ],
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { labels: { font: { size: 11 } } },
+                    tooltip: {
+                        callbacks: {
+                            label: (ctx) => `${ctx.dataset.label}: ${Math.round(ctx.parsed.y).toLocaleString()}원`,
+                        },
+                    },
+                },
+                scales: {
+                    x: { ticks: { font: { size: 10 }, maxRotation: 0, autoSkipPadding: 16 }, grid: { display: false } },
+                    y: { ticks: { font: { size: 10 }, callback: (v) => Math.round(v).toLocaleString() } },
+                },
+            },
+        });
+    }
+
+    function renderGroupTable(bodyId, rows, columns, emptyMsg) {
+        const body = document.getElementById(bodyId);
+        if (!rows || !rows.length) {
+            body.innerHTML = `<tr class="loading-row"><td colspan="${columns.length}">${emptyMsg}</td></tr>`;
+            return;
+        }
+        body.innerHTML = rows.map(r => `<tr>${columns.map(col => `<td>${col(r)}</td>`).join('')}</tr>`).join('');
+    }
+
+    function renderAll() {
+        if (!cachedData) return;
+        renderSummary(cachedData.summary || {});
+        renderChart(cachedData.daily);
+
+        renderGroupTable('signalBody', cachedData.by_signal, [
+            r => signalBadge(r.key),
+            r => `${r.count}건`,
+            r => r.win_count,
+            r => r.loss_count,
+            r => fmtPct(r.win_rate),
+            r => pnlHtml(groupPnl(r)),
+            r => pctHtml(r.avg_pnl_pct),
+            r => fmtHours(r.avg_holding_hours),
+            r => r.precision_count ? `${r.precision_count}건` : EMPTY,
+        ], '청산된 매매가 없습니다.');
+
+        // 익절/손절은 정의상 승률이 100%/0%이라, 어떤 사유로 얼마나 자주 나왔는지(비중)를 같이 본다
+        const exitTotal = (cachedData.by_exit_reason || []).reduce((sum, r) => sum + r.count, 0);
+        renderGroupTable('exitBody', cachedData.by_exit_reason, [
+            r => exitBadge(r.key),
+            r => `${r.count}건`,
+            r => exitTotal ? fmtPct(r.count / exitTotal * 100) : EMPTY,
+            r => fmtPct(r.win_rate),
+            r => pnlHtml(groupPnl(r)),
+            r => pctHtml(r.avg_pnl_pct),
+        ], '청산된 매매가 없습니다.');
+
+        renderGroupTable('tickerBody', cachedData.by_ticker, [
+            r => tickerLink(r.key),
+            r => `${r.count}건`,
+            r => r.win_count,
+            r => r.loss_count,
+            r => fmtPct(r.win_rate),
+            r => pnlHtml(groupPnl(r)),
+            r => pctHtml(r.avg_pnl_pct),
+        ], '청산된 매매가 없습니다.');
+
+        renderGroupTable('dcaBody', cachedData.by_dca, [
+            r => escHtml(r.key),
+            r => `${r.count}건`,
+            r => fmtPct(r.win_rate),
+            r => pnlHtml(groupPnl(r)),
+            r => pctHtml(r.avg_pnl_pct),
+            r => fmtHours(r.avg_holding_hours),
+        ], '청산된 매매가 없습니다.');
+
+        renderCycles(cachedData.cycles);
+    }
+
+    function renderCycles(cycles) {
+        const body = document.getElementById('cycleBody');
+        if (!cycles || !cycles.length) {
+            body.innerHTML = '<tr class="loading-row"><td colspan="9">이 기간에 청산된 매매가 없습니다.</td></tr>';
+            return;
+        }
+        body.innerHTML = cycles.map(c => `
+            <tr>
+                <td>${escHtml(c.entry_at) || EMPTY}</td>
+                <td>${escHtml(c.exit_at) || EMPTY}</td>
+                <td>${tickerLink(c.ticker)}</td>
+                <td>${signalBadge(c.entry_signal)}${c.is_precision ? ' <span class="dca-badge">정밀</span>' : ''}</td>
+                <td>${exitBadge(c.exit_kind)}</td>
+                <td>${fmtHours(c.holding_hours)}</td>
+                <td>${c.entry_at ? fmtKrw(c.buy_amount_krw) : EMPTY}${c.add_count ? ` <span class="dca-badge">물타기 ${c.add_count}회</span>` : ''}</td>
+                <td>${fmtKrw(c.exit_amount_krw)}</td>
+                <td>${pnlHtml(cyclePnl(c))} ${pctHtml(c.pnl_pct)}</td>
+            </tr>
+        `).join('');
+    }
+
+    // ── 조회 ───────────────────────────────────────────────────
+    async function loadPerformance() {
+        const status = document.getElementById('statusMsg');
+        status.textContent = '조회 중...';
+
+        const params = new URLSearchParams({ mode: 'live' });
+        const from = document.getElementById('filterFrom').value;
+        const to = document.getElementById('filterTo').value;
+        if (from) params.set('from', from);
+        if (to) params.set('to', to);
+
+        try {
+            const res = await fetch(`${API_URL}?${params.toString()}`);
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+
+            cachedData = json;
+            renderAll();
+            const s = json.summary || {};
+            status.textContent = `청산 ${s.closed_count || 0}건 집계` + (s.open_count ? ` · 보유 중 ${s.open_count}건` : '');
+        } catch (e) {
+            status.innerHTML = `<span class="text-danger">오류: ${escHtml(e.message)}</span>`;
+        }
+    }
+
+    function setRange(days, btn) {
+        document.querySelectorAll('.btn-range').forEach(b => b.classList.remove('active'));
+        if (btn) btn.classList.add('active');
+
+        const fromInput = document.getElementById('filterFrom');
+        const toInput = document.getElementById('filterTo');
+        if (!days) {
+            fromInput.value = '';
+            toInput.value = '';
+        } else {
+            const today = new Date();
+            const start = new Date(today);
+            start.setDate(start.getDate() - (days - 1));
+            toInput.value = today.toISOString().slice(0, 10);
+            fromInput.value = start.toISOString().slice(0, 10);
+        }
+        loadPerformance();
+    }
+
+    function exportCsv() {
+        const cycles = (cachedData && cachedData.cycles) || [];
+        if (!cycles.length) { alert('내보낼 청산 기록이 없습니다.'); return; }
+
+        const header = ['진입시각', '청산시각', '종목', '진입신호', '정밀조건', '청산사유',
+                        '보유시간(h)', '매수금액', '물타기횟수', '매도금액', '수수료추정', '손익(원)', '순손익(원)', '손익(%)'];
+        const rows = cycles.map(c => [
+            c.entry_at || '', c.exit_at || '', c.ticker || '', c.entry_signal || '',
+            c.is_precision ? 'Y' : 'N', c.exit_kind || '',
+            c.holding_hours === null || c.holding_hours === undefined ? '' : c.holding_hours.toFixed(2),
+            Math.round(c.buy_amount_krw || 0), c.add_count || 0, Math.round(c.exit_amount_krw || 0),
+            Math.round(c.fee_krw || 0),
+            c.pnl_krw === null || c.pnl_krw === undefined ? '' : Math.round(c.pnl_krw),
+            c.net_pnl_krw === null || c.net_pnl_krw === undefined ? '' : Math.round(c.net_pnl_krw),
+            c.pnl_pct === null || c.pnl_pct === undefined ? '' : Number(c.pnl_pct).toFixed(2),
+        ]);
+
+        const csv = [header, ...rows]
+            .map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))
+            .join('\r\n');
+        // Excel에서 한글이 깨지지 않도록 BOM을 붙인다
+        const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `trade_performance_{{ broker }}_${new Date().toISOString().slice(0, 10)}.csv`;
+        link.click();
+        URL.revokeObjectURL(link.href);
+    }
+
+    loadPerformance();
+</script>
+</body>
+</html>

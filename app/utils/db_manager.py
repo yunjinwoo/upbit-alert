@@ -742,6 +742,11 @@ def init_db():
         'ALTER TABLE coin_screening_daily ADD COLUMN rsi_recent_breakout INTEGER',
         'ALTER TABLE coin_screening_daily ADD COLUMN rsi_recent_breakout_max REAL',
 
+        # 매매 성과 화면(/auto-trade/performance)이 체결 행(BUY/DCA_BUY/SELL)만 시간순으로 훑어
+        # 매매 사이클을 재구성한다 — trade_order_log는 HOLD/SKIP까지 매 사이클 쌓여 커지므로,
+        # 그 대부분을 건너뛰고 체결만 꺼내오도록 인덱스를 둔다(get_trade_fill_rows 참고).
+        'CREATE INDEX IF NOT EXISTS idx_trade_order_log_fills ON trade_order_log(broker, mode, decision, id)',
+
     ]
     for sql in migrations:
         try:
@@ -4607,3 +4612,28 @@ def count_trade_order_log(broker: str = None, mode: str = None, ticker: str = No
     count = cursor.fetchone()[0]
     conn.close()
     return count
+
+
+def get_trade_fill_rows(broker: str, mode: str) -> list:
+    """실제 체결이 일어난 행(BUY/DCA_BUY/SELL)만 시간순(id 오름차순)으로 조회 — 매매 성과 화면의
+    사이클 재구성(app/core/trade_performance.py)용.
+
+    HOLD/SKIP은 주문 없이 판단만 남긴 행이라 제외한다. 특히 HOLD 행에도 pnl_krw가 채워지는데
+    그건 평가손익(미실현)이므로, 실현손익을 세는 쪽으로 새어 들어가지 않게 여기서 애초에 거른다
+    (app/core/trade_strategy.py의 evaluate_exits() 참고).
+
+    기간 필터를 SQL로 걸지 않는 이유: 사이클은 기간 밖에서 산 종목이 기간 안에서 팔리는 식으로
+    걸쳐 있을 수 있어, 기간 안 행만 읽으면 진입 신호를 잃어버린다. 재구성을 끝낸 뒤 청산일 기준으로
+    거른다(trade_performance.filter_by_exit_date)."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT id, ticker, decision, reason, price, qty, amount_krw, pnl_krw, pnl_pct, created_at
+        FROM trade_order_log
+        WHERE broker = ? AND mode = ? AND decision IN ('BUY', 'DCA_BUY', 'SELL')
+        ORDER BY id ASC
+    ''', (broker, mode))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
