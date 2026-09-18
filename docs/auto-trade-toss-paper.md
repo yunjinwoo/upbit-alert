@@ -1,8 +1,11 @@
 # 자동매매 2단계 — 토스증권(국내주식) 모의매매(Dry-run) 엔진
 
-- 상태: 로컬 구현·검증 완료(실제 Toss Open API 자격증명으로 시세/캔들 조회·모의 체결 확인) / 서버 PM2 배포는
-  아래 "배포" 참고 / 실거래 전환 안 함
-- 날짜: 2026-08-12
+- 상태: ⏸️ **중단** — 구현·검증은 완료했으나(실제 Toss Open API 자격증명으로 시세/캔들 조회·모의 체결 확인),
+  2026-08-22 실거래로 전환하면서 모의매매 프로세스(`toss-trade-bot`/`toss-condition-check-bot`)는 PM2 배포
+  목록에서 빠졌다. 코드와 DB는 그대로 남아있고 `run_auto_trade_loop()`에 idle 가드가 걸려 있어, 유령
+  프로세스가 남아도 매매/이력 기록을 하지 않는다.
+- 날짜: 2026-08-12 (작성 시점) — 아래 본문의 "실거래는 범위 밖" 서술은 이 시점 기준이며,
+  실거래는 [auto-trade-toss-live.md](auto-trade-toss-live.md)에서 이어진다.
 - 관련 파일: `app/core/toss_client.py`, `app/core/brokers/toss_broker.py`, `app/core/toss_market_analysis.py`,
   `app/core/toss_entry_condition_checker.py`, `app/core/toss_auto_trader.py`, `app/config.py`, `main.py`,
   `app/api/server.py`, `templates/toss_trade.html`, `templates/toss_trade_logs.html`, `templates/_navbar.html`,
