@@ -22,6 +22,9 @@
 4. **매매 사이클** (`auto_trader.run_trade_cycle()` / `toss_auto_trader`) — 청산 판단 → 진입 판단 →
    주문 실행 → 감사로그(`trade_order_log`) 기록. 루프 주기는 `trade_strategy_settings`.
 5. **주문** (`app/core/brokers/*`) — 실거래는 실제 계좌, 모의는 가상 원장.
+6. **성과 확인** (`app/core/trade_performance.py`) — `trade_order_log`의 매수→매도를 한 사이클로
+   묶어 승률·누적손익·진입 신호별 기여도를 집계(`/auto-trade/performance`). 읽기 전용이라 매매
+   판단에는 영향이 없다([docs/auto-trade-performance.md](docs/auto-trade-performance.md)).
 
 ---
 
