@@ -49,6 +49,7 @@ from app.utils.db_manager import (
     set_trade_condition_setting,
     get_trade_order_log,
     count_trade_order_log,
+    get_trade_fill_rows,
     save_powerball_rounds, get_powerball_rounds, delete_powerball_round,
     add_powerball_favorite, get_powerball_favorites, delete_powerball_favorite,
     save_lotto645_rounds, get_lotto645_rounds, delete_lotto645_round,
@@ -73,6 +74,7 @@ from app.core.stock_monitor import (
     SECTOR_NAMES,
 )
 from app.core.upbit_market_analysis import run_coin_screening
+from app.core.trade_performance import build_performance
 from app.core.auto_trader import get_dashboard_summary, run_trade_cycle, force_buy, force_sell, get_live_dashboard_summary
 from app.core.brokers.base import TradeCycleBusyError
 from app.core.brokers.upbit_live_broker import UpbitLiveBroker
@@ -700,6 +702,77 @@ def get_auto_trade_logs_api():
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
+
+# 매매 성과 화면(/auto-trade/performance, /toss-trade/performance)의 브로커별 차이만 모아둔 표.
+# 화면 구성과 집계 로직은 업비트/토스가 완전히 같아서 템플릿(trade_performance.html)과 집계
+# 모듈(app/core/trade_performance.py)을 그대로 공유하고, 다른 것들 — 종목 링크 주소, 수량 표기
+# (코인은 소수점 6자리, 주식은 정수 주), 수수료 요율(코인은 매수/매도 대칭, 국내주식은 매도에
+# 증권거래세가 더 붙음) — 만 여기서 주입한다.
+TRADE_PERFORMANCE_VIEWS = {
+    'upbit': {
+        'broker': 'upbit',
+        'broker_label': '업비트',
+        'page_title': '매매 성과 — 업비트 자동매매(실거래)',
+        'active_page': 'auto_trade',
+        'dashboard_endpoint': 'auto_trade_view',
+        'logs_endpoint': 'auto_trade_logs_view',
+        'api_endpoint': 'get_auto_trade_performance_api',
+        'ticker_link': 'https://upbit.com/exchange?code=CRIX.UPBIT.{ticker}',
+        'qty_decimals': 6,
+        'fee_note': '업비트 원화마켓 매수/매도 각 0.05% 가정',
+    },
+    'toss': {
+        'broker': 'toss',
+        'broker_label': '토스증권',
+        'page_title': '매매 성과 — 토스증권 자동매매',
+        'active_page': 'toss_trade',
+        'dashboard_endpoint': 'toss_trade_view',
+        'logs_endpoint': 'toss_trade_logs_view',
+        'api_endpoint': 'get_toss_trade_performance_api',
+        'ticker_link': 'https://www.tossinvest.com/stocks/A{ticker}/order',
+        'qty_decimals': 0,
+        'fee_note': '위탁수수료 0.015% + 매도 시 증권거래세 0.18% 가정',
+    },
+}
+
+TRADE_PERFORMANCE_FEE_RATES = {
+    'upbit': (Config.TRADE_FEE_RATE_UPBIT_BUY, Config.TRADE_FEE_RATE_UPBIT_SELL),
+    'toss': (Config.TRADE_FEE_RATE_TOSS_BUY, Config.TRADE_FEE_RATE_TOSS_SELL),
+}
+
+
+def _trade_performance_payload(broker: str):
+    """성과 API 두 개(업비트/토스)가 공유하는 본문 — 체결 행을 읽어 사이클 재구성/집계까지 돌린다.
+    기간(from/to)은 청산일 기준이고 생략하면 전체 기간이다. 읽기 전용이라 주문은 절대 발생하지 않는다."""
+    mode = (request.args.get('mode') or 'live').strip() or 'live'
+    date_from = (request.args.get('from') or '').strip() or None
+    date_to = (request.args.get('to') or '').strip() or None
+    buy_fee_rate, sell_fee_rate = TRADE_PERFORMANCE_FEE_RATES[broker]
+
+    rows = get_trade_fill_rows(broker, mode)
+    data = build_performance(rows, buy_fee_rate, sell_fee_rate, date_from=date_from, date_to=date_to)
+    return jsonify({'status': 'success', 'mode': mode, 'from': date_from, 'to': date_to, **data})
+
+
+@app.route('/auto-trade/performance')
+def auto_trade_performance_view():
+    """업비트 매매 성과(승률/누적 손익/진입 신호별 기여도) 페이지 — 읽기 전용.
+    이력 페이지(/auto-trade/logs)가 판단 1건씩 나열하는 반면, 이 화면은 BUY→SELL을 한 사이클로
+    묶어 "어떤 신호로 들어간 매매가 실제로 벌었는가"를 본다."""
+    return render_template('trade_performance.html', **TRADE_PERFORMANCE_VIEWS['upbit'])
+
+
+@app.route('/api/auto-trade/performance', methods=['GET'])
+def get_auto_trade_performance_api():
+    """업비트 매매 성과 집계. 쿼리파라미터: mode(기본 live), from/to('YYYY-MM-DD', 청산일 기준)."""
+    try:
+        return _trade_performance_payload('upbit')
+    except (ValueError, TypeError) as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
 @app.route('/api/auto-trade/summary', methods=['GET'])
 def get_auto_trade_summary_api():
     """가상 계좌 잔고/보유 포지션(현재가·평가손익 포함)/진입 후보(매매 대상 코인)/엔진 실행 여부/
@@ -1129,6 +1202,24 @@ def get_toss_trade_logs_api():
         return jsonify({'status': 'error', 'message': str(e)}), 400
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/toss-trade/performance')
+def toss_trade_performance_view():
+    """토스증권 매매 성과 페이지 — 업비트와 같은 템플릿/집계를 브로커만 바꿔 재사용한다."""
+    return render_template('trade_performance.html', **TRADE_PERFORMANCE_VIEWS['toss'])
+
+
+@app.route('/api/toss-trade/performance', methods=['GET'])
+def get_toss_trade_performance_api():
+    """토스증권 매매 성과 집계. 쿼리파라미터: mode(기본 live), from/to('YYYY-MM-DD', 청산일 기준)."""
+    try:
+        return _trade_performance_payload('toss')
+    except (ValueError, TypeError) as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
 
 @app.route('/api/toss-trade/summary', methods=['GET'])
 def get_toss_trade_summary_api():
