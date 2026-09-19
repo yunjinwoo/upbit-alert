@@ -159,7 +159,10 @@
         const btn = document.getElementById('refreshBtn');
         btn.disabled = true;
         try {
-            const res = await fetch('/api/coin-ranking?limit=10');
+            // 앞에 슬래시를 붙이면 안 된다 — 서버는 APP_ROOT(/upbit) 아래에 마운트돼 있어서
+            // '/api/...'는 마운트 밖으로 나가 nginx가 HTML을 돌려주고 JSON 파싱이 깨진다.
+            // 다른 페이지들과 동일하게 현재 경로 기준 상대 경로로 호출한다.
+            const res = await fetch('api/coin-ranking?limit=10');
             const json = await res.json();
             if (json.status !== 'success') throw new Error(json.message || '조회 실패');
 
