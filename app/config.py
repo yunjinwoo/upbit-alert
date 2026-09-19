@@ -143,3 +143,15 @@ class Config:
     TRADE_RECOVERY_PARTIAL_STOP_COOLDOWN_MIN = 360  # 소액 손절 반복 최소 간격(분)
     TRADE_MIN_ORDER_KRW = 5_000              # 거래소 최소 주문금액 — 부분 매도 금액이 이 밑이면 쪼개지 말고 전량 매도한다
                                              # (업비트 실주문 검증값과 동일: app/core/brokers/upbit_live_broker.py)
+
+    # 매매 성과 화면(/auto-trade/performance)의 수수료 추정용 요율. trade_order_log의 pnl_krw는
+    # 체결가 단순 차액이라 수수료·세금이 빠져 있고, 원본에 실제 부과액이 없어서 이 요율로 추정치만
+    # 계산한다(화면에 요율을 같이 표시해 추정임을 밝힘). 매매 판단에는 전혀 쓰이지 않는 표시 전용 값이라
+    # 실제 계좌 조건과 다르면 이 숫자만 고치면 된다.
+    # 업비트 원화마켓: 매수/매도 각 0.05%.
+    TRADE_FEE_RATE_UPBIT_BUY = 0.0005
+    TRADE_FEE_RATE_UPBIT_SELL = 0.0005
+    # 국내주식(토스증권): 매수는 위탁수수료만, 매도는 위탁수수료 + 증권거래세(농특세 포함)까지.
+    # 세율은 제도 변경이 잦으니 계좌 조건에 맞춰 확인하고 조정할 것.
+    TRADE_FEE_RATE_TOSS_BUY = 0.00015
+    TRADE_FEE_RATE_TOSS_SELL = 0.00015 + 0.0018
