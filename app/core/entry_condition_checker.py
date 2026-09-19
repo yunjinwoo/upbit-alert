@@ -24,7 +24,11 @@ from app.utils.db_manager import (
 logger = get_logger()
 
 JOB_NAME = "entry_condition_check"
-BROKER, MODE = "upbit", "paper"
+# 실거래(live)와 같은 mode를 봐야 한다 — auto_trader.run_trade_cycle()이 진입 게이트를 볼 때
+# get_condition_watch_tickers(broker.broker_name, broker.mode)로 조회하는데 실거래 브로커의
+# mode가 'live'라, 여기서 'paper'를 쓰면 검사 대상도 결과도 실거래 루프와 영영 만나지 않는다
+# (업비트 모의매매 루프는 이미 폐지돼서 paper 쪽을 볼 소비자도 없음).
+BROKER, MODE = "upbit", "live"
 
 
 def _get_candles(ticker: str, interval: str, count: int):
