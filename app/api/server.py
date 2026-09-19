@@ -642,6 +642,11 @@ def get_coin_screening_api():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+@app.route('/coin-ranking')
+def coin_ranking_view():
+    """업비트 KRW 마켓 당일 상승률/거래대금 순위 페이지를 보여줍니다."""
+    return render_template('coin_ranking.html', active_page='coin_ranking')
+
 @app.route('/api/coin-ranking', methods=['GET'])
 def get_coin_ranking_api():
     """업비트 KRW 마켓 당일 상승률 상위 / 거래대금 상위를 JSON으로 반환합니다.
