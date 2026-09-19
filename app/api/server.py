@@ -74,6 +74,7 @@ from app.core.stock_monitor import (
     SECTOR_NAMES,
 )
 from app.core.upbit_market_analysis import run_coin_screening
+from app.core.upbit_ranking import get_top_movers
 from app.core.trade_performance import build_performance
 from app.core.auto_trader import get_dashboard_summary, run_trade_cycle, force_buy, force_sell, get_live_dashboard_summary
 from app.core.brokers.base import TradeCycleBusyError
@@ -638,6 +639,22 @@ def get_coin_screening_api():
     try:
         data = get_coin_screening()
         return jsonify({"status": "success", "count": len(data), "data": data})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/coin-ranking')
+def coin_ranking_view():
+    """업비트 KRW 마켓 당일 상승률/거래대금 순위 페이지를 보여줍니다."""
+    return render_template('coin_ranking.html', active_page='coin_ranking')
+
+@app.route('/api/coin-ranking', methods=['GET'])
+def get_coin_ranking_api():
+    """업비트 KRW 마켓 당일 상승률 상위 / 거래대금 상위를 JSON으로 반환합니다.
+    업비트 현재가 엔드포인트 1회 호출로 끝나므로 코인 스크리닝과 달리 동기 응답으로 충분합니다."""
+    try:
+        limit = request.args.get('limit', default=10, type=int)
+        limit = max(1, min(limit, 50))  # 과도한 요청 방지
+        return jsonify({"status": "success", **get_top_movers(limit=limit)})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 

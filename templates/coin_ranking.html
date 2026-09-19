@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>코인 당일 순위</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f4f7f6; font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; }
+        .main-navbar { background-color: #1a1a2e; }
+        .main-navbar .navbar-brand { color: #fff; font-weight: bold; }
+        .main-navbar .nav-link { color: rgba(255,255,255,0.75) !important; font-size: 0.82rem; }
+        .main-navbar .nav-link:hover,
+        .main-navbar .nav-link.active { color: #fff !important; }
+        .main-navbar .nav-link.active { border-bottom: 2px solid #4da6ff; }
+
+        .dashboard-container { margin-top: 24px; margin-bottom: 60px; }
+        .card-panel { background: white; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); padding: 16px 18px; }
+
+        .btn-search {
+            background: #1a1a2e; color: #fff; border: none; border-radius: 8px;
+            padding: 5px 16px; font-size: 0.83rem; cursor: pointer; font-weight: 600;
+        }
+        .btn-search:hover { background: #2d2d4e; }
+        .btn-search:disabled { opacity: 0.6; cursor: not-allowed; }
+
+        .panel-title { font-size: 0.92rem; font-weight: 700; color: #1a1a2e; margin-bottom: 10px; }
+        .rank-wrap { overflow-x: auto; }
+        table.rank-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+        .rank-table th {
+            background: #1a1a2e; color: #fff; padding: 7px 10px; text-align: right;
+            white-space: nowrap; font-weight: 600;
+        }
+        .rank-table th:first-child, .rank-table td:first-child { text-align: center; }
+        .rank-table th:nth-child(2), .rank-table td:nth-child(2) { text-align: left; }
+        .rank-table td { padding: 5px 10px; border-bottom: 1px solid #f1f5f9; text-align: right; white-space: nowrap; }
+        .rank-table tr:hover td { background: #f8fafc; }
+        .rank-no { color: #94a3b8; font-size: 0.76rem; font-weight: 700; width: 34px; }
+        .coin-name { font-weight: 600; color: #1e293b; }
+        .coin-ticker { font-size: 0.68rem; color: #94a3b8; font-family: monospace; }
+        .change-pos { color: #b91c1c; font-weight: 600; }
+        .change-neg { color: #1d4ed8; font-weight: 600; }
+        .chart-link { color: #4da6ff; text-decoration: none; font-size: 0.78rem; }
+        .chart-link:hover { text-decoration: underline; }
+        .loading-row td { text-align: center; color: #94a3b8; padding: 30px; }
+    </style>
+</head>
+<body>
+
+{% include '_navbar.html' %}
+
+<div class="container-fluid dashboard-container px-4" style="max-width:1300px">
+
+    <div class="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-2">
+        <h2 class="mb-0" style="font-size:1.2rem; font-weight:700; color:#1a1a2e">🏆 코인 당일 순위 (업비트 KRW 마켓)</h2>
+        <div class="d-flex align-items-center gap-2">
+            <span id="updatedAt" class="text-muted" style="font-size:0.78rem"></span>
+            <button class="btn-search" id="refreshBtn" onclick="load()">새로고침</button>
+        </div>
+    </div>
+
+    <div class="row g-3">
+        <div class="col-lg-6">
+            <div class="card-panel">
+                <div class="panel-title">📈 당일 상승률 상위 10</div>
+                <div class="rank-wrap">
+                    <table class="rank-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>종목</th>
+                                <th>현재가</th>
+                                <th>등락률</th>
+                                <th>거래대금</th>
+                                <th>차트</th>
+                            </tr>
+                        </thead>
+                        <tbody id="gainersBody">
+                            <tr class="loading-row"><td colspan="6">로딩 중...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-6">
+            <div class="card-panel">
+                <div class="panel-title">💰 당일 거래대금 상위 10</div>
+                <div class="rank-wrap">
+                    <table class="rank-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>종목</th>
+                                <th>현재가</th>
+                                <th>등락률</th>
+                                <th>거래대금</th>
+                                <th>차트</th>
+                            </tr>
+                        </thead>
+                        <tbody id="valueBody">
+                            <tr class="loading-row"><td colspan="6">로딩 중...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="mt-2 text-muted" style="font-size:0.72rem">
+        * 등락률은 업비트 화면과 같은 기준(전일 종가 = KST 0시 대비 현재가). 거래대금은 KST 0시부터 누적된 당일 원화 거래대금이며 억 원 단위로 표시합니다.
+        &nbsp;|&nbsp; 대상은 KRW 마켓 전 종목이고 스테이블코인도 빼지 않습니다 — USDT 거래대금 자체가 자금 흐름 신호라서입니다.
+        &nbsp;|&nbsp; 코인 스크리닝과 달리 현재가 API 1회 호출이라 새로고침하면 바로 최신값이 나옵니다.
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    function fmtPrice(v) {
+        const n = Number(v);
+        if (isNaN(n)) return '—';
+        return n < 100 ? n.toFixed(2) : Math.round(n).toLocaleString();
+    }
+
+    // 거래대금은 조 단위까지 가는 종목이 있어 원 단위로 쓰면 자릿수만 길어진다 — 억 원으로 줄여 표시.
+    function fmtValue(v) {
+        const n = Number(v);
+        if (isNaN(n)) return '—';
+        return Math.round(n / 1e8).toLocaleString() + '억';
+    }
+
+    function renderRows(tbodyId, rows) {
+        const tbody = document.getElementById(tbodyId);
+        if (!rows || !rows.length) {
+            tbody.innerHTML = '<tr class="loading-row"><td colspan="6">데이터가 없습니다.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = rows.map((r, i) => {
+            const cls = r.change_rate > 0 ? 'change-pos' : (r.change_rate < 0 ? 'change-neg' : '');
+            const sign = r.change_rate > 0 ? '+' : '';
+            const upbitUrl = `https://upbit.com/exchange?code=CRIX.UPBIT.${r.ticker}`;
+            return `
+                <tr>
+                    <td class="rank-no">${i + 1}</td>
+                    <td>
+                        <div class="coin-name">${r.name}</div>
+                        <div class="coin-ticker">${r.ticker}</div>
+                    </td>
+                    <td>${fmtPrice(r.price)}</td>
+                    <td class="${cls}">${sign}${r.change_rate}%</td>
+                    <td>${fmtValue(r.trade_value)}</td>
+                    <td><a class="chart-link" href="${upbitUrl}" target="_blank" rel="noopener">📈</a></td>
+                </tr>
+            `;
+        }).join('');
+    }
+
+    async function load() {
+        const btn = document.getElementById('refreshBtn');
+        btn.disabled = true;
+        try {
+            const res = await fetch('/api/coin-ranking?limit=10');
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message || '조회 실패');
+
+            renderRows('gainersBody', json.top_gainers);
+            renderRows('valueBody', json.top_trade_value);
+            document.getElementById('updatedAt').textContent =
+                `기준 ${json.fetched_at} (KST) · ${json.total_count}개 종목`;
+        } catch (e) {
+            const msg = `<tr class="loading-row"><td colspan="6">불러오지 못했습니다: ${e.message}</td></tr>`;
+            document.getElementById('gainersBody').innerHTML = msg;
+            document.getElementById('valueBody').innerHTML = msg;
+            document.getElementById('updatedAt').textContent = '';
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    load();
+</script>
+</body>
+</html>

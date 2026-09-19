@@ -2,7 +2,7 @@
     'market_cap': 'data', 'stock_investor': 'data', 'investor_trend': 'data',
     'investor_ranking': 'data', 'volume_ratio': 'data', 'sector_index': 'data',
     'ranking_preview': 'data', 'hts_top_view': 'data', 'top_interest': 'data',
-    'top_gainers': 'data', 'coin_screening': 'data',
+    'top_gainers': 'data', 'coin_screening': 'data', 'coin_ranking': 'data',
     'signal_score_preview': 'signal', 'signal_score_history': 'signal',
     'raw_data': 'ops', 'history': 'ops', 'sync_admin': 'ops', 'date_column_convert': 'ops', 'security': 'ops',
     'powerball': 'lottery', 'lotto645': 'lottery', 'pension720': 'lottery', 'lottery_recommend': 'lottery',
@@ -21,6 +21,7 @@
         ('top_interest_view', 'top_interest', '관심종목등록 상위'),
         ('top_gainers_view', 'top_gainers', '상승률 순위'),
         ('coin_screening_view', 'coin_screening', '코인 스크리닝'),
+        ('coin_ranking_view', 'coin_ranking', '코인 당일 순위'),
     ],
     'signal': [
         ('signal_score_preview_view', 'signal_score_preview', 'Signal Score 종목'),
@@ -93,6 +94,7 @@
                     <li><a class="dropdown-item{{ ' active' if active_page == 'top_interest' }}" href="{{ url_for('top_interest_view') }}">관심종목등록 상위</a></li>
                     <li><a class="dropdown-item{{ ' active' if active_page == 'top_gainers' }}" href="{{ url_for('top_gainers_view') }}">상승률 순위</a></li>
                     <li><a class="dropdown-item{{ ' active' if active_page == 'coin_screening' }}" href="{{ url_for('coin_screening_view') }}">코인 스크리닝</a></li>
+                    <li><a class="dropdown-item{{ ' active' if active_page == 'coin_ranking' }}" href="{{ url_for('coin_ranking_view') }}">코인 당일 순위</a></li>
                 </ul>
             </div>
 
