@@ -153,6 +153,7 @@
                 <thead>
                     <tr>
                         <th style="text-align:center">실거래 승인</th>
+                        <th style="text-align:center">정밀검사</th>
                         <th>종목</th>
                         <th>현재가</th>
                         <th>보유수량</th>
@@ -166,7 +167,7 @@
                     </tr>
                 </thead>
                 <tbody id="liveCandidatesBody">
-                    <tr class="loading-row"><td colspan="11">로딩 중...</td></tr>
+                    <tr class="loading-row"><td colspan="12">로딩 중...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -327,6 +328,32 @@
             켜기 전에 <b>총 투입액 상한</b>이 "1종목당 매수금액 + 1회 물타기 금액"보다 큰지 확인하세요 —
             작으면 처음부터 물타기 여력이 없는 상태가 됩니다. 자세한 설계는
             <code>docs/auto-trade-recovery-dca.md</code>.
+        </div>
+    </div>
+
+    <div class="card-panel mb-3">
+        <div class="section-title mb-2 collapsible-header" onclick="toggleCollapse(this, 'conditionsCardBody')">
+            <span>🔬 정밀 매수조건 (진입 게이트 — 종목별 opt-in)</span>
+            <span class="collapse-chevron" id="conditionsCardChevron">▾</span>
+        </div>
+        <div id="conditionsCardBody">
+            <div id="conditionsBody">로딩 중...</div>
+            <div class="d-flex align-items-center gap-2 pt-2">
+                <button class="btn-search" onclick="saveConditions()">저장</button>
+                <span id="conditionsSavedMsg" class="text-muted" style="font-size:0.76rem"></span>
+            </div>
+            <div class="mt-2 text-muted" style="font-size:0.72rem">
+                * 위 "🔴 실거래" 표에서 <b>정밀검사</b>를 체크한 종목에만 적용되는 <b>추가</b> 조건입니다.
+                체크하지 않은 종목은 지금까지와 똑같이 스크리닝 조건만으로 매수 판단합니다.
+                <br>* 여러 조건을 켜면 <code>AND</code> 그룹은 <b>전부</b> 충족해야 하고, <code>OR</code> 그룹은
+                <b>하나만</b> 충족하면 됩니다(최종 = AND 전부 통과 AND (OR 그룹이 비었거나 하나 이상 통과)).
+                조건을 하나도 안 켜두면 정밀검사를 체크해도 추가 제약 없이 통과합니다.
+                <br>* <b class="text-danger">검사 프로세스가 떠 있어야 동작합니다</b> —
+                <code>condition-check-bot</code>(<code>python main.py condition_check</code>)이 별도 주기로
+                일봉/5분봉/1분봉을 조회해 결과를 캐시하고, 매매 루프는 그 캐시만 읽습니다.
+                프로세스가 없으면 검사 결과가 없어서 해당 종목은 매번 <b>SKIP</b>됩니다(사지 않는 쪽으로
+                안전하게 동작). 표의 정밀검사 칸에 "검사 없음"이 뜨면 이 경우입니다.
+            </div>
         </div>
     </div>
 
@@ -592,6 +619,41 @@
              + `<span class="invest-label${over ? ' over' : ''}">${cb} / ${capTxt} (${Math.round(ratio * 100)}%${over ? ' 초과' : ''})</span>`;
     }
 
+    // 정밀검사(진입 게이트) 셀 — 체크박스 + 마지막 검사 결과. condition_passed가 null이면 아직
+    // 검사 결과가 없다는 뜻이고, 그 상태로 체크를 켜두면 실거래 루프가 그 종목을 매번 SKIP한다
+    // (안전 방향이지만 "왜 안 사지?"의 원인이라, 검사 루프가 도는지 여기서 바로 보이게 한다).
+    function conditionCellHtml(ticker, row) {
+        const watching = !!row.condition_watch;
+        const cb = `<input type="checkbox" ${watching ? 'checked' : ''}
+                        title="켜면 아래 '정밀 매수조건'을 통과해야 이 종목을 매수합니다"
+                        onchange="toggleConditionWatch('${ticker}', this)">`;
+        if (!watching) return cb;
+
+        let badge;
+        if (row.condition_passed === null || row.condition_passed === undefined) {
+            badge = `<span class="signal-badge signal-badge-mild" title="검사 결과가 없어 다음 사이클에 SKIP됩니다 — condition-check-bot이 떠 있는지 확인하세요">검사 없음</span>`;
+        } else if (row.condition_passed) {
+            badge = `<span class="signal-badge signal-badge-good" title="${escapeAttr(conditionDetailText(row.condition_detail))}">통과</span>`;
+        } else {
+            badge = `<span class="signal-badge signal-badge-warn" title="${escapeAttr(conditionDetailText(row.condition_detail))}">미충족</span>`;
+        }
+        const at = row.condition_checked_at
+            ? `<div style="font-size:0.64rem; color:#94a3b8">${row.condition_checked_at}</div>`
+            : '';
+        return `${cb}<div style="margin-top:2px">${badge}</div>${at}`;
+    }
+
+    function conditionDetailText(detail) {
+        if (!detail) return '검사 결과 없음';
+        return Object.entries(detail)
+            .map(([k, v]) => `${CONDITION_LABELS[k] || k}: ${v.passed ? 'O' : 'X'} — ${v.message || ''}`)
+            .join('\n') || '검사 결과 없음';
+    }
+
+    function escapeAttr(t) {
+        return String(t).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
     function liveRowHtml(ticker, row, checkboxHtml, dcaMaxCount, perPositionCap) {
         const held = !!row.held;
         const dcaCount = row.dca_count || 0;
@@ -615,6 +677,7 @@
         return `
             <tr>
                 <td style="text-align:center">${checkboxHtml}</td>
+                <td style="text-align:center">${conditionCellHtml(ticker, row)}</td>
                 <td>${coinLink(ticker, ticker)}</td>
                 <td>${fmtKrw(row.current_price)}</td>
                 <td>${held ? fmtQty(row.qty) : '<span class="empty-val">—</span>'}</td>
@@ -644,6 +707,8 @@
             engineStatusText.textContent = json.engine_enabled ? '🔴 실행 중' : '일시중지됨';
             engineStatusText.className = 'engine-status-text ' + (json.engine_enabled ? 'engine-status-on' : 'engine-status-off');
             renderCycleTiming(json);
+            // 행 툴팁이 조건 라벨(CONDITION_LABELS)을 쓰므로 표를 그리기 전에 먼저 채운다.
+            renderConditions(json.conditions || [], json.condition_check_interval_sec);
 
             const dcaMaxCount = json.dca_max_count ?? 1;  // ??만 사용 — 0(물타기 완전 비활성화)은 유효한
                                                             // 값이므로 ||로 1로 뭉개면 안 됨(0/0회를 1회 가능처럼 표시하는 버그)
@@ -664,12 +729,12 @@
 
             body.innerHTML = rows.length
                 ? rows.join('')
-                : '<tr class="loading-row"><td colspan="11">아래 "🎯 매매 대상 코인" 표에서 관심 등록을 먼저 체크하세요.</td></tr>';
+                : '<tr class="loading-row"><td colspan="12">아래 "🎯 매매 대상 코인" 표에서 관심 등록을 먼저 체크하세요.</td></tr>';
 
             renderAllCandidates(json.all_candidates || []);
             renderDownsideCandidates(json.downside_candidates || []);
         } catch (e) {
-            body.innerHTML = `<tr class="loading-row"><td colspan="11" class="text-danger">오류: ${e.message}</td></tr>`;
+            body.innerHTML = `<tr class="loading-row"><td colspan="12" class="text-danger">오류: ${e.message}</td></tr>`;
         }
     }
 
@@ -799,6 +864,113 @@
                     ? '선택한 신호를 모두 가진 종목이 없습니다.'
                     : '현재 조건을 만족하는 후보가 없습니다. (coin_screening_daily가 비어있다면 `python main.py coin_analysis`를 먼저 실행하세요)'
             }</td></tr>`;
+        }
+    }
+
+    // ── 정밀 매수조건(진입 게이트). 조건 목록/파라미터의 유일한 소스는 DB의 trade_condition_settings
+    // (db_manager가 브로커별로 3종을 기본 비활성으로 시딩) — 화면은 live-summary가 넘겨준 걸 그대로
+    // 그리고, 파라미터 키도 서버가 준 params 객체에서 뽑아 쓴다(여기에 조건 목록을 중복 정의하지 않음).
+    let _conditions = [];
+    let CONDITION_LABELS = {};
+
+    const CONDITION_PARAM_LABELS = {
+        ma_period: '이동평균 기간',
+        touch_tolerance_pct: '근접 허용(%)',
+        bb_period: '볼린저 기간',
+        bb_mult: '볼린저 배수',
+        vol_lookback: '거래량 평균 봉수',
+        vol_ratio_threshold: '거래량 배수(이상)',
+    };
+
+    function renderConditions(conditions, checkIntervalSec) {
+        if (Array.isArray(conditions)) _conditions = conditions;
+        CONDITION_LABELS = Object.fromEntries(_conditions.map(c => [c.condition_key, c.label || c.condition_key]));
+        const body = document.getElementById('conditionsBody');
+        if (!_conditions.length) {
+            body.innerHTML = '<span class="text-muted" style="font-size:0.8rem">등록된 정밀 조건이 없습니다.</span>';
+            return;
+        }
+        const intervalText = checkIntervalSec
+            ? `<div class="text-muted mb-2" style="font-size:0.74rem">검사 주기: ${checkIntervalSec}초</div>` : '';
+        body.innerHTML = intervalText + _conditions.map(c => {
+            const params = c.params || {};
+            const paramInputs = Object.keys(params).map(k => `
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.72rem; color:#64748b">${CONDITION_PARAM_LABELS[k] || k}</label>
+                    <input type="number" class="form-control form-control-sm cond-param" style="width:120px" step="any"
+                           data-key="${c.condition_key}" data-param="${k}" value="${params[k]}">
+                </div>`).join('');
+            return `
+                <div class="settings-group" style="align-items:flex-end">
+                    <div class="settings-group-label">${c.label || c.condition_key}</div>
+                    <div>
+                        <label class="form-label mb-1" style="font-size:0.72rem; color:#64748b">
+                            <input type="checkbox" class="cond-enabled" data-key="${c.condition_key}"
+                                   ${c.enabled ? 'checked' : ''} style="margin-right:4px">사용
+                        </label>
+                    </div>
+                    <div>
+                        <label class="form-label mb-1" style="font-size:0.72rem; color:#64748b">결합</label>
+                        <select class="form-select form-select-sm cond-logic" style="width:80px" data-key="${c.condition_key}">
+                            <option value="AND" ${c.logic_group === 'AND' ? 'selected' : ''}>AND</option>
+                            <option value="OR" ${c.logic_group === 'OR' ? 'selected' : ''}>OR</option>
+                        </select>
+                    </div>
+                    ${paramInputs}
+                </div>`;
+        }).join('');
+    }
+
+    async function saveConditions() {
+        const msg = document.getElementById('conditionsSavedMsg');
+        const byKey = {};
+        document.querySelectorAll('.cond-enabled').forEach(el => {
+            byKey[el.dataset.key] = { condition_key: el.dataset.key, enabled: el.checked, params: {} };
+        });
+        document.querySelectorAll('.cond-logic').forEach(el => {
+            if (byKey[el.dataset.key]) byKey[el.dataset.key].logic_group = el.value;
+        });
+        document.querySelectorAll('.cond-param').forEach(el => {
+            const entry = byKey[el.dataset.key];
+            if (!entry) return;
+            const n = Number(el.value);
+            if (el.value !== '' && !isNaN(n)) entry.params[el.dataset.param] = n;
+        });
+        try {
+            const res = await fetch('api/auto-trade/conditions/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ conditions: Object.values(byKey) }),
+            });
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+            msg.textContent = '저장됨 · 다음 검사 사이클부터 적용';
+            msg.className = 'text-success';
+            await loadLiveSummary();
+        } catch (e) {
+            msg.textContent = '저장 실패: ' + e.message;
+            msg.className = 'text-danger';
+        }
+        setTimeout(() => { msg.textContent = ''; }, 4000);
+    }
+
+    async function toggleConditionWatch(ticker, checkbox) {
+        const nextEnabled = checkbox.checked;
+        checkbox.disabled = true;
+        try {
+            const res = await fetch('api/auto-trade/live/candidates/condition-watch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ticker, enabled: nextEnabled }),
+            });
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+            await loadLiveSummary();
+        } catch (e) {
+            alert('정밀검사 설정 저장 실패: ' + e.message);
+            checkbox.checked = !nextEnabled;
+        } finally {
+            checkbox.disabled = false;
         }
     }
 

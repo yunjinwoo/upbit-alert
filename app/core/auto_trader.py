@@ -513,6 +513,10 @@ def get_live_dashboard_summary() -> dict:
 
     approved_tickers = get_approved_candidate_tickers(broker.broker_name, broker.mode)
     watchlist_tickers = get_watchlist_tickers(broker.broker_name, broker.mode)
+    # 정밀 매수조건(진입 게이트) — run_trade_cycle()이 진입 판단에서 읽는 것과 같은 broker/mode로
+    # 조회해야 화면과 실제 판단이 어긋나지 않는다(entry_condition_checker.py가 이 mode로 채운다).
+    condition_watch_tickers = get_condition_watch_tickers(broker.broker_name, broker.mode)
+    condition_status_map = get_condition_status_map(broker.broker_name, broker.mode)
     # 이 봇과 무관하게 보유 중인 다른 코인들(실거래 기능과 상관없이 원래 갖고 있던 코인)까지
     # 화면에 다 나열하면 진짜 매매 대상이 뭔지 헷갈리므로, "승인했거나 이미 봇이 추적 중인" 종목만
     # extra_positions 후보로 본다 — _reconcile_live_positions()가 관리하는 범위와 동일한 기준
@@ -550,7 +554,8 @@ def get_live_dashboard_summary() -> dict:
     # 여기서 evaluate_exits()를 한 번 더(읽기 전용) 돌려서 다음 사이클에 실제로 어떤 판단이 내려질지
     # 미리 보여준다(순수 함수라 DB/주문에 영향 없음).
     strategy_cfg = _effective_strategy_config()
-    per_position_cap_krw = get_trade_strategy_settings(broker.broker_name)['per_position_cap_krw']
+    strategy_settings = get_trade_strategy_settings(broker.broker_name)  # 아래 응답 필드들이 공유(DB 조회 1회)
+    per_position_cap_krw = strategy_settings['per_position_cap_krw']
     tracking_rows = {row['ticker']: row for row in get_paper_positions(broker.broker_name, broker.mode)}
 
     # 투입원금 게이지 필드: invested_gauge_fields(qty, avg_buy_price, per_position_cap_krw)
@@ -591,6 +596,13 @@ def get_live_dashboard_summary() -> dict:
     for cand in candidates:
         ticker = cand['ticker']
         cand['approved'] = ticker in approved_tickers
+        # 정밀검사 opt-in 여부와 마지막 검사 결과. condition_passed가 None이면 "아직 검사 결과 없음"
+        # = 다음 사이클에 SKIP된다는 뜻이라, 화면에서 검사 루프가 도는지 눈으로 확인할 수 있게 한다.
+        status = condition_status_map.get(ticker)
+        cand['condition_watch'] = ticker in condition_watch_tickers
+        cand['condition_passed'] = status['passed'] if status else None
+        cand['condition_detail'] = status['detail'] if status else None
+        cand['condition_checked_at'] = status['checked_at'] if status else None
         pos = real_positions.get(ticker)
         if pos:
             price = cached_price(ticker)
@@ -673,6 +685,9 @@ def get_live_dashboard_summary() -> dict:
         # (recovery_dca_count/recovery_dca_max_count) — 화면이 어느 쪽을 보여줄지 정할 수 있게 같이 내려준다.
         'recovery_dca_enabled': bool(strategy_cfg.TRADE_RECOVERY_DCA_ENABLED),
         'recovery_dca_max_count': strategy_cfg.TRADE_RECOVERY_DCA_MAX_COUNT,
+        # 정밀 매수조건 설정(브로커 단위 — mode 구분 없음). 화면에서 조건별 on/off·파라미터를 수정한다.
+        'conditions': get_trade_condition_settings(broker.broker_name),
+        'condition_check_interval_sec': strategy_settings['condition_check_interval_sec'],
     }
 
 
