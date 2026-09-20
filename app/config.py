@@ -132,6 +132,27 @@ class Config:
     TRADE_TRAILING_TP_FLOOR_PCT = 2.0       # 감시 중 현재 수익률이 이 값 이하로 내려오면 즉시 매도
                                             # (단 수익 구간일 때만 — 손실로 돌아섰으면 기존 손절/물타기 흐름)
 
+    # ── 회복형 분할 물타기(recovery DCA) — docs/auto-trade-recovery-dca.md
+    # 깊은 하락에서 소액으로 나눠 물타고, 새 평단 조금 위에서 소폭 익절로 빠져나오는 걸 반복하는
+    # 청산 모드. 켜면 이 포지션들에 대해 트레일링 손절(TRADE_STOP_LOSS_PCT)을 쓰지 않고 아래
+    # 파라미터로만 판단한다(app/core/trade_strategy.py의 evaluate_exits 참고).
+    # 기본값은 꺼짐 — 켜기 전까지 기존 동작은 전혀 바뀌지 않는다.
+    TRADE_RECOVERY_DCA_ENABLED = False       # 회복형 모드 on/off (꺼져 있으면 기존 트레일링 손절/물타기 로직 그대로)
+    TRADE_RECOVERY_DCA_TRIGGER_PCT = 20.0    # 평단 대비 이 % 이상 하락하면 물타기 후보(기준은 항상 "현재 평단")
+    TRADE_RECOVERY_DCA_AMOUNT_KRW = 50_000   # 1회 물타기 금액(소액). 최초 매수금액보다 작게 두는 게 취지에 맞음
+    TRADE_RECOVERY_DCA_COOLDOWN_MIN = 60     # 직전 물타기(없으면 최초 진입)로부터 최소 경과 시간(분) — "시간이 조금 지나서"
+    TRADE_RECOVERY_TAKE_PROFIT_PCT = 5.0     # 평단 대비 이 % 이상이면 전량 매도(반등 익절). 기존 익절 기준보다 낮게 둠
+    TRADE_RECOVERY_DCA_MAX_COUNT = 3         # 포지션당 회복형 물타기 최대 횟수(기존 dca_count와 별개로 셈)
+    TRADE_RECOVERY_MAX_INVESTED_KRW = 250_000  # 포지션당 총 투입액(매수 누적액) 상한 — 넘기는 물타기는 실행 안 함.
+                                               # "우하향 종목에 계속 사들이는" 최악의 경우 손실 원금을 여기서 끊는다.
+    TRADE_RECOVERY_TIME_STOP_DAYS = 7        # 물타기 상한 소진 후 이 일수가 지나도 익절 못 하면 전량 정리(0=비활성).
+                                             # "+5% 반등이 영영 안 오는 종목"에 자본이 무기한 묶이는 걸 막는 유일한 출구.
+    TRADE_RECOVERY_PARTIAL_STOP_PCT = 30.0   # 물타기를 더 못 하게 된 뒤, 평단 대비 이 % 이상 하락하면 보유량 일부 매도(0=비활성)
+    TRADE_RECOVERY_PARTIAL_STOP_RATIO = 20.0 # 위 조건에서 한 번에 덜어낼 보유 수량 비율(%)
+    TRADE_RECOVERY_PARTIAL_STOP_COOLDOWN_MIN = 360  # 소액 손절 반복 최소 간격(분)
+    TRADE_MIN_ORDER_KRW = 5_000              # 거래소 최소 주문금액 — 부분 매도 금액이 이 밑이면 쪼개지 말고 전량 매도한다
+                                             # (업비트 실주문 검증값과 동일: app/core/brokers/upbit_live_broker.py)
+
     # 매매 성과 화면(/auto-trade/performance)의 수수료 추정용 요율. trade_order_log의 pnl_krw는
     # 체결가 단순 차액이라 수수료·세금이 빠져 있고, 원본에 실제 부과액이 없어서 이 요율로 추정치만
     # 계산한다(화면에 요율을 같이 표시해 추정임을 밝힘). 매매 판단에는 전혀 쓰이지 않는 표시 전용 값이라

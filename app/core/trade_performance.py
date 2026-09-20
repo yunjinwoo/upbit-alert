@@ -81,6 +81,17 @@ def normalize_exit_reason(reason: Optional[str]) -> str:
     """SELL reason을 청산 사유로 정규화한다. reason에는 수치가 같이 들어있어서
     ('take_profit(12.34%)') 앞부분만 떼어 묶는다."""
     text = (reason or '').strip()
+    # 회복형 분할 물타기(docs/auto-trade-recovery-dca.md)의 청산 사유를 먼저 본다 —
+    # recovery_take_profit이 take_profit으로 시작하지 않아 순서 문제는 없지만, 이 모드의 청산은
+    # 성격이 달라서(소폭 반등 익절 / 일부만 덜어내는 손절 / 시간 정리) 따로 묶어야 화면에서
+    # "회복형이 실제로 통했는지"를 볼 수 있다. 접두사가 긴 것부터 검사한다.
+    if text.startswith('recovery_take_profit'):
+        return 'recovery_take_profit'
+    if text.startswith('recovery_partial_stop'):
+        # recovery_partial_stop_all(쪼갤 수 없어 전량)도 같은 소액 손절로 묶는다
+        return 'recovery_partial_stop'
+    if text.startswith('recovery_time_stop'):
+        return 'recovery_time_stop'
     if text.startswith('take_profit'):
         return 'take_profit'
     if text.startswith('stop_loss'):
@@ -94,6 +105,27 @@ def normalize_exit_reason(reason: Optional[str]) -> str:
     return '기타'
 
 
+QTY_EPSILON = 1e-9  # 부동소수 오차로 "남은 수량 0"이 0에 아주 근접한 양수로 남는 걸 흡수
+
+
+def _add_buy_qty(cycle: dict, qty) -> None:
+    """매수 체결 수량을 사이클의 보유 수량에 더한다. qty가 비어 있으면(실거래 체결 확인 지연으로
+    수량 없이 접수만 기록된 행) 그 사이클의 수량 추적을 포기 표시한다 — 분할청산 판정을 못 하므로
+    첫 매도에서 닫는 예전 동작으로 되돌린다."""
+    if qty is None:
+        cycle['_qty_known'] = False
+        return
+    cycle['_open_qty'] += float(qty)
+
+
+def _strip_internal_state(cycles: List[dict]) -> None:
+    """분할청산 판정에만 쓰인 내부 키(_open_qty/_qty_known/_sell_count)를 반환 전에 제거한다 —
+    화면/집계 쪽에 내부 상태가 새어 나가지 않게."""
+    for cycle in cycles:
+        for key in ('_open_qty', '_qty_known', '_sell_count'):
+            cycle.pop(key, None)
+
+
 def build_trade_cycles(rows: List[dict]) -> List[dict]:
     """체결 행(BUY/DCA_BUY/SELL)을 종목별로 훑어 매매 사이클 리스트를 만든다. 입력은 시간순(id 오름차순)
     정렬돼 있다고 가정한다(db_manager.get_trade_fill_rows가 그렇게 준다).
@@ -102,7 +134,12 @@ def build_trade_cycles(rows: List[dict]) -> List[dict]:
       (evaluate_entries가 보유 중인 종목은 SKIP하므로 정상 동작에선 안 생기지만, 수동 강제매수로는
       생길 수 있어 사이클을 쪼개지 않고 한 포지션으로 본다).
     - DCA_BUY: 새 사이클을 열지 않고 열린 사이클의 물타기 횟수/금액에 더한다.
-    - SELL: 열린 사이클을 닫는다. 현재 매매 로직은 전량매도라 분할청산은 고려하지 않는다.
+    - SELL: 보유 수량이 남지 않으면 열린 사이클을 닫고, 일부만 팔아 수량이 남으면 사이클을 열어둔 채
+      실현손익·매도금액만 누적한다(회복형 분할 물타기의 소액 손절이 분할청산을 만든다 —
+      docs/auto-trade-recovery-dca.md). 매도마다 사이클을 닫아버리면 아직 들고 있는 포지션이 청산된
+      것으로 집계되고, 나중에 실제로 전량 청산될 때는 짝이 되는 BUY가 없어 진입 신호를 잃는다.
+      수량을 못 믿을 때(체결 확인 지연으로 qty가 빈 행이 섞인 경우)는 예전처럼 첫 매도에서 닫는다 —
+      남은 수량을 알 수 없으니 사이클이 영영 안 닫히는 쪽보다 안전하다.
       열린 사이클이 없으면 진입 신호 UNKNOWN_SIGNAL인 "청산만 있는" 사이클로 남긴다.
 
     반환된 사이클의 closed=False는 아직 청산되지 않은(보유 중) 포지션이다 — 실현손익 집계에선 빠지고
@@ -129,7 +166,10 @@ def build_trade_cycles(rows: List[dict]) -> List[dict]:
                 'exit_amount_krw': 0.0, 'exit_reason': None, 'exit_kind': None,
                 'pnl_krw': None, 'pnl_pct': None, 'holding_hours': None,
                 'closed': False,
+                # 분할청산 판정용 내부 상태 — 반환 전에 _strip_internal_state()가 지운다
+                '_open_qty': 0.0, '_qty_known': True, '_sell_count': 0,
             }
+            _add_buy_qty(cycle, row.get('qty'))
             open_cycles[ticker] = cycle
             cycles.append(cycle)
             continue
@@ -151,38 +191,74 @@ def build_trade_cycles(rows: List[dict]) -> List[dict]:
                     'exit_amount_krw': 0.0, 'exit_reason': None, 'exit_kind': None,
                     'pnl_krw': None, 'pnl_pct': None, 'holding_hours': None,
                     'closed': False,
+                    # 분할청산 판정용 내부 상태 — 반환 전에 _strip_internal_state()가 지운다
+                    '_open_qty': 0.0, '_qty_known': True, '_sell_count': 0,
                 }
                 open_cycles[ticker] = cycle
                 cycles.append(cycle)
             cycle['buy_amount_krw'] += amount
             cycle['add_count'] += 1
+            _add_buy_qty(cycle, row.get('qty'))
             continue
 
         if decision == 'SELL':
-            cycle = open_cycles.pop(ticker, None)
+            cycle = open_cycles.get(ticker)
             if cycle is None:
                 cycle = {
                     'ticker': ticker,
                     'entry_at': None, 'entry_price': None, 'entry_reason': None,
                     'entry_signal': UNKNOWN_SIGNAL, 'is_precision': False,
                     'buy_amount_krw': 0.0, 'add_count': 0,
+                    'exit_amount_krw': 0.0, 'exit_qty': 0.0,
+                    'pnl_krw': None, '_open_qty': 0.0, '_qty_known': False, '_sell_count': 0,
                 }
                 cycles.append(cycle)
+
+            sell_qty = row.get('qty')
+            cycle['_sell_count'] += 1
+            if sell_qty is None:
+                # 수량 없이 접수만 기록된 매도 — 얼마가 남았는지 알 수 없으니 추적을 포기하고
+                # 이 매도에서 사이클을 닫는다(안 그러면 사이클이 영영 안 닫힌다).
+                cycle['_qty_known'] = False
+            elif cycle['_qty_known']:
+                cycle['_open_qty'] -= float(sell_qty)
+
+            # 매도는 여러 번 나뉠 수 있으므로 금액/수량/실현손익은 누적한다. 시각·가격·사유는
+            # 마지막 매도의 값을 남긴다(사이클을 대표하는 청산 사유는 포지션을 실제로 끝낸 매도).
             cycle['exit_at'] = row.get('created_at')
             cycle['exit_price'] = row.get('price')
-            cycle['exit_qty'] = row.get('qty')
-            cycle['exit_amount_krw'] = amount
+            cycle['exit_qty'] = (cycle.get('exit_qty') or 0.0) + float(sell_qty or 0)
+            cycle['exit_amount_krw'] = (cycle.get('exit_amount_krw') or 0.0) + amount
             cycle['exit_reason'] = row.get('reason')
             cycle['exit_kind'] = normalize_exit_reason(row.get('reason'))
-            cycle['pnl_krw'] = row.get('pnl_krw')
-            cycle['pnl_pct'] = row.get('pnl_pct')
+            row_pnl = row.get('pnl_krw')
+            if row_pnl is not None:
+                cycle['pnl_krw'] = float(cycle['pnl_krw'] or 0.0) + float(row_pnl)
+
+            # 수량을 못 믿으면(qty 없는 행이 섞였거나 짝 없는 매도) 예전처럼 첫 매도에서 닫는다.
+            still_holding = cycle['_qty_known'] and cycle['_open_qty'] > QTY_EPSILON
+            if still_holding:
+                continue  # 일부만 팔았고 아직 보유 중 — 사이클을 열어둔 채 다음 매도를 기다린다
+
+            open_cycles.pop(ticker, None)
             cycle['closed'] = True
+            if cycle['_sell_count'] > 1:
+                # 분할청산이면 마지막 매도 1건의 손익률은 사이클 전체를 대표하지 못한다 —
+                # 누적 실현손익을 총 매수금액으로 나눠 다시 계산한다.
+                buy_amount = cycle.get('buy_amount_krw') or 0.0
+                cycle['pnl_pct'] = (
+                    cycle['pnl_krw'] / buy_amount * 100
+                    if buy_amount and cycle['pnl_krw'] is not None else None
+                )
+            else:
+                cycle['pnl_pct'] = row.get('pnl_pct')
 
             entry_ts, exit_ts = _parse_ts(cycle.get('entry_at')), _parse_ts(cycle['exit_at'])
             cycle['holding_hours'] = (
                 (exit_ts - entry_ts).total_seconds() / 3600 if entry_ts and exit_ts else None
             )
 
+    _strip_internal_state(cycles)
     return cycles
 
 

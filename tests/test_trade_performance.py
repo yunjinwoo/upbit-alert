@@ -17,6 +17,7 @@ from app.core.trade_performance import (
     summarize,
     apply_fee_estimate,
     filter_by_exit_date,
+    closed_cycles,
     UNKNOWN_SIGNAL,
 )
 
@@ -126,5 +127,67 @@ check('일별 누적 손익 마지막 값', perf_all['daily'][-1]['cum_pnl_krw']
 check('물타기 구분 그룹', sorted(r['key'] for r in perf_all['by_dca']), ['물타기 없음', '물타기 있음'])
 check('사이클 목록은 최신 청산순', [c['ticker'] for c in perf_all['cycles']],
       ['KRW-SOL', 'KRW-ETH', 'KRW-BTC'])
+
+print("\n--- [테스트] 회복형 청산 사유 정규화 ---")
+check('회복형 반등 익절', normalize_exit_reason('recovery_take_profit(5.00% >= 5.00%)'), 'recovery_take_profit')
+check('소액 손절', normalize_exit_reason('recovery_partial_stop(평단대비 -30.00%, 보유량 20%)'),
+      'recovery_partial_stop')
+check('쪼갤 수 없어 전량 매도한 소액 손절도 같은 그룹',
+      normalize_exit_reason('recovery_partial_stop_all(평단대비 -35.00%)'), 'recovery_partial_stop')
+check('시간 하드스톱', normalize_exit_reason('recovery_time_stop(상한 소진 후 7.2일 경과)'),
+      'recovery_time_stop')
+check('기존 익절은 그대로', normalize_exit_reason('take_profit(12.34%)'), 'take_profit')
+
+print("\n--- [테스트] 분할청산(회복형 소액 손절) ---")
+# 회복형 분할 물타기의 소액 손절은 보유량 일부만 판다(docs/auto-trade-recovery-dca.md).
+# 그 매도에서 사이클을 닫아버리면 아직 들고 있는 포지션이 청산된 것으로 집계되고, 나중에 실제로
+# 전량 청산될 때는 짝이 되는 BUY가 없어 진입 신호를 잃는다.
+partial_rows = [
+    row('2026-09-10 09:00:00', 'KRW-XRP', 'BUY', 'breakout_1d', price=1000, qty=100, amount_krw=100_000),
+    row('2026-09-11 09:00:00', 'KRW-XRP', 'SELL', 'recovery_partial_stop(평단대비 -30.00%, 보유량 20%)',
+        price=700, qty=20, amount_krw=14_000, pnl_krw=-6_000, pnl_pct=-30.0),
+]
+partial_cycles = build_trade_cycles(partial_rows)
+check('일부만 팔면 사이클 1개로 유지', len(partial_cycles), 1)
+check('일부만 팔았으면 아직 미청산', partial_cycles[0]['closed'], False)
+check('미청산이라 실현손익 집계에서 빠짐', len(closed_cycles(partial_cycles)), 0)
+
+# 두 번째 소액 손절 뒤 남은 전량이 익절로 빠져나오는 흐름
+partial_rows += [
+    row('2026-09-12 09:00:00', 'KRW-XRP', 'SELL', 'recovery_partial_stop(평단대비 -31.00%, 보유량 20%)',
+        price=690, qty=16, amount_krw=11_040, pnl_krw=-4_960, pnl_pct=-31.0),
+    row('2026-09-13 09:00:00', 'KRW-XRP', 'SELL', 'recovery_take_profit(5.00% >= 5.00%)',
+        price=1050, qty=64, amount_krw=67_200, pnl_krw=3_200, pnl_pct=5.0),
+]
+closed_partial = build_trade_cycles(partial_rows)
+check('전량 털리면 사이클 1개로 닫힘', len(closed_partial), 1)
+cycle = closed_partial[0]
+check('닫힘', cycle['closed'], True)
+check('진입 신호 유지(짝 없는 매도로 새지 않음)', cycle['entry_signal'], 'breakout_1d')
+check('청산 사유는 포지션을 끝낸 마지막 매도', cycle['exit_kind'], 'recovery_take_profit')
+check('매도 수량 누적', cycle['exit_qty'], 100.0)
+check('매도 금액 누적', cycle['exit_amount_krw'], 14_000 + 11_040 + 67_200)
+check('실현손익 누적', cycle['pnl_krw'], -6_000 - 4_960 + 3_200)
+check('분할청산 손익률은 누적 손익 / 총 매수금액', cycle['pnl_pct'], -7.76)
+check('내부 추적 상태는 밖으로 안 나감',
+      [k for k in cycle if k.startswith('_')], [])
+
+# 전량 매도(기존 동작)는 그대로 — 마지막 매도 1건의 손익률을 그대로 쓴다
+single_rows = [
+    row('2026-09-14 09:00:00', 'KRW-DOGE', 'BUY', 'breakout_4h', price=100, qty=1000, amount_krw=100_000),
+    row('2026-09-15 09:00:00', 'KRW-DOGE', 'SELL', 'take_profit(10.00%)',
+        price=110, qty=1000, amount_krw=110_000, pnl_krw=10_000, pnl_pct=10.0),
+]
+single = build_trade_cycles(single_rows)[0]
+check('전량 매도는 한 번에 닫힘', single['closed'], True)
+check('전량 매도 손익률은 매도 행 값 그대로', single['pnl_pct'], 10.0)
+
+# 수량 없이 접수만 기록된 매도(실거래 체결 확인 지연)는 남은 수량을 알 수 없으므로 거기서 닫는다 —
+# 안 닫으면 사이클이 영영 열린 채로 남는다
+no_qty_rows = [
+    row('2026-09-16 09:00:00', 'KRW-ADA', 'BUY', 'breakout_4h', price=500, qty=200, amount_krw=100_000),
+    row('2026-09-17 09:00:00', 'KRW-ADA', 'SELL', 'take_profit(10.00%)', amount_krw=110_000, pnl_krw=10_000),
+]
+check('수량 없는 매도도 사이클을 닫는다', build_trade_cycles(no_qty_rows)[0]['closed'], True)
 
 print("\n✅ 매매 성과 집계 테스트 전부 통과")

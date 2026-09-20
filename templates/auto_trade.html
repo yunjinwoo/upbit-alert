@@ -76,6 +76,8 @@
         .status-dca_pending { background: #dbeafe; color: #1d4ed8; }
         .status-trailing_tp_armed { background: #dcfce7; color: #15803d; }
         .status-dca_done { background: #f3e8ff; color: #7e22ce; }
+        .status-recovery_dca_pending { background: #e0f2fe; color: #0369a1; }
+        .status-recovery_capped { background: #ffedd5; color: #9a3412; }
         .signal-badge { font-size: 0.68rem; font-weight: 700; padding: 2px 7px; border-radius: 10px; white-space: nowrap; display: inline-block; margin: 1px; }
         .signal-badge-warn { background: #fee2e2; color: #b91c1c; }
         .signal-badge-mild { background: #fef3c7; color: #92400e; }
@@ -263,6 +265,54 @@
                     <input type="number" id="setTrailingTpFloor" class="form-control form-control-sm" style="width:110px" min="0.1" step="0.1">
                 </div>
             </div>
+            <div class="settings-group">
+                <div class="settings-group-label">회복형 분할 물타기</div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">
+                        <input type="checkbox" id="setRecoveryEnabled" style="margin-right:4px">사용
+                    </label>
+                </div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">물타기 트리거(평단대비 -%)</label>
+                    <input type="number" id="setRecoveryTrigger" class="form-control form-control-sm" style="width:120px" min="0.1" step="0.5">
+                </div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">1회 물타기 금액(원)</label>
+                    <input type="number" id="setRecoveryAmount" class="form-control form-control-sm" style="width:130px" min="5000" step="5000">
+                </div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">물타기 쿨다운(분)</label>
+                    <input type="number" id="setRecoveryCooldown" class="form-control form-control-sm" style="width:110px" min="0" step="10">
+                </div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">반등 익절(평단대비 +%)</label>
+                    <input type="number" id="setRecoveryTakeProfit" class="form-control form-control-sm" style="width:120px" min="0.1" step="0.5">
+                </div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">물타기 최대 횟수</label>
+                    <input type="number" id="setRecoveryMaxCount" class="form-control form-control-sm" style="width:110px" min="0" step="1">
+                </div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">총 투입액 상한(원)</label>
+                    <input type="number" id="setRecoveryMaxInvested" class="form-control form-control-sm" style="width:140px" min="5000" step="10000">
+                </div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">시간 하드스톱(일, 0=없음)</label>
+                    <input type="number" id="setRecoveryTimeStopDays" class="form-control form-control-sm" style="width:130px" min="0" step="1">
+                </div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">소액 손절 기준(평단대비 -%, 0=없음)</label>
+                    <input type="number" id="setRecoveryPartialPct" class="form-control form-control-sm" style="width:160px" min="0" step="0.5">
+                </div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">소액 손절 비율(보유량 %)</label>
+                    <input type="number" id="setRecoveryPartialRatio" class="form-control form-control-sm" style="width:140px" min="0" max="100" step="5">
+                </div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">소액 손절 간격(분)</label>
+                    <input type="number" id="setRecoveryPartialCooldown" class="form-control form-control-sm" style="width:120px" min="0" step="30">
+                </div>
+            </div>
             <div class="d-flex align-items-center gap-2 pb-1">
                 <button class="btn-search" onclick="saveStrategySettings()">저장</button>
                 <span id="settingsSavedMsg" class="text-muted" style="font-size:0.76rem"></span>
@@ -289,7 +339,19 @@
             확정합니다(예: 발동 3% / 매도 2% → 3%를 찍었다가 2%로 내려오면 매도). 고점 수익률은 트레일링
             손절이 쓰는 "보유 중 최고가" 기준이고, 되돌아왔는지는 <b>매 사이클 새로 조회한 현재가</b>로
             판단합니다. <b>수익 구간일 때만 매도</b>하므로, 사이클 사이에 급락해 이미 손실이면 이 조건으로는
-            팔지 않고 기존 손절·물타기 흐름을 그대로 탑니다. 기본은 꺼짐.
+            팔지 않고 기존 손절·물타기 흐름을 그대로 탑니다. 기본은 꺼짐이고, 아래 <b>회복형 분할 물타기</b>를
+            켠 경우에는 그 모드가 청산 판단 전체를 대신하므로 이 조건은 동작하지 않습니다.
+            <br>* <b>회복형 분할 물타기</b>(기본 꺼짐): 켜면 <b>트레일링 손절을 쓰지 않고</b> 이 설정만으로
+            판단합니다 — 평단 대비 <b>-트리거%</b>까지 빠지면 쿨다운을 두고 <b>1회 물타기 금액</b>만큼 소액으로
+            나눠 사서 평단을 낮추고, 새 평단 대비 <b>+반등 익절%</b>에서 전량 매도하는 걸 반복합니다.
+            물타기는 <b>최대 횟수</b>와 <b>총 투입액 상한</b> 중 먼저 걸리는 쪽에서 멈춥니다(그 뒤로는 반등 대기).
+            상한을 다 쓴 뒤에만 <b>소액 손절</b>(평단 대비 -기준%에서 보유량의 일부만 매도, 설정한 간격으로 반복)과
+            <b>시간 하드스톱</b>(상한 소진 후 이 일수가 지나도 손실이면 전량 정리)이 동작합니다. 물타기가 가능한
+            구간에서는 소액 손절이 걸리지 않습니다 — 같은 구간에서 사고 파는 게 겹치지 않게 한 것.
+            RSI 매도는 이 모드에서 <b>수익 구간에서만</b> 동작합니다(손실 구간에서 RSI로 팔면 결국 큰 손절이라).
+            켜기 전에 <b>총 투입액 상한</b>이 "1종목당 매수금액 + 1회 물타기 금액"보다 큰지 확인하세요 —
+            작으면 처음부터 물타기 여력이 없는 상태가 됩니다. 자세한 설계는
+            <code>docs/auto-trade-recovery-dca.md</code>.
         </div>
     </div>
 
@@ -537,11 +599,25 @@
         return `<a href="${upbitUrl(ticker)}" target="_blank" rel="noopener" style="color:inherit; text-decoration:none" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${label}</a>`;
     }
 
+    // 회복형 분할 물타기 모드가 켜져 있으면 물타기 횟수를 세는 카운터 자체가 달라지고(recovery_dca_count)
+    // 상태 뱃지도 회복형 것으로 바뀐다. 표를 그릴 때마다 인자로 들고 다니지 않고 요약 응답에서 한 번
+    // 받아 여기 보관한다 (docs/auto-trade-recovery-dca.md).
+    let LIVE_RECOVERY = { enabled: false, maxCount: 0 };
+
     function liveStatusBadge(row, dcaMaxCount) {
         if (!row.held) {
             return row.approved
                 ? '<span class="decision-badge decision-SKIP">미보유(매수판단 대상)</span>'
                 : '<span class="empty-val">미승인</span>';
+        }
+        if (LIVE_RECOVERY.enabled) {
+            const n = row.recovery_dca_count || 0;
+            const max = LIVE_RECOVERY.maxCount;
+            if (row.next_status === 'recovery_capped') return `<span class="status-badge status-recovery_capped">🟠 상한 소진(${n}/${max}) — 반등 대기</span>`;
+            if (row.next_status === 'recovery_dca_pending') return `<span class="status-badge status-recovery_dca_pending">🔵 회복형 물타기 대기(${n}/${max})</span>`;
+            if (row.next_action === 'SELL') return '<span class="status-badge status-stop_pending">🔴 다음 사이클 매도 예정</span>';
+            if (row.next_action === 'DCA_BUY') return `<span class="status-badge status-recovery_dca_pending">🔵 다음 사이클 회복형 물타기 예정(${n + 1}/${max})</span>`;
+            return `<span class="decision-badge decision-HOLD">정상 보유중(${n}/${max})</span>`;
         }
         const dcaCount = row.dca_count || 0;
         if (dcaCount >= dcaMaxCount) return `<span class="status-badge status-dca_done">🟣 물타기 ${dcaCount}/${dcaMaxCount} 완료</span>`;
@@ -607,11 +683,15 @@
         const held = !!row.held;
         const dcaCount = row.dca_count || 0;
         const dcaExhausted = dcaCount >= dcaMaxCount;
-        const dcaCheckbox = held
-            ? `<input type="checkbox" ${row.dca_enabled ? 'checked' : ''} ${dcaExhausted ? 'disabled' : ''}
+        const dcaCheckbox = !held
+            ? '<span class="empty-val">—</span>'
+            : LIVE_RECOVERY.enabled
+                // 회복형 모드에서는 물타기 여부가 이 체크박스가 아니라 회복형 파라미터(트리거/쿨다운/상한)로
+                // 결정된다 — 체크 상태를 그대로 보여주면 "껐으니 안 물탄다"고 오해하므로 횟수만 표시한다.
+                ? `<span title="회복형 분할 물타기 모드에서는 종목별 체크박스와 무관하게 회복형 파라미터로 판단합니다">회복형 ${row.recovery_dca_count || 0}/${LIVE_RECOVERY.maxCount}회</span>`
+                : `<input type="checkbox" ${row.dca_enabled ? 'checked' : ''} ${dcaExhausted ? 'disabled' : ''}
                    title="${dcaExhausted ? `이미 최대 ${dcaMaxCount}회 물타기를 완료해 더 켤 수 없습니다` : `체크하면 손절 직전 물타기 트리거까지 대기 후 실제 추가매수 (현재 ${dcaCount}/${dcaMaxCount}회)`}"
-                   onchange="toggleLiveDca('${ticker}', this)">`
-            : '<span class="empty-val">—</span>';
+                   onchange="toggleLiveDca('${ticker}', this)">`;
         // 종목별 즉시 매수/매도 — 위쪽 "⚡ 실거래 강제매수"(티커 직접 입력)와 같은 API를 쓰되, 이미
         // 표에 떠 있는 종목이면 타이핑 없이 바로 누를 수 있게 한 것. 매도는 보유 중일 때만 노출한다
         // (미보유 종목은 팔 수량이 없음).
@@ -657,6 +737,10 @@
 
             const dcaMaxCount = json.dca_max_count ?? 1;  // ??만 사용 — 0(물타기 완전 비활성화)은 유효한
                                                             // 값이므로 ||로 1로 뭉개면 안 됨(0/0회를 1회 가능처럼 표시하는 버그)
+            LIVE_RECOVERY = {
+                enabled: !!json.recovery_dca_enabled,
+                maxCount: json.recovery_dca_max_count ?? 0,
+            };
             const perPositionCap = json.per_position_cap_krw ?? null;
             const rows = [];
             for (const c of (json.candidates || [])) {
@@ -1105,7 +1189,7 @@
         }
     }
 
-    const SETTINGS_INPUT_IDS = ['setMaxPosition', 'setMaxPositions', 'setStopLoss', 'setTakeProfit', 'setLoopInterval', 'setStopConfirm', 'setDcaTrigger', 'setDcaMaxCount', 'setPerPositionCap', 'setRsiExitEnabled', 'setRsiExitPeriod', 'setRsiExitOverbought', 'setTrailingTpEnabled', 'setTrailingTpArm', 'setTrailingTpFloor'];
+    const SETTINGS_INPUT_IDS = ['setMaxPosition', 'setMaxPositions', 'setStopLoss', 'setTakeProfit', 'setLoopInterval', 'setStopConfirm', 'setDcaTrigger', 'setDcaMaxCount', 'setPerPositionCap', 'setRsiExitEnabled', 'setRsiExitPeriod', 'setRsiExitOverbought', 'setTrailingTpEnabled', 'setTrailingTpArm', 'setTrailingTpFloor', 'setRecoveryEnabled', 'setRecoveryTrigger', 'setRecoveryAmount', 'setRecoveryCooldown', 'setRecoveryTakeProfit', 'setRecoveryMaxCount', 'setRecoveryMaxInvested', 'setRecoveryTimeStopDays', 'setRecoveryPartialPct', 'setRecoveryPartialRatio', 'setRecoveryPartialCooldown'];
 
     function populateSettingsInputs(settings) {
         // 사용자가 입력창 하나를 타이핑 중인 동안엔 이번 새로고침으로 값을 덮어쓰지 않음
@@ -1125,6 +1209,17 @@
         document.getElementById('setTrailingTpEnabled').checked = !!settings.trailing_tp_enabled;
         document.getElementById('setTrailingTpArm').value = settings.trailing_tp_arm_pct ?? '';
         document.getElementById('setTrailingTpFloor').value = settings.trailing_tp_floor_pct ?? '';
+        document.getElementById('setRecoveryEnabled').checked = !!settings.recovery_dca_enabled;
+        document.getElementById('setRecoveryTrigger').value = settings.recovery_dca_trigger_pct ?? '';
+        document.getElementById('setRecoveryAmount').value = settings.recovery_dca_amount_krw ?? '';
+        document.getElementById('setRecoveryCooldown').value = settings.recovery_dca_cooldown_min ?? '';
+        document.getElementById('setRecoveryTakeProfit').value = settings.recovery_take_profit_pct ?? '';
+        document.getElementById('setRecoveryMaxCount').value = settings.recovery_dca_max_count ?? '';
+        document.getElementById('setRecoveryMaxInvested').value = settings.recovery_max_invested_krw ?? '';
+        document.getElementById('setRecoveryTimeStopDays').value = settings.recovery_time_stop_days ?? '';
+        document.getElementById('setRecoveryPartialPct').value = settings.recovery_partial_stop_pct ?? '';
+        document.getElementById('setRecoveryPartialRatio').value = settings.recovery_partial_stop_ratio ?? '';
+        document.getElementById('setRecoveryPartialCooldown').value = settings.recovery_partial_stop_cooldown_min ?? '';
     }
 
     async function saveStrategySettings() {
@@ -1144,6 +1239,17 @@
             trailing_tp_enabled: document.getElementById('setTrailingTpEnabled').checked,
             trailing_tp_arm_pct: Number(document.getElementById('setTrailingTpArm').value),
             trailing_tp_floor_pct: Number(document.getElementById('setTrailingTpFloor').value),
+            recovery_dca_enabled: document.getElementById('setRecoveryEnabled').checked,
+            recovery_dca_trigger_pct: Number(document.getElementById('setRecoveryTrigger').value),
+            recovery_dca_amount_krw: Number(document.getElementById('setRecoveryAmount').value),
+            recovery_dca_cooldown_min: Number(document.getElementById('setRecoveryCooldown').value),
+            recovery_take_profit_pct: Number(document.getElementById('setRecoveryTakeProfit').value),
+            recovery_dca_max_count: Number(document.getElementById('setRecoveryMaxCount').value),
+            recovery_max_invested_krw: Number(document.getElementById('setRecoveryMaxInvested').value),
+            recovery_time_stop_days: Number(document.getElementById('setRecoveryTimeStopDays').value),
+            recovery_partial_stop_pct: Number(document.getElementById('setRecoveryPartialPct').value),
+            recovery_partial_stop_ratio: Number(document.getElementById('setRecoveryPartialRatio').value),
+            recovery_partial_stop_cooldown_min: Number(document.getElementById('setRecoveryPartialCooldown').value),
         };
         const msg = document.getElementById('settingsSavedMsg');
         msg.textContent = '저장 중...';

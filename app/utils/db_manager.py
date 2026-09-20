@@ -532,6 +532,12 @@ def init_db():
             dca_enabled INTEGER NOT NULL DEFAULT 0,
             dca_used INTEGER NOT NULL DEFAULT 0,
             dca_count INTEGER NOT NULL DEFAULT 0,
+            first_entry_price REAL,
+            total_invested_krw REAL NOT NULL DEFAULT 0,
+            recovery_dca_count INTEGER NOT NULL DEFAULT 0,
+            last_dca_at TEXT,
+            last_partial_stop_at TEXT,
+            recovery_partial_stop_count INTEGER NOT NULL DEFAULT 0,
             UNIQUE(broker, mode, ticker)
         )
     ''')
@@ -599,6 +605,17 @@ def init_db():
             trailing_tp_enabled INTEGER NOT NULL DEFAULT 0,
             trailing_tp_arm_pct REAL NOT NULL DEFAULT 3.0,
             trailing_tp_floor_pct REAL NOT NULL DEFAULT 2.0,
+            recovery_dca_enabled INTEGER NOT NULL DEFAULT 0,
+            recovery_dca_trigger_pct REAL NOT NULL DEFAULT 20.0,
+            recovery_dca_amount_krw REAL NOT NULL DEFAULT 50000,
+            recovery_dca_cooldown_min INTEGER NOT NULL DEFAULT 60,
+            recovery_take_profit_pct REAL NOT NULL DEFAULT 5.0,
+            recovery_dca_max_count INTEGER NOT NULL DEFAULT 3,
+            recovery_max_invested_krw REAL NOT NULL DEFAULT 250000,
+            recovery_time_stop_days INTEGER NOT NULL DEFAULT 7,
+            recovery_partial_stop_pct REAL NOT NULL DEFAULT 30.0,
+            recovery_partial_stop_ratio REAL NOT NULL DEFAULT 20.0,
+            recovery_partial_stop_cooldown_min INTEGER NOT NULL DEFAULT 360,
             updated_at TEXT,
             UNIQUE(broker)
         )
@@ -750,6 +767,32 @@ def init_db():
         'ALTER TABLE coin_screening_daily ADD COLUMN rsi_recent_breakout INTEGER',
         'ALTER TABLE coin_screening_daily ADD COLUMN rsi_recent_breakout_max REAL',
 
+        # 회복형 분할 물타기(recovery DCA) — docs/auto-trade-recovery-dca.md.
+        # 기본값이 전부 "꺼짐/0"이라 이 컬럼이 추가돼도 recovery_dca_enabled를 켜기 전까진 동작이 바뀌지 않는다.
+        # first_entry_price/total_invested_krw: 최초 진입가와 이 포지션에 넣은 매수 누적액(투입 상한 판정용).
+        #   total_invested_krw는 "넣은 돈의 총합"이라 부분 매도로 일부 회수해도 줄지 않는다(보수적으로 상한을 지킴).
+        #   평단×수량과 달리 부분 매도 후에도 값이 유지돼야 해서 별도 컬럼으로 둔다.
+        # recovery_dca_count: 회복형 물타기 횟수 — 기존 dca_count(트레일링 손절 직전 물타기)와 의미가 달라 따로 센다.
+        #   그래서 회복형 모드를 껐다 켜도 서로의 남은 횟수를 잡아먹지 않는다.
+        # last_dca_at/last_partial_stop_at: 쿨다운 판정용 마지막 실행 시각.
+        'ALTER TABLE paper_positions ADD COLUMN first_entry_price REAL',
+        'ALTER TABLE paper_positions ADD COLUMN total_invested_krw REAL NOT NULL DEFAULT 0',
+        'ALTER TABLE paper_positions ADD COLUMN recovery_dca_count INTEGER NOT NULL DEFAULT 0',
+        'ALTER TABLE paper_positions ADD COLUMN last_dca_at TEXT',
+        'ALTER TABLE paper_positions ADD COLUMN last_partial_stop_at TEXT',
+        'ALTER TABLE paper_positions ADD COLUMN recovery_partial_stop_count INTEGER NOT NULL DEFAULT 0',
+        'ALTER TABLE trade_strategy_settings ADD COLUMN recovery_dca_enabled INTEGER NOT NULL DEFAULT 0',
+        'ALTER TABLE trade_strategy_settings ADD COLUMN recovery_dca_trigger_pct REAL NOT NULL DEFAULT 20.0',
+        'ALTER TABLE trade_strategy_settings ADD COLUMN recovery_dca_amount_krw REAL NOT NULL DEFAULT 50000',
+        'ALTER TABLE trade_strategy_settings ADD COLUMN recovery_dca_cooldown_min INTEGER NOT NULL DEFAULT 60',
+        'ALTER TABLE trade_strategy_settings ADD COLUMN recovery_take_profit_pct REAL NOT NULL DEFAULT 5.0',
+        'ALTER TABLE trade_strategy_settings ADD COLUMN recovery_dca_max_count INTEGER NOT NULL DEFAULT 3',
+        'ALTER TABLE trade_strategy_settings ADD COLUMN recovery_max_invested_krw REAL NOT NULL DEFAULT 250000',
+        'ALTER TABLE trade_strategy_settings ADD COLUMN recovery_time_stop_days INTEGER NOT NULL DEFAULT 7',
+        'ALTER TABLE trade_strategy_settings ADD COLUMN recovery_partial_stop_pct REAL NOT NULL DEFAULT 30.0',
+        'ALTER TABLE trade_strategy_settings ADD COLUMN recovery_partial_stop_ratio REAL NOT NULL DEFAULT 20.0',
+        'ALTER TABLE trade_strategy_settings ADD COLUMN recovery_partial_stop_cooldown_min INTEGER NOT NULL DEFAULT 360',
+
         # 매매 성과 화면(/auto-trade/performance)이 체결 행(BUY/DCA_BUY/SELL)만 시간순으로 훑어
         # 매매 사이클을 재구성한다 — trade_order_log는 HOLD/SKIP까지 매 사이클 쌓여 커지므로,
         # 그 대부분을 건너뛰고 체결만 꺼내오도록 인덱스를 둔다(get_trade_fill_rows 참고).
@@ -804,6 +847,17 @@ def init_db():
                 trailing_tp_enabled INTEGER NOT NULL DEFAULT 0,
                 trailing_tp_arm_pct REAL NOT NULL DEFAULT 3.0,
                 trailing_tp_floor_pct REAL NOT NULL DEFAULT 2.0,
+                recovery_dca_enabled INTEGER NOT NULL DEFAULT 0,
+                recovery_dca_trigger_pct REAL NOT NULL DEFAULT 20.0,
+                recovery_dca_amount_krw REAL NOT NULL DEFAULT 50000,
+                recovery_dca_cooldown_min INTEGER NOT NULL DEFAULT 60,
+                recovery_take_profit_pct REAL NOT NULL DEFAULT 5.0,
+                recovery_dca_max_count INTEGER NOT NULL DEFAULT 3,
+                recovery_max_invested_krw REAL NOT NULL DEFAULT 250000,
+                recovery_time_stop_days INTEGER NOT NULL DEFAULT 7,
+                recovery_partial_stop_pct REAL NOT NULL DEFAULT 30.0,
+                recovery_partial_stop_ratio REAL NOT NULL DEFAULT 20.0,
+                recovery_partial_stop_cooldown_min INTEGER NOT NULL DEFAULT 360,
                 updated_at TEXT,
                 UNIQUE(broker)
             )''',
@@ -4121,6 +4175,100 @@ def mark_position_dca_used(broker: str, mode: str, ticker: str, new_peak_price: 
     conn.close()
 
 
+def record_position_entry_cost(broker: str, mode: str, ticker: str, amount_krw: float,
+                               price: float = None) -> bool:
+    """매수(최초 진입/물타기/강제매수)가 체결된 직후 호출 — 회복형 분할 물타기의 투입 상한 판정에 쓰이는
+    누적 투입액(total_invested_krw)에 이번 체결금액을 더하고, 최초 진입가(first_entry_price)가 아직
+    비어 있으면 이번 체결가로 채운다(docs/auto-trade-recovery-dca.md).
+
+    "평단×수량"으로 대신 계산하지 않는 이유: 부분 매도(소액 손절)로 수량이 줄면 평단×수량도 같이
+    줄어드는데, 투입 상한은 "이 포지션에 그동안 넣은 돈의 총합"으로 판정해야 한다(일부 회수했다고
+    상한이 다시 늘어나면 하락장에서 계속 사들이는 걸 막지 못함).
+
+    추적 행이 아직 없으면(실거래 최초 매수 직후 — 행은 _reconcile_live_positions()가 사이클 끝에
+    만든다) 0행이 갱신되고 False를 반환한다. 그 경우는 호출부가 아니라
+    backfill_position_cost_basis()가 잔고 기준 근사값으로 채운다."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('''
+        UPDATE paper_positions
+           SET total_invested_krw = COALESCE(total_invested_krw, 0) + ?,
+               first_entry_price = COALESCE(first_entry_price, ?),
+               updated_at = ?
+         WHERE broker = ? AND mode = ? AND ticker = ?
+    ''', (amount_krw or 0, price, timestamp, broker, mode, ticker))
+    updated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
+
+
+def backfill_position_cost_basis(broker: str, mode: str, ticker: str, qty: float, avg_buy_price: float) -> None:
+    """회복형 물타기 상태값이 비어 있는 추적 행을 실제 잔고 기준 근사값으로 한 번만 채운다.
+
+    대상은 두 경우다: (a) 이 기능이 생기기 전에 사서 계속 보유 중인 종목, (b) 실거래 최초 매수 직후
+    (record_position_entry_cost()가 아직 행이 없어 갱신에 실패한 경우). 둘 다 그동안의 매수 누적액을
+    되짚을 방법이 없으므로 first_entry_price=평단, total_invested_krw=평단×수량으로 근사한다 —
+    아직 부분 매도가 없었다면 이 값은 실제 누적 투입액과 정확히 같다.
+
+    이미 값이 있는 행은 절대 건드리지 않는다(매 사이클 호출되는 _reconcile_live_positions() 경로라,
+    덮어쓰면 물타기로 쌓아온 누적액이 매번 평단×수량으로 되돌아가 상한이 무력화된다)."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('''
+        UPDATE paper_positions
+           SET first_entry_price = COALESCE(first_entry_price, ?),
+               total_invested_krw = CASE WHEN COALESCE(total_invested_krw, 0) <= 0 THEN ?
+                                         ELSE total_invested_krw END,
+               updated_at = ?
+         WHERE broker = ? AND mode = ? AND ticker = ?
+           AND (first_entry_price IS NULL OR COALESCE(total_invested_krw, 0) <= 0)
+    ''', (avg_buy_price, (qty or 0) * (avg_buy_price or 0), timestamp, broker, mode, ticker))
+    conn.commit()
+    conn.close()
+
+
+def mark_recovery_dca_used(broker: str, mode: str, ticker: str, new_peak_price: float) -> None:
+    """회복형 물타기가 체결된 직후 호출 — 횟수(recovery_dca_count)를 1 증가시키고 쿨다운 기준 시각
+    (last_dca_at)을 지금으로 찍는다. 누적 투입액은 record_position_entry_cost()가 따로 더한다.
+
+    기존 물타기 카운터(dca_count)는 건드리지 않는다 — 트레일링 손절 직전 물타기와 회복형 물타기는
+    트리거도 금액도 달라서, 회복형 모드를 껐다 켜도 서로의 남은 횟수를 잡아먹지 않게 분리해 센다.
+    트레일링 추적값(peak_price/below_stop_streak)은 회복형 모드에서 판단에 쓰이지 않지만, 모드를
+    다시 끄면 곧바로 참조되므로 새 평단 기준으로 리셋해둔다(안 하면 모드를 끈 직후 예전 최고가
+    기준으로 즉시 손절 연속확인이 시작된다)."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('''
+        UPDATE paper_positions
+           SET recovery_dca_count = recovery_dca_count + 1,
+               last_dca_at = ?, peak_price = ?, below_stop_streak = 0, updated_at = ?
+         WHERE broker = ? AND mode = ? AND ticker = ?
+    ''', (timestamp, new_peak_price, timestamp, broker, mode, ticker))
+    conn.commit()
+    conn.close()
+
+
+def mark_recovery_partial_stop(broker: str, mode: str, ticker: str) -> None:
+    """회복형 모드의 소액 손절(보유량 일부 매도)이 체결된 직후 호출 — 반복 간격(쿨다운) 기준 시각과
+    누적 횟수를 기록한다. 수량/평단은 브로커(모의는 PaperBroker, 실거래는 _reconcile_live_positions)가
+    반영하므로 여기서는 건드리지 않는다."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('''
+        UPDATE paper_positions
+           SET last_partial_stop_at = ?, recovery_partial_stop_count = recovery_partial_stop_count + 1,
+               updated_at = ?
+         WHERE broker = ? AND mode = ? AND ticker = ?
+    ''', (timestamp, timestamp, broker, mode, ticker))
+    conn.commit()
+    conn.close()
+
+
 def delete_paper_position(broker: str, mode: str, ticker: str):
     """가상 포지션 완전 청산 시 행 삭제."""
     conn = sqlite3.connect(DB_PATH)
@@ -4269,6 +4417,25 @@ def release_trade_cycle_lock(broker: str, mode: str, holder: str) -> None:
         conn.close()
 
 
+def _RECOVERY_SETTING_DEFAULTS() -> dict:
+    """회복형 분할 물타기(recovery DCA) 파라미터의 app/config.py 기본값 — 컬럼/행이 아직 없는
+    DB에서도 get_trade_strategy_settings()가 같은 키 집합을 항상 돌려주도록 한 곳에 모아둔다
+    (docs/auto-trade-recovery-dca.md). 키 순서가 set_trade_strategy_settings()의 컬럼 순서와 같다."""
+    return {
+        'recovery_dca_enabled': Config.TRADE_RECOVERY_DCA_ENABLED,
+        'recovery_dca_trigger_pct': Config.TRADE_RECOVERY_DCA_TRIGGER_PCT,
+        'recovery_dca_amount_krw': Config.TRADE_RECOVERY_DCA_AMOUNT_KRW,
+        'recovery_dca_cooldown_min': Config.TRADE_RECOVERY_DCA_COOLDOWN_MIN,
+        'recovery_take_profit_pct': Config.TRADE_RECOVERY_TAKE_PROFIT_PCT,
+        'recovery_dca_max_count': Config.TRADE_RECOVERY_DCA_MAX_COUNT,
+        'recovery_max_invested_krw': Config.TRADE_RECOVERY_MAX_INVESTED_KRW,
+        'recovery_time_stop_days': Config.TRADE_RECOVERY_TIME_STOP_DAYS,
+        'recovery_partial_stop_pct': Config.TRADE_RECOVERY_PARTIAL_STOP_PCT,
+        'recovery_partial_stop_ratio': Config.TRADE_RECOVERY_PARTIAL_STOP_RATIO,
+        'recovery_partial_stop_cooldown_min': Config.TRADE_RECOVERY_PARTIAL_STOP_COOLDOWN_MIN,
+    }
+
+
 def get_trade_strategy_settings(broker: str = 'upbit') -> dict:
     """매매 전략 파라미터(포지션당 매수금액/최대 동시보유/손절·익절 기준/루프 주기) 조회(브로커별).
     행이 없으면(최초 실행, 대시보드에서 아직 저장한 적 없음) app/config.py의 TRADE_* 기본값을 그대로 반환."""
@@ -4296,6 +4463,7 @@ def get_trade_strategy_settings(broker: str = 'upbit') -> dict:
             'trailing_tp_enabled': Config.TRADE_TRAILING_TP_ENABLED,
             'trailing_tp_arm_pct': Config.TRADE_TRAILING_TP_ARM_PCT,
             'trailing_tp_floor_pct': Config.TRADE_TRAILING_TP_FLOOR_PCT,
+            **_RECOVERY_SETTING_DEFAULTS(),
             'updated_at': None,
         }
     return {
@@ -4315,6 +4483,10 @@ def get_trade_strategy_settings(broker: str = 'upbit') -> dict:
         'trailing_tp_enabled': bool(row['trailing_tp_enabled']) if 'trailing_tp_enabled' in row.keys() else Config.TRADE_TRAILING_TP_ENABLED,
         'trailing_tp_arm_pct': row['trailing_tp_arm_pct'] if 'trailing_tp_arm_pct' in row.keys() else Config.TRADE_TRAILING_TP_ARM_PCT,
         'trailing_tp_floor_pct': row['trailing_tp_floor_pct'] if 'trailing_tp_floor_pct' in row.keys() else Config.TRADE_TRAILING_TP_FLOOR_PCT,
+        **{
+            key: (bool(row[key]) if key == 'recovery_dca_enabled' else row[key]) if key in row.keys() else default
+            for key, default in _RECOVERY_SETTING_DEFAULTS().items()
+        },
         'updated_at': row['updated_at'],
     }
 
@@ -4327,9 +4499,31 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
                                  rsi_exit_enabled: bool = None, rsi_exit_period: int = None,
                                  rsi_exit_overbought: float = None, trailing_tp_enabled: bool = None,
                                  trailing_tp_arm_pct: float = None, trailing_tp_floor_pct: float = None,
+                                 recovery_dca_enabled: bool = None, recovery_dca_trigger_pct: float = None,
+                                 recovery_dca_amount_krw: float = None, recovery_dca_cooldown_min: int = None,
+                                 recovery_take_profit_pct: float = None, recovery_dca_max_count: int = None,
+                                 recovery_max_invested_krw: float = None, recovery_time_stop_days: int = None,
+                                 recovery_partial_stop_pct: float = None, recovery_partial_stop_ratio: float = None,
+                                 recovery_partial_stop_cooldown_min: int = None,
                                  broker: str = 'upbit') -> dict:
-    """매매 전략 파라미터 저장(upsert, 브로커별 1행, 부분 갱신 — None인 필드는 기존값 유지). 저장된 값을 반환."""
+    """매매 전략 파라미터 저장(upsert, 브로커별 1행, 부분 갱신 — None인 필드는 기존값 유지). 저장된 값을 반환.
+
+    recovery_* 는 회복형 분할 물타기(docs/auto-trade-recovery-dca.md) 파라미터 — 컬럼 수가 많아
+    _RECOVERY_SETTING_DEFAULTS()의 키 목록으로 묶어서 merge/INSERT 문을 만든다(나머지는 기존 방식 그대로)."""
     current = get_trade_strategy_settings(broker)
+    recovery_args = {
+        'recovery_dca_enabled': recovery_dca_enabled,
+        'recovery_dca_trigger_pct': recovery_dca_trigger_pct,
+        'recovery_dca_amount_krw': recovery_dca_amount_krw,
+        'recovery_dca_cooldown_min': recovery_dca_cooldown_min,
+        'recovery_take_profit_pct': recovery_take_profit_pct,
+        'recovery_dca_max_count': recovery_dca_max_count,
+        'recovery_max_invested_krw': recovery_max_invested_krw,
+        'recovery_time_stop_days': recovery_time_stop_days,
+        'recovery_partial_stop_pct': recovery_partial_stop_pct,
+        'recovery_partial_stop_ratio': recovery_partial_stop_ratio,
+        'recovery_partial_stop_cooldown_min': recovery_partial_stop_cooldown_min,
+    }
     merged = {
         'max_position_krw': max_position_krw if max_position_krw is not None else current['max_position_krw'],
         'max_concurrent_positions': max_concurrent_positions if max_concurrent_positions is not None else current['max_concurrent_positions'],
@@ -4348,17 +4542,30 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
         'trailing_tp_arm_pct': trailing_tp_arm_pct if trailing_tp_arm_pct is not None else current['trailing_tp_arm_pct'],
         'trailing_tp_floor_pct': trailing_tp_floor_pct if trailing_tp_floor_pct is not None else current['trailing_tp_floor_pct'],
     }
+    for key in _RECOVERY_SETTING_DEFAULTS():
+        merged[key] = recovery_args[key] if recovery_args[key] is not None else current[key]
+
+    recovery_keys = list(_RECOVERY_SETTING_DEFAULTS())
+    recovery_columns = ', '.join(recovery_keys)
+    recovery_placeholders = ', '.join('?' for _ in recovery_keys)
+    recovery_updates = ', '.join(f'{key}=excluded.{key}' for key in recovery_keys)
+    recovery_values = [
+        int(bool(merged[key])) if key == 'recovery_dca_enabled' else merged[key]
+        for key in recovery_keys
+    ]
+
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    cursor.execute('''
+    cursor.execute(f'''
         INSERT INTO trade_strategy_settings
             (broker, max_position_krw, max_concurrent_positions, stop_loss_pct, take_profit_pct,
              loop_interval_sec, stop_loss_confirm_cycles, dca_trigger_pct, dca_max_count,
              condition_check_interval_sec, per_position_cap_krw,
              rsi_exit_enabled, rsi_exit_period, rsi_exit_overbought,
-             trailing_tp_enabled, trailing_tp_arm_pct, trailing_tp_floor_pct, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             trailing_tp_enabled, trailing_tp_arm_pct, trailing_tp_floor_pct,
+             {recovery_columns}, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, {recovery_placeholders}, ?)
         ON CONFLICT(broker) DO UPDATE SET
             max_position_krw=excluded.max_position_krw,
             max_concurrent_positions=excluded.max_concurrent_positions,
@@ -4376,13 +4583,14 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
             trailing_tp_arm_pct=excluded.trailing_tp_arm_pct,
             trailing_tp_floor_pct=excluded.trailing_tp_floor_pct,
             per_position_cap_krw=excluded.per_position_cap_krw,
+            {recovery_updates},
             updated_at=excluded.updated_at
     ''', (broker, merged['max_position_krw'], merged['max_concurrent_positions'], merged['stop_loss_pct'],
           merged['take_profit_pct'], merged['loop_interval_sec'], merged['stop_loss_confirm_cycles'],
           merged['dca_trigger_pct'], merged['dca_max_count'], merged['condition_check_interval_sec'],
           merged['per_position_cap_krw'], int(bool(merged['rsi_exit_enabled'])), merged['rsi_exit_period'],
           merged['rsi_exit_overbought'], int(bool(merged['trailing_tp_enabled'])), merged['trailing_tp_arm_pct'],
-          merged['trailing_tp_floor_pct'], timestamp))
+          merged['trailing_tp_floor_pct'], *recovery_values, timestamp))
     conn.commit()
     conn.close()
     merged['updated_at'] = timestamp

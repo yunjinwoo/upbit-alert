@@ -45,6 +45,10 @@ from app.utils.db_manager import (
     get_trade_strategy_settings,
     update_position_tracking,
     mark_position_dca_used,
+    record_position_entry_cost,
+    backfill_position_cost_basis,
+    mark_recovery_dca_used,
+    mark_recovery_partial_stop,
     get_condition_watch_tickers,
     get_condition_status_map,
     get_trade_condition_settings,
@@ -95,6 +99,21 @@ def _effective_strategy_config() -> SimpleNamespace:
         TRADE_TRAILING_TP_ENABLED=s['trailing_tp_enabled'],
         TRADE_TRAILING_TP_ARM_PCT=s['trailing_tp_arm_pct'],
         TRADE_TRAILING_TP_FLOOR_PCT=s['trailing_tp_floor_pct'],
+        # 회복형 분할 물타기(docs/auto-trade-recovery-dca.md) — 기본값은 꺼짐.
+        # TRADE_MIN_ORDER_KRW는 대시보드에서 바꾸는 값이 아니라 거래소 제약이라 Config에서 직접 읽는다
+        # (부분 매도 금액이 이 밑으로 내려가면 쪼개지 않고 전량 매도).
+        TRADE_RECOVERY_DCA_ENABLED=s['recovery_dca_enabled'],
+        TRADE_RECOVERY_DCA_TRIGGER_PCT=s['recovery_dca_trigger_pct'],
+        TRADE_RECOVERY_DCA_AMOUNT_KRW=s['recovery_dca_amount_krw'],
+        TRADE_RECOVERY_DCA_COOLDOWN_MIN=s['recovery_dca_cooldown_min'],
+        TRADE_RECOVERY_TAKE_PROFIT_PCT=s['recovery_take_profit_pct'],
+        TRADE_RECOVERY_DCA_MAX_COUNT=s['recovery_dca_max_count'],
+        TRADE_RECOVERY_MAX_INVESTED_KRW=s['recovery_max_invested_krw'],
+        TRADE_RECOVERY_TIME_STOP_DAYS=s['recovery_time_stop_days'],
+        TRADE_RECOVERY_PARTIAL_STOP_PCT=s['recovery_partial_stop_pct'],
+        TRADE_RECOVERY_PARTIAL_STOP_RATIO=s['recovery_partial_stop_ratio'],
+        TRADE_RECOVERY_PARTIAL_STOP_COOLDOWN_MIN=s['recovery_partial_stop_cooldown_min'],
+        TRADE_MIN_ORDER_KRW=Config.TRADE_MIN_ORDER_KRW,
     )
 
 
@@ -143,13 +162,39 @@ def _execute(decision, broker):
             cash_balance_after=cash_after, pnl_krw=decision.pnl_krw, pnl_pct=decision.pnl_pct,
         )
 
-        # 물타기 성공 시 1회 제한 표시 + 트레일링 기준점(peak)·연속카운트를 새 평단 시점으로 리셋.
-        # 실패(현금 부족 등)했으면 dca_count를 늘리지 않음 — 다음 사이클에 조건이 유지되면 다시 시도됨.
+        # 매수 성공 시 누적 투입액/최초 진입가 기록 — 회복형 분할 물타기의 투입 상한 판정에 쓰인다
+        # (docs/auto-trade-recovery-dca.md). 회복형 모드를 안 쓰더라도 값은 계속 쌓아둔다 — 나중에 켜는
+        # 순간부터 상한 판정이 맞아야 하므로. 실거래 최초 매수는 아직 추적 행이 없어 갱신에 실패할 수
+        # 있는데(행은 사이클 끝의 _reconcile_live_positions()가 만든다) 그 경우는 거기서 근사값으로 채운다.
+        if decision.action in ('BUY', 'DCA_BUY') and result.success:
+            record_position_entry_cost(
+                broker.broker_name, broker.mode, decision.ticker,
+                amount_krw=result.amount_krw or decision.amount_krw or 0, price=result.price,
+            )
+
+        # 물타기 성공 시 횟수/쿨다운 갱신 + 트레일링 기준점(peak)·연속카운트를 새 평단 시점으로 리셋.
+        # 실패(현금 부족 등)했으면 카운트를 늘리지 않음 — 다음 사이클에 조건이 유지되면 다시 시도됨.
+        # 회복형 물타기는 트리거/금액이 다른 별도 카운터(recovery_dca_count)로 센다.
         if decision.action == 'DCA_BUY' and result.success:
-            mark_position_dca_used(broker.broker_name, broker.mode, decision.ticker, new_peak_price=result.price)
+            if decision.recovery:
+                mark_recovery_dca_used(broker.broker_name, broker.mode, decision.ticker, new_peak_price=result.price)
+            else:
+                mark_position_dca_used(broker.broker_name, broker.mode, decision.ticker, new_peak_price=result.price)
+
+        # 회복형 소액 손절(보유량 일부만 매도)은 매도 후에도 포지션이 남는다 — 반복 간격(쿨다운)을
+        # 재기 위해 실행 시각을 기록한다. 전량 매도는 추적 행 자체가 사라지므로 기록할 필요가 없다.
+        if decision.action == 'SELL' and decision.partial_sell and result.success:
+            mark_recovery_partial_stop(broker.broker_name, broker.mode, decision.ticker)
 
         if result.success and Config.TRADE_SLACK_ALERT:
             side_label = {'BUY': '매수', 'DCA_BUY': '물타기 매수', 'SELL': '매도'}[decision.action]
+            # 회복형 모드는 같은 action이라도 성격이 달라서(소액을 나눠 사고, 일부만 덜어냄) 라벨로 구분한다 —
+            # Slack만 보고도 "큰 손절이 나간 게 아니라 일부만 덜어냈다"는 걸 알 수 있어야 함
+            if decision.recovery:
+                if decision.action == 'DCA_BUY':
+                    side_label = '회복형 물타기 매수'
+                elif decision.action == 'SELL':
+                    side_label = '소액 손절 매도(일부)' if decision.partial_sell else '회복형 매도'
             mode_label = '🔴 실거래' if broker.mode == 'live' else '모의매매'
             # 실거래는 주문 직후 체결 확인이 지연되면 price/qty가 아직 비어있을 수 있다
             # (UpbitLiveBroker._wait_for_fill 타임아웃) — 그 경우 상세 수치 없이 접수 사실만 알린다.
@@ -205,6 +250,12 @@ def _reconcile_live_positions(broker) -> None:
         pos = real_positions.get(ticker)
         if pos:
             upsert_paper_position(broker.broker_name, broker.mode, ticker, pos.qty, pos.avg_buy_price)
+            # 회복형 분할 물타기 상태(최초 진입가/누적 투입액)가 비어 있는 행만 실제 잔고 기준 근사값으로
+            # 채운다 — 이 기능이 생기기 전에 산 종목과, 방금 실거래 최초 매수로 만들어진 행이 대상.
+            # 이미 값이 있으면 건드리지 않는다(docs/auto-trade-recovery-dca.md, 함수 docstring 참고).
+            backfill_position_cost_basis(
+                broker.broker_name, broker.mode, ticker, qty=pos.qty, avg_buy_price=pos.avg_buy_price,
+            )
         else:
             delete_paper_position(broker.broker_name, broker.mode, ticker)
 
@@ -516,11 +567,21 @@ def get_live_dashboard_summary() -> dict:
 
     def _held_extra_fields(ticker, pos):
         tracked = tracking_rows.get(ticker)
+        # 회복형 분할 물타기 상태(횟수/누적 투입액/마지막 실행 시각)도 함께 넘긴다 — 빠지면 아래
+        # evaluate_exits() 미리보기가 "한 번도 안 물탄 포지션"으로 오해해서 실제 사이클과 다른 판단을
+        # 화면에 보여준다(docs/auto-trade-recovery-dca.md).
         return {
             'dca_enabled': bool(tracked['dca_enabled']) if tracked else False,
             'dca_count': tracked['dca_count'] if tracked else 0,
             'peak_price': tracked['peak_price'] if tracked and tracked.get('peak_price') else pos.avg_buy_price,
             'below_stop_streak': tracked['below_stop_streak'] if tracked else 0,
+            'entry_at': tracked.get('entry_at') if tracked else None,
+            'first_entry_price': tracked.get('first_entry_price') if tracked else None,
+            'total_invested_krw': tracked.get('total_invested_krw') if tracked else 0,
+            'recovery_dca_count': tracked.get('recovery_dca_count') if tracked else 0,
+            'last_dca_at': tracked.get('last_dca_at') if tracked else None,
+            'last_partial_stop_at': tracked.get('last_partial_stop_at') if tracked else None,
+            'recovery_partial_stop_count': tracked.get('recovery_partial_stop_count') if tracked else 0,
         }
 
     preview_positions = []
@@ -623,6 +684,10 @@ def get_live_dashboard_summary() -> dict:
         'downside_candidates': downside_candidates,
         'dca_max_count': strategy_cfg.TRADE_DCA_MAX_COUNT,
         'per_position_cap_krw': per_position_cap_krw,
+        # 회복형 분할 물타기가 켜져 있으면 표의 "물타기 n/m" 표시가 세는 카운터 자체가 달라진다
+        # (recovery_dca_count/recovery_dca_max_count) — 화면이 어느 쪽을 보여줄지 정할 수 있게 같이 내려준다.
+        'recovery_dca_enabled': bool(strategy_cfg.TRADE_RECOVERY_DCA_ENABLED),
+        'recovery_dca_max_count': strategy_cfg.TRADE_RECOVERY_DCA_MAX_COUNT,
         # 정밀 매수조건 설정(브로커 단위 — mode 구분 없음). 화면에서 조건별 on/off·파라미터를 수정한다.
         'conditions': get_trade_condition_settings(broker.broker_name),
         'condition_check_interval_sec': strategy_settings['condition_check_interval_sec'],
@@ -685,6 +750,16 @@ def force_buy(ticker: str, broker=None) -> dict:
                 broker.broker_name, broker.mode, ticker,
                 peak_price=updated_pos['avg_buy_price'], below_stop_streak=0,
             )
+
+    # 강제매수로 들어간 돈도 회복형 분할 물타기의 누적 투입액(투입 상한 판정)에 반영해야 한다 —
+    # 여기서 빼먹으면 손으로 평단을 낮춘 만큼이 상한 계산에서 사라져, 상한을 이미 넘겼는데도 자동
+    # 물타기가 계속 허용된다(docs/auto-trade-recovery-dca.md). 회복형 물타기 "횟수"는 늘리지 않는다 —
+    # 수동 매수는 전략이 센 물타기 횟수가 아니므로.
+    if result.success:
+        record_position_entry_cost(
+            broker.broker_name, broker.mode, ticker,
+            amount_krw=result.amount_krw or settings['max_position_krw'], price=result.price,
+        )
 
     final_decision = 'BUY' if result.success else 'SKIP'
     reason = result.message if result.success else f"강제매수(수동) 실패: {result.message}"

@@ -1047,7 +1047,12 @@ def set_trade_strategy_settings_api():
     새 값을 적용하므로 재시작이 필요 없습니다. body는 아래 필드 중 바꿀 것만 보내면 됩니다(부분 갱신):
     {max_position_krw, max_concurrent_positions, stop_loss_pct, take_profit_pct, loop_interval_sec,
      stop_loss_confirm_cycles, dca_trigger_pct, dca_max_count, rsi_exit_enabled, rsi_exit_period,
-     rsi_exit_overbought, trailing_tp_enabled, trailing_tp_arm_pct, trailing_tp_floor_pct}"""
+     rsi_exit_overbought, trailing_tp_enabled, trailing_tp_arm_pct, trailing_tp_floor_pct}
+
+    회복형 분할 물타기(docs/auto-trade-recovery-dca.md) 파라미터도 같은 방식으로 부분 갱신한다:
+    {recovery_dca_enabled, recovery_dca_trigger_pct, recovery_dca_amount_krw, recovery_dca_cooldown_min,
+     recovery_take_profit_pct, recovery_dca_max_count, recovery_max_invested_krw, recovery_time_stop_days,
+     recovery_partial_stop_pct, recovery_partial_stop_ratio, recovery_partial_stop_cooldown_min}"""
     body = request.get_json(silent=True) or {}
     try:
         kwargs = {}
@@ -1136,6 +1141,62 @@ def set_trade_strategy_settings_api():
             _floor = _floor if _floor is not None else _current['trailing_tp_floor_pct']
             if _arm <= _floor:
                 raise ValueError('되돌림 익절 발동 기준(%)은 매도 기준보다 커야 합니다.')
+
+        # ── 회복형 분할 물타기(docs/auto-trade-recovery-dca.md).
+        # 0을 "비활성"으로 쓰는 세 파라미터(시간 하드스톱 일수/소액 손절 기준·비율)만 0을 허용하고,
+        # 나머지는 0 이하를 막는다 — 예: 트리거가 0이면 손실만 나도 즉시 물타기가 걸린다.
+        if 'recovery_dca_enabled' in body:
+            kwargs['recovery_dca_enabled'] = bool(body['recovery_dca_enabled'])
+        if 'recovery_dca_trigger_pct' in body:
+            v = float(body['recovery_dca_trigger_pct'])
+            if v <= 0:
+                raise ValueError('회복형 물타기 트리거(%)는 0보다 커야 합니다.')
+            kwargs['recovery_dca_trigger_pct'] = v
+        if 'recovery_dca_amount_krw' in body:
+            v = float(body['recovery_dca_amount_krw'])
+            if v <= 0:
+                raise ValueError('회복형 1회 물타기 금액은 0보다 커야 합니다.')
+            kwargs['recovery_dca_amount_krw'] = v
+        if 'recovery_dca_cooldown_min' in body:
+            v = int(body['recovery_dca_cooldown_min'])
+            if v < 0:
+                raise ValueError('회복형 물타기 쿨다운(분)은 0 이상이어야 합니다.')
+            kwargs['recovery_dca_cooldown_min'] = v
+        if 'recovery_take_profit_pct' in body:
+            v = float(body['recovery_take_profit_pct'])
+            if v <= 0:
+                raise ValueError('회복형 익절 기준(%)은 0보다 커야 합니다.')
+            kwargs['recovery_take_profit_pct'] = v
+        if 'recovery_dca_max_count' in body:
+            v = int(body['recovery_dca_max_count'])
+            if v < 0:
+                raise ValueError('회복형 물타기 최대 횟수는 0 이상이어야 합니다.')
+            kwargs['recovery_dca_max_count'] = v
+        if 'recovery_max_invested_krw' in body:
+            v = float(body['recovery_max_invested_krw'])
+            if v <= 0:
+                raise ValueError('회복형 포지션당 총 투입액 상한은 0보다 커야 합니다.')
+            kwargs['recovery_max_invested_krw'] = v
+        if 'recovery_time_stop_days' in body:
+            v = int(body['recovery_time_stop_days'])
+            if v < 0:
+                raise ValueError('회복형 시간 하드스톱(일)은 0 이상이어야 합니다(0=비활성).')
+            kwargs['recovery_time_stop_days'] = v
+        if 'recovery_partial_stop_pct' in body:
+            v = float(body['recovery_partial_stop_pct'])
+            if v < 0:
+                raise ValueError('회복형 소액 손절 기준(%)은 0 이상이어야 합니다(0=비활성).')
+            kwargs['recovery_partial_stop_pct'] = v
+        if 'recovery_partial_stop_ratio' in body:
+            v = float(body['recovery_partial_stop_ratio'])
+            if not (0 <= v <= 100):
+                raise ValueError('회복형 소액 손절 비율(%)은 0 이상 100 이하여야 합니다.')
+            kwargs['recovery_partial_stop_ratio'] = v
+        if 'recovery_partial_stop_cooldown_min' in body:
+            v = int(body['recovery_partial_stop_cooldown_min'])
+            if v < 0:
+                raise ValueError('회복형 소액 손절 반복 간격(분)은 0 이상이어야 합니다.')
+            kwargs['recovery_partial_stop_cooldown_min'] = v
 
         settings = set_trade_strategy_settings(**kwargs)
         return jsonify({'status': 'success', 'settings': settings})
