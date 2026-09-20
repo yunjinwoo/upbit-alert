@@ -44,6 +44,7 @@ from app.utils.db_manager import (
     DOWNSIDE_SIGNALS,
     ENTRY_SIGNALS,
     set_trade_strategy_settings,
+    get_trade_strategy_settings,
     set_position_dca_enabled,
     set_candidate_condition_watch,
     set_trade_condition_setting,
@@ -1046,7 +1047,7 @@ def set_trade_strategy_settings_api():
     새 값을 적용하므로 재시작이 필요 없습니다. body는 아래 필드 중 바꿀 것만 보내면 됩니다(부분 갱신):
     {max_position_krw, max_concurrent_positions, stop_loss_pct, take_profit_pct, loop_interval_sec,
      stop_loss_confirm_cycles, dca_trigger_pct, dca_max_count, rsi_exit_enabled, rsi_exit_period,
-     rsi_exit_overbought}
+     rsi_exit_overbought, trailing_tp_enabled, trailing_tp_arm_pct, trailing_tp_floor_pct}
 
     회복형 분할 물타기(docs/auto-trade-recovery-dca.md) 파라미터도 같은 방식으로 부분 갱신한다:
     {recovery_dca_enabled, recovery_dca_trigger_pct, recovery_dca_amount_krw, recovery_dca_cooldown_min,
@@ -1117,6 +1118,29 @@ def set_trade_strategy_settings_api():
             if not (0 < v <= 100):
                 raise ValueError('RSI 과매수 기준은 0보다 크고 100 이하여야 합니다.')
             kwargs['rsi_exit_overbought'] = v
+
+        if 'trailing_tp_enabled' in body:
+            kwargs['trailing_tp_enabled'] = bool(body['trailing_tp_enabled'])
+        if 'trailing_tp_arm_pct' in body:
+            v = float(body['trailing_tp_arm_pct'])
+            if v <= 0:
+                raise ValueError('되돌림 익절 발동 기준(%)은 0보다 커야 합니다.')
+            kwargs['trailing_tp_arm_pct'] = v
+        if 'trailing_tp_floor_pct' in body:
+            v = float(body['trailing_tp_floor_pct'])
+            if v <= 0:
+                raise ValueError('되돌림 익절 매도 기준(%)은 0보다 커야 합니다.')
+            kwargs['trailing_tp_floor_pct'] = v
+        # 발동 기준이 매도 기준보다 높지 않으면 사자마자 팔리는 셈이라 막는다(둘 중 하나만 바꾸는
+        # 부분 갱신도 있으므로 저장될 최종값 기준으로 비교)
+        _arm = kwargs.get('trailing_tp_arm_pct')
+        _floor = kwargs.get('trailing_tp_floor_pct')
+        if _arm is not None or _floor is not None:
+            _current = get_trade_strategy_settings()
+            _arm = _arm if _arm is not None else _current['trailing_tp_arm_pct']
+            _floor = _floor if _floor is not None else _current['trailing_tp_floor_pct']
+            if _arm <= _floor:
+                raise ValueError('되돌림 익절 발동 기준(%)은 매도 기준보다 커야 합니다.')
 
         # ── 회복형 분할 물타기(docs/auto-trade-recovery-dca.md).
         # 0을 "비활성"으로 쓰는 세 파라미터(시간 하드스톱 일수/소액 손절 기준·비율)만 0을 허용하고,
@@ -1424,6 +1448,28 @@ def set_toss_trade_strategy_settings_api():
             if v <= 0:
                 raise ValueError('1종목당 투입원금 상한은 0보다 커야 합니다.')
             kwargs['per_position_cap_krw'] = v
+        if 'trailing_tp_enabled' in body:
+            kwargs['trailing_tp_enabled'] = bool(body['trailing_tp_enabled'])
+        if 'trailing_tp_arm_pct' in body:
+            v = float(body['trailing_tp_arm_pct'])
+            if v <= 0:
+                raise ValueError('되돌림 익절 발동 기준(%)은 0보다 커야 합니다.')
+            kwargs['trailing_tp_arm_pct'] = v
+        if 'trailing_tp_floor_pct' in body:
+            v = float(body['trailing_tp_floor_pct'])
+            if v <= 0:
+                raise ValueError('되돌림 익절 매도 기준(%)은 0보다 커야 합니다.')
+            kwargs['trailing_tp_floor_pct'] = v
+        # 발동 기준이 매도 기준보다 높지 않으면 사자마자 팔리는 셈이라 막는다(둘 중 하나만 바꾸는
+        # 부분 갱신도 있으므로 저장될 최종값 기준으로 비교)
+        _arm = kwargs.get('trailing_tp_arm_pct')
+        _floor = kwargs.get('trailing_tp_floor_pct')
+        if _arm is not None or _floor is not None:
+            _current = get_trade_strategy_settings('toss')
+            _arm = _arm if _arm is not None else _current['trailing_tp_arm_pct']
+            _floor = _floor if _floor is not None else _current['trailing_tp_floor_pct']
+            if _arm <= _floor:
+                raise ValueError('되돌림 익절 발동 기준(%)은 매도 기준보다 커야 합니다.')
 
         settings = set_trade_strategy_settings(broker='toss', **kwargs)
         return jsonify({'status': 'success', 'settings': settings})

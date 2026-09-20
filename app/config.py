@@ -123,6 +123,15 @@ class Config:
     TRADE_RSI_EXIT_OVERBOUGHT = 80.0        # 이 값 이상이면 손익/트레일링과 무관하게 즉시 매도(15분봉 기준,
                                             # app/core/exit_conditions.py)
 
+    # 고점 대비 되돌림 익절(트레일링 익절) — 목표 수익률(TRADE_TAKE_PROFIT_PCT)에 못 닿아도, 수익률이
+    # ARM_PCT 이상 올라갔다가 FLOOR_PCT 이하로 되돌아오면 이익을 확정한다. "3~4%까지 갔다가 2%가 되면
+    # 판다"는 규칙이 이 두 값(3.0/2.0)에 해당. 고점 수익률은 보유 중 최고가(paper_positions.peak_price,
+    # 트레일링 손절이 이미 쓰는 값)로 계산하므로 추가 추적 데이터가 필요 없다.
+    TRADE_TRAILING_TP_ENABLED = False       # on/off (기본 비활성화 — 켜기 전까진 동작 안 바뀜)
+    TRADE_TRAILING_TP_ARM_PCT = 3.0         # 고점 수익률(평단 대비, %)이 이 값 이상이어야 감시 시작
+    TRADE_TRAILING_TP_FLOOR_PCT = 2.0       # 감시 중 현재 수익률이 이 값 이하로 내려오면 즉시 매도
+                                            # (단 수익 구간일 때만 — 손실로 돌아섰으면 기존 손절/물타기 흐름)
+
     # ── 회복형 분할 물타기(recovery DCA) — docs/auto-trade-recovery-dca.md
     # 깊은 하락에서 소액으로 나눠 물타고, 새 평단 조금 위에서 소폭 익절로 빠져나오는 걸 반복하는
     # 청산 모드. 켜면 이 포지션들에 대해 트레일링 손절(TRADE_STOP_LOSS_PCT)을 쓰지 않고 아래

@@ -98,6 +98,8 @@ def normalize_exit_reason(reason: Optional[str]) -> str:
         return 'stop_loss'
     if text.startswith('rsi_exit'):
         return 'rsi_exit'
+    if text.startswith('trailing_take_profit'):
+        return 'trailing_take_profit'
     if text.startswith('강제매도'):
         return MANUAL_SELL_REASON
     return '기타'

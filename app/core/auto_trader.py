@@ -96,6 +96,9 @@ def _effective_strategy_config() -> SimpleNamespace:
         TRADE_RSI_EXIT_ENABLED=s['rsi_exit_enabled'],
         TRADE_RSI_EXIT_PERIOD=s['rsi_exit_period'],
         TRADE_RSI_EXIT_OVERBOUGHT=s['rsi_exit_overbought'],
+        TRADE_TRAILING_TP_ENABLED=s['trailing_tp_enabled'],
+        TRADE_TRAILING_TP_ARM_PCT=s['trailing_tp_arm_pct'],
+        TRADE_TRAILING_TP_FLOOR_PCT=s['trailing_tp_floor_pct'],
         # 회복형 분할 물타기(docs/auto-trade-recovery-dca.md) — 기본값은 꺼짐.
         # TRADE_MIN_ORDER_KRW는 대시보드에서 바꾸는 값이 아니라 거래소 제약이라 Config에서 직접 읽는다
         # (부분 매도 금액이 이 밑으로 내려가면 쪼개지 않고 전량 매도).
