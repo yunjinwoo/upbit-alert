@@ -130,6 +130,7 @@ class Config:
     TRADE_TRAILING_TP_ENABLED = False       # on/off (기본 비활성화 — 켜기 전까진 동작 안 바뀜)
     TRADE_TRAILING_TP_ARM_PCT = 3.0         # 고점 수익률(평단 대비, %)이 이 값 이상이어야 감시 시작
     TRADE_TRAILING_TP_FLOOR_PCT = 2.0       # 감시 중 현재 수익률이 이 값 이하로 내려오면 즉시 매도
+                                            # (단 수익 구간일 때만 — 손실로 돌아섰으면 기존 손절/물타기 흐름)
 
     # 매매 성과 화면(/auto-trade/performance)의 수수료 추정용 요율. trade_order_log의 pnl_krw는
     # 체결가 단순 차액이라 수수료·세금이 빠져 있고, 원본에 실제 부과액이 없어서 이 요율로 추정치만

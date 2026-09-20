@@ -47,8 +47,16 @@ print('--- [테스트] 되돌림 익절 발동 ---')
 d = decide(price=102.0, peak=104.0)  # 고점 +4% 찍고 현재 +2%
 check('고점4%→현재2%면 매도', d.action, 'SELL')
 check('청산 사유 분류', normalize_exit_reason(d.reason), 'trailing_take_profit')
-# 사이클 사이 급락 — 매도 기준보다 더 내려가도 그 사이클에 매도
-check('급락으로 기준 아래면 그래도 매도', decide(price=100.5, peak=104.0).action, 'SELL')
+# 사이클 사이 급락 — 아직 수익 구간이면(+0.5%) 매도 기준보다 더 내려가도 그 사이클에 매도
+check('수익 구간이면 기준 아래여도 매도', decide(price=100.5, peak=104.0).action, 'SELL')
+
+print('\n--- [테스트] 손실이면 되돌림 익절로 팔지 않음 ---')
+d = decide(price=99.0, peak=104.0)  # 고점 +4% → 현재 -1%: 익절이 아니라 기존 흐름으로
+check('-1%면 되돌림 익절 매도 안 함', d.action, 'HOLD')
+d = decide(price=100.0, peak=104.0)  # 정확히 본전(0%)도 익절 아님
+check('본전(0%)도 매도 안 함', d.action, 'HOLD')
+d = decide(price=97.0, peak=104.0)  # 고점대비 -6.7%(손절 조건) → 물타기 대기로 빠짐
+check('손절 구간이면 기존 물타기 흐름', (d.action, d.status), ('HOLD', 'dca_pending'))
 
 print('\n--- [테스트] 발동 안 하는 경우 ---')
 d = decide(price=102.5, peak=104.0)  # 아직 매도 기준(2%) 위
@@ -63,7 +71,8 @@ check('기능 꺼져 있으면 기존 동작 그대로', (d.action, d.status), (
 print('\n--- [테스트] 다른 청산조건과의 우선순위 ---')
 d = decide(price=110.0, peak=104.0)  # 목표 수익률 10% 도달
 check('목표 익절이 우선', normalize_exit_reason(d.reason), 'take_profit')
-d = decide(price=98.8, peak=104.0)  # 고점 대비 -5%(트레일링 손절 조건)이지만 되돌림 익절이 먼저
+# 고점 +7%에서 -5.6% 밀려 손절 조건까지 충족했지만, 아직 수익(+1%)이라 되돌림 익절이 먼저 걸린다
+d = decide(price=101.0, peak=107.0)
 check('트레일링 손절보다 먼저 걸림', normalize_exit_reason(d.reason), 'trailing_take_profit')
 
 print('\n--- [테스트] 설정이 없는 구버전 cfg 호환 ---')

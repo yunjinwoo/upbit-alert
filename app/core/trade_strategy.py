@@ -12,9 +12,10 @@
     3) 고점 대비 되돌림 익절(trailing_tp_enabled 켜져 있을 때만): 목표 수익률(1)에 못 닿았더라도
        고점 수익률(최고가 기준 평단 대비 수익률)이 trailing_tp_arm_pct 이상 올라간 적이 있고 현재
        수익률이 trailing_tp_floor_pct 이하로 되돌아왔으면 즉시 매도해 이익을 확정한다(연속 확인 없음).
-       고점 수익률은 트레일링 손절이 이미 쓰고 있는 peak_price로 계산하므로 별도 추적값이 없다 —
-       비교 대상인 현재 수익률은 매 사이클 새로 조회한 시세 기준이라, 루프 주기 사이에 급락하면
-       floor_pct보다 더 내려간 가격에 체결될 수 있다.
+       고점 수익률은 트레일링 손절이 이미 쓰고 있는 peak_price로 계산하므로 별도 추적값이 없다.
+       비교 대상인 현재 수익률은 매 사이클 새로 조회한 시세 기준이고, 아직 수익 구간일 때만(현재
+       수익률 > 0) 판다 — 루프 주기 사이에 급락해 이미 손실이면 이 조건으로 팔지 않고 아래의
+       트레일링 손절/물타기 흐름을 그대로 탄다.
     4) 트레일링 손절: 진입가가 아니라 "보유 중 최고가(peak_price)" 대비 하락률이 stop_loss_pct
        이상이면 손절 조건 성립. 이 조건이 stop_loss_confirm_cycles회 연속으로 유지돼야 실제로
        매도한다(1캔들 노이즈로 바로 잘리는 걸 완화) — 그 전까지는 HOLD로 "대기 중" 상태만 기록.
@@ -62,7 +63,8 @@ def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional
     쓰이지 않는다(대시보드 체크박스는 과거 이력 표시용으로만 남아있을 수 있음).
 
     고점 대비 되돌림 익절(cfg.TRADE_TRAILING_TP_*)도 여기서 같이 판단한다 — 고점 수익률은 트레일링
-    손절이 쓰는 peak_price로 계산하므로 포지션에 추가 필드가 필요 없다.
+    손절이 쓰는 peak_price로 계산하므로 포지션에 추가 필드가 필요 없다. 이름 그대로 익절이라
+    수익 구간에서만 매도하고, 손실로 돌아선 포지션은 기존 손절/물타기 흐름이 처리한다.
 
     rsi_map: {ticker: RSI값|None} — cfg.TRADE_RSI_EXIT_ENABLED가 켜져 있을 때 auto_trader.py가
     미리 조회해 넘긴다(app/core/exit_conditions.py 참고). 꺼져 있거나 값이 없으면 이 판단은 건너뛴다."""
@@ -114,8 +116,12 @@ def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional
                 continue
 
         # ③ 고점 대비 되돌림 익절 — 목표 수익률에 못 닿았어도 고점 수익률이 arm_pct 이상 올라갔다가
-        # 현재 수익률이 floor_pct 이하로 되돌아왔으면 즉시 이익 확정(연속 확인 없음)
-        if trailing_tp_armed and trailing_tp_floor_pct is not None and pnl_pct <= trailing_tp_floor_pct:
+        # 현재 수익률이 floor_pct 이하로 되돌아왔으면 즉시 이익 확정(연속 확인 없음).
+        # 단 "익절"이므로 아직 수익 구간(pnl_pct > 0)일 때만 판다 — 루프 주기 사이에 급락해 이미
+        # 손실로 돌아섰다면 이 조건으로 팔지 않고 아래의 트레일링 손절/물타기 흐름에 맡긴다
+        # (그렇게 하지 않으면 원래 물타기로 버텼을 자리에서 손실 확정 매도가 나가버린다).
+        if (trailing_tp_armed and trailing_tp_floor_pct is not None
+                and 0 < pnl_pct <= trailing_tp_floor_pct):
             decisions.append(TradeDecision(
                 ticker, 'SELL',
                 reason=f'trailing_take_profit(고점 {peak_pnl_pct:.2f}% → 현재 {pnl_pct:.2f}%, 기준 {trailing_tp_arm_pct:.2f}%/{trailing_tp_floor_pct:.2f}%)',
