@@ -74,6 +74,7 @@
         .status-badge { font-size: 0.68rem; font-weight: 700; padding: 2px 7px; border-radius: 10px; white-space: nowrap; }
         .status-stop_pending { background: #fef3c7; color: #92400e; }
         .status-dca_pending { background: #dbeafe; color: #1d4ed8; }
+        .status-trailing_tp_armed { background: #dcfce7; color: #15803d; }
         .status-dca_done { background: #f3e8ff; color: #7e22ce; }
         .signal-badge { font-size: 0.68rem; font-weight: 700; padding: 2px 7px; border-radius: 10px; white-space: nowrap; display: inline-block; margin: 1px; }
         .signal-badge-warn { background: #fee2e2; color: #b91c1c; }
@@ -246,6 +247,22 @@
                     <input type="number" id="setRsiExitOverbought" class="form-control form-control-sm" style="width:100px" min="1" max="100" step="0.5">
                 </div>
             </div>
+            <div class="settings-group">
+                <div class="settings-group-label">되돌림 익절</div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">
+                        <input type="checkbox" id="setTrailingTpEnabled" style="margin-right:4px">사용
+                    </label>
+                </div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">발동 기준(%, 이상)</label>
+                    <input type="number" id="setTrailingTpArm" class="form-control form-control-sm" style="width:110px" min="0.1" step="0.1">
+                </div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">매도 기준(%, 이하)</label>
+                    <input type="number" id="setTrailingTpFloor" class="form-control form-control-sm" style="width:110px" min="0.1" step="0.1">
+                </div>
+            </div>
             <div class="d-flex align-items-center gap-2 pb-1">
                 <button class="btn-search" onclick="saveStrategySettings()">저장</button>
                 <span id="settingsSavedMsg" class="text-muted" style="font-size:0.76rem"></span>
@@ -267,6 +284,11 @@
             <br>* <b>RSI 매도(15분봉)</b>: 켜면 보유 종목의 15분봉 RSI가 "과매수 기준" 이상일 때
             손익률·트레일링 손절과 무관하게 <b>즉시 매도</b>합니다(손절처럼 연속확인을 기다리지 않고
             익절과 같은 우선순위로 즉시 체결). 기본은 꺼짐이고, RSI 기간은 보통 14를 씁니다.
+            <br>* <b>되돌림 익절</b>: 목표 수익률(익절 기준)에 못 닿더라도, 수익률이 <b>발동 기준</b> 이상
+            올라간 적이 있는 종목이 <b>매도 기준</b> 이하로 되돌아오면 그 사이클에 바로 팔아 이익을
+            확정합니다(예: 발동 3% / 매도 2% → 3%를 찍었다가 2%로 내려오면 매도). 고점 수익률은 트레일링
+            손절이 쓰는 "보유 중 최고가" 기준이고, 되돌아왔는지는 <b>매 사이클 새로 조회한 현재가</b>로
+            판단하므로 사이클 사이에 급락하면 매도 기준보다 낮은 값에 체결될 수 있습니다. 기본은 꺼짐.
         </div>
     </div>
 
@@ -524,6 +546,7 @@
         if (dcaCount >= dcaMaxCount) return `<span class="status-badge status-dca_done">🟣 물타기 ${dcaCount}/${dcaMaxCount} 완료</span>`;
         if (row.next_status === 'stop_pending') return '<span class="status-badge status-stop_pending">🟡 손절 대기중</span>';
         if (row.next_status === 'dca_pending') return '<span class="status-badge status-dca_pending">🔵 물타기 대기중</span>';
+        if (row.next_status === 'trailing_tp_armed') return '<span class="status-badge status-trailing_tp_armed">🟢 되돌림 익절 감시중</span>';
         if (row.next_action === 'SELL') return '<span class="status-badge status-stop_pending">🔴 다음 사이클 매도 예정</span>';
         if (row.next_action === 'DCA_BUY') return '<span class="status-badge status-dca_pending">🔵 다음 사이클 물타기 예정</span>';
         return '<span class="decision-badge decision-HOLD">정상 보유중</span>';
@@ -1081,7 +1104,7 @@
         }
     }
 
-    const SETTINGS_INPUT_IDS = ['setMaxPosition', 'setMaxPositions', 'setStopLoss', 'setTakeProfit', 'setLoopInterval', 'setStopConfirm', 'setDcaTrigger', 'setDcaMaxCount', 'setPerPositionCap', 'setRsiExitEnabled', 'setRsiExitPeriod', 'setRsiExitOverbought'];
+    const SETTINGS_INPUT_IDS = ['setMaxPosition', 'setMaxPositions', 'setStopLoss', 'setTakeProfit', 'setLoopInterval', 'setStopConfirm', 'setDcaTrigger', 'setDcaMaxCount', 'setPerPositionCap', 'setRsiExitEnabled', 'setRsiExitPeriod', 'setRsiExitOverbought', 'setTrailingTpEnabled', 'setTrailingTpArm', 'setTrailingTpFloor'];
 
     function populateSettingsInputs(settings) {
         // 사용자가 입력창 하나를 타이핑 중인 동안엔 이번 새로고침으로 값을 덮어쓰지 않음
@@ -1098,6 +1121,9 @@
         document.getElementById('setRsiExitEnabled').checked = !!settings.rsi_exit_enabled;
         document.getElementById('setRsiExitPeriod').value = settings.rsi_exit_period ?? '';
         document.getElementById('setRsiExitOverbought').value = settings.rsi_exit_overbought ?? '';
+        document.getElementById('setTrailingTpEnabled').checked = !!settings.trailing_tp_enabled;
+        document.getElementById('setTrailingTpArm').value = settings.trailing_tp_arm_pct ?? '';
+        document.getElementById('setTrailingTpFloor').value = settings.trailing_tp_floor_pct ?? '';
     }
 
     async function saveStrategySettings() {
@@ -1114,6 +1140,9 @@
             rsi_exit_enabled: document.getElementById('setRsiExitEnabled').checked,
             rsi_exit_period: Number(document.getElementById('setRsiExitPeriod').value),
             rsi_exit_overbought: Number(document.getElementById('setRsiExitOverbought').value),
+            trailing_tp_enabled: document.getElementById('setTrailingTpEnabled').checked,
+            trailing_tp_arm_pct: Number(document.getElementById('setTrailingTpArm').value),
+            trailing_tp_floor_pct: Number(document.getElementById('setTrailingTpFloor').value),
         };
         const msg = document.getElementById('settingsSavedMsg');
         msg.textContent = '저장 중...';

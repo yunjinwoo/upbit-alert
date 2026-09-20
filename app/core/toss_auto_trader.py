@@ -63,6 +63,9 @@ def _effective_strategy_config() -> SimpleNamespace:
         TRADE_STOP_LOSS_CONFIRM_CYCLES=s['stop_loss_confirm_cycles'],
         TRADE_DCA_TRIGGER_PCT=s['dca_trigger_pct'],
         TRADE_DCA_MAX_COUNT=s['dca_max_count'],
+        TRADE_TRAILING_TP_ENABLED=s['trailing_tp_enabled'],
+        TRADE_TRAILING_TP_ARM_PCT=s['trailing_tp_arm_pct'],
+        TRADE_TRAILING_TP_FLOOR_PCT=s['trailing_tp_floor_pct'],
     )
 
 

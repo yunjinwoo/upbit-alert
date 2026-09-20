@@ -9,10 +9,16 @@
        손익/트레일링과 무관하게 즉시 매도 — 손절처럼 연속 확인을 기다리지 않는다(익절과 동급 우선순위).
        RSI 값 자체는 app/core/exit_conditions.py가 계산하고 auto_trader.py가 미리 조회해 rsi_map으로
        넘긴다(evaluate_exits는 순수 함수로 유지하기 위해 여기서 직접 캔들을 조회하지 않음).
-    3) 트레일링 손절: 진입가가 아니라 "보유 중 최고가(peak_price)" 대비 하락률이 stop_loss_pct
+    3) 고점 대비 되돌림 익절(trailing_tp_enabled 켜져 있을 때만): 목표 수익률(1)에 못 닿았더라도
+       고점 수익률(최고가 기준 평단 대비 수익률)이 trailing_tp_arm_pct 이상 올라간 적이 있고 현재
+       수익률이 trailing_tp_floor_pct 이하로 되돌아왔으면 즉시 매도해 이익을 확정한다(연속 확인 없음).
+       고점 수익률은 트레일링 손절이 이미 쓰고 있는 peak_price로 계산하므로 별도 추적값이 없다 —
+       비교 대상인 현재 수익률은 매 사이클 새로 조회한 시세 기준이라, 루프 주기 사이에 급락하면
+       floor_pct보다 더 내려간 가격에 체결될 수 있다.
+    4) 트레일링 손절: 진입가가 아니라 "보유 중 최고가(peak_price)" 대비 하락률이 stop_loss_pct
        이상이면 손절 조건 성립. 이 조건이 stop_loss_confirm_cycles회 연속으로 유지돼야 실제로
        매도한다(1캔들 노이즈로 바로 잘리는 걸 완화) — 그 전까지는 HOLD로 "대기 중" 상태만 기록.
-    4) 연속 확인까지 끝났는데 그 포지션이 아직 물타기를 dca_max_count회 다 안 썼으면(종목별
+    5) 연속 확인까지 끝났는데 그 포지션이 아직 물타기를 dca_max_count회 다 안 썼으면(종목별
        체크박스와 무관하게 항상), 곧바로 손절하지 않고 평단 대비 -dca_trigger_pct(기본 -10%)까지
        한 번 더 기다린다. 거기 도달하면 매도 대신 "매매기준(포지션당 매수금액)"으로 추가매수
        (DCA_BUY)해서 평단을 낮추고, 트레일링 기준점(peak_price)과 연속 카운트를 리셋해 그 새
@@ -30,7 +36,8 @@ class TradeDecision:
 
     peak_price/streak: 청산 판단(evaluate_exits)에서만 채워지는, 다음 사이클을 위해 DB에 다시
     저장해야 할 트레일링 손절 추적값. status는 대시보드에 "대기 상태"를 보여주기 위한 값
-    (None=평시, 'stop_pending'=손절 조건 연속확인 대기, 'dca_pending'=물타기 트리거 대기)."""
+    (None=평시, 'stop_pending'=손절 조건 연속확인 대기, 'dca_pending'=물타기 트리거 대기,
+    'trailing_tp_armed'=고점 수익률이 트리거를 넘어 되돌림 익절 감시 중)."""
     ticker: str
     action: str  # 'BUY' / 'SELL' / 'HOLD' / 'SKIP' / 'DCA_BUY'
     reason: str
@@ -54,6 +61,9 @@ def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional
     손절이 적용된다 — "무조건 한 번은 물타 본다"는 정책. dca_enabled 필드는 더 이상 이 판단에
     쓰이지 않는다(대시보드 체크박스는 과거 이력 표시용으로만 남아있을 수 있음).
 
+    고점 대비 되돌림 익절(cfg.TRADE_TRAILING_TP_*)도 여기서 같이 판단한다 — 고점 수익률은 트레일링
+    손절이 쓰는 peak_price로 계산하므로 포지션에 추가 필드가 필요 없다.
+
     rsi_map: {ticker: RSI값|None} — cfg.TRADE_RSI_EXIT_ENABLED가 켜져 있을 때 auto_trader.py가
     미리 조회해 넘긴다(app/core/exit_conditions.py 참고). 꺼져 있거나 값이 없으면 이 판단은 건너뛴다."""
     decisions = []
@@ -75,6 +85,14 @@ def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional
         drawdown_from_peak_pct = (peak - price) / peak * 100 if peak else 0.0
         pnl_krw = (price - avg_price) * qty
         pnl_pct = (price - avg_price) / avg_price * 100 if avg_price else 0.0
+        # 고점 수익률 — 보유 중 최고가로 평단 대비 수익률을 계산한 값(되돌림 익절 판단용)
+        peak_pnl_pct = (peak - avg_price) / avg_price * 100 if avg_price else 0.0
+        trailing_tp_enabled = bool(getattr(cfg, 'TRADE_TRAILING_TP_ENABLED', False))
+        trailing_tp_arm_pct = getattr(cfg, 'TRADE_TRAILING_TP_ARM_PCT', None)
+        trailing_tp_floor_pct = getattr(cfg, 'TRADE_TRAILING_TP_FLOOR_PCT', None)
+        trailing_tp_armed = bool(
+            trailing_tp_enabled and trailing_tp_arm_pct is not None and peak_pnl_pct >= trailing_tp_arm_pct
+        )
 
         # ① 익절 — 물타기/트레일링과 무관하게 항상 우선
         if pnl_pct >= cfg.TRADE_TAKE_PROFIT_PCT:
@@ -95,16 +113,29 @@ def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional
                 ))
                 continue
 
-        # ③ 트레일링 손절 조건(최고가 대비 하락률) 미충족 — 정상 보유, 연속 카운트 리셋
-        if drawdown_from_peak_pct < cfg.TRADE_STOP_LOSS_PCT:
+        # ③ 고점 대비 되돌림 익절 — 목표 수익률에 못 닿았어도 고점 수익률이 arm_pct 이상 올라갔다가
+        # 현재 수익률이 floor_pct 이하로 되돌아왔으면 즉시 이익 확정(연속 확인 없음)
+        if trailing_tp_armed and trailing_tp_floor_pct is not None and pnl_pct <= trailing_tp_floor_pct:
             decisions.append(TradeDecision(
-                ticker, 'HOLD', reason=f'pnl {pnl_pct:.2f}% (최고가대비 -{drawdown_from_peak_pct:.2f}%)',
+                ticker, 'SELL',
+                reason=f'trailing_take_profit(고점 {peak_pnl_pct:.2f}% → 현재 {pnl_pct:.2f}%, 기준 {trailing_tp_arm_pct:.2f}%/{trailing_tp_floor_pct:.2f}%)',
                 price=price, qty=qty, pnl_krw=pnl_krw, pnl_pct=pnl_pct,
-                peak_price=peak, streak=0,
             ))
             continue
 
-        # ④ 트레일링 손절 조건 충족 — 연속 확인 카운트 증가
+        # ④ 트레일링 손절 조건(최고가 대비 하락률) 미충족 — 정상 보유, 연속 카운트 리셋
+        if drawdown_from_peak_pct < cfg.TRADE_STOP_LOSS_PCT:
+            armed_note = f', 되돌림익절 감시중(고점 {peak_pnl_pct:.2f}%)' if trailing_tp_armed else ''
+            decisions.append(TradeDecision(
+                ticker, 'HOLD',
+                reason=f'pnl {pnl_pct:.2f}% (최고가대비 -{drawdown_from_peak_pct:.2f}%{armed_note})',
+                price=price, qty=qty, pnl_krw=pnl_krw, pnl_pct=pnl_pct,
+                peak_price=peak, streak=0,
+                status='trailing_tp_armed' if trailing_tp_armed else None,
+            ))
+            continue
+
+        # ⑤ 트레일링 손절 조건 충족 — 연속 확인 카운트 증가
         new_streak = streak + 1
         if new_streak < cfg.TRADE_STOP_LOSS_CONFIRM_CYCLES:
             decisions.append(TradeDecision(
@@ -114,7 +145,7 @@ def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional
             ))
             continue
 
-        # ⑤ 연속 확인까지 끝남 — 아직 dca_max_count에 안 닿았으면(체크박스와 무관) -dca_trigger_pct까지
+        # ⑥ 연속 확인까지 끝남 — 아직 dca_max_count에 안 닿았으면(체크박스와 무관) -dca_trigger_pct까지
         # 한 번 더 대기, 다 썼으면 손절
         if dca_count < dca_max_count:
             if pnl_pct <= -cfg.TRADE_DCA_TRIGGER_PCT:

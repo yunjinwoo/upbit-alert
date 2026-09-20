@@ -596,6 +596,9 @@ def init_db():
             rsi_exit_enabled INTEGER NOT NULL DEFAULT 0,
             rsi_exit_period INTEGER NOT NULL DEFAULT 14,
             rsi_exit_overbought REAL NOT NULL DEFAULT 80.0,
+            trailing_tp_enabled INTEGER NOT NULL DEFAULT 0,
+            trailing_tp_arm_pct REAL NOT NULL DEFAULT 3.0,
+            trailing_tp_floor_pct REAL NOT NULL DEFAULT 2.0,
             updated_at TEXT,
             UNIQUE(broker)
         )
@@ -726,6 +729,11 @@ def init_db():
         'ALTER TABLE trade_strategy_settings ADD COLUMN rsi_exit_enabled INTEGER NOT NULL DEFAULT 0',
         'ALTER TABLE trade_strategy_settings ADD COLUMN rsi_exit_period INTEGER NOT NULL DEFAULT 14',
         'ALTER TABLE trade_strategy_settings ADD COLUMN rsi_exit_overbought REAL NOT NULL DEFAULT 80.0',
+        # 고점 대비 되돌림 익절(기본 비활성화) — 고점 수익률이 arm_pct 이상 갔다가 현재 수익률이
+        # floor_pct 이하로 되돌아오면 즉시 매도(app/core/trade_strategy.py 참고)
+        'ALTER TABLE trade_strategy_settings ADD COLUMN trailing_tp_enabled INTEGER NOT NULL DEFAULT 0',
+        'ALTER TABLE trade_strategy_settings ADD COLUMN trailing_tp_arm_pct REAL NOT NULL DEFAULT 3.0',
+        'ALTER TABLE trade_strategy_settings ADD COLUMN trailing_tp_floor_pct REAL NOT NULL DEFAULT 2.0',
 
         # 돌파(breakout_4h)와 같은 로직의 일봉 버전 추가 — app/core/upbit_market_analysis.py 참고.
         # 표시 전용이 아니라 get_coin_screening_candidates()의 진입 신호에도 OR로 포함된다.
@@ -793,6 +801,9 @@ def init_db():
                 rsi_exit_enabled INTEGER NOT NULL DEFAULT 0,
                 rsi_exit_period INTEGER NOT NULL DEFAULT 14,
                 rsi_exit_overbought REAL NOT NULL DEFAULT 80.0,
+                trailing_tp_enabled INTEGER NOT NULL DEFAULT 0,
+                trailing_tp_arm_pct REAL NOT NULL DEFAULT 3.0,
+                trailing_tp_floor_pct REAL NOT NULL DEFAULT 2.0,
                 updated_at TEXT,
                 UNIQUE(broker)
             )''',
@@ -4282,6 +4293,9 @@ def get_trade_strategy_settings(broker: str = 'upbit') -> dict:
             'rsi_exit_enabled': Config.TRADE_RSI_EXIT_ENABLED,
             'rsi_exit_period': Config.TRADE_RSI_EXIT_PERIOD,
             'rsi_exit_overbought': Config.TRADE_RSI_EXIT_OVERBOUGHT,
+            'trailing_tp_enabled': Config.TRADE_TRAILING_TP_ENABLED,
+            'trailing_tp_arm_pct': Config.TRADE_TRAILING_TP_ARM_PCT,
+            'trailing_tp_floor_pct': Config.TRADE_TRAILING_TP_FLOOR_PCT,
             'updated_at': None,
         }
     return {
@@ -4298,6 +4312,9 @@ def get_trade_strategy_settings(broker: str = 'upbit') -> dict:
         'rsi_exit_enabled': bool(row['rsi_exit_enabled']) if 'rsi_exit_enabled' in row.keys() else Config.TRADE_RSI_EXIT_ENABLED,
         'rsi_exit_period': row['rsi_exit_period'] if 'rsi_exit_period' in row.keys() else Config.TRADE_RSI_EXIT_PERIOD,
         'rsi_exit_overbought': row['rsi_exit_overbought'] if 'rsi_exit_overbought' in row.keys() else Config.TRADE_RSI_EXIT_OVERBOUGHT,
+        'trailing_tp_enabled': bool(row['trailing_tp_enabled']) if 'trailing_tp_enabled' in row.keys() else Config.TRADE_TRAILING_TP_ENABLED,
+        'trailing_tp_arm_pct': row['trailing_tp_arm_pct'] if 'trailing_tp_arm_pct' in row.keys() else Config.TRADE_TRAILING_TP_ARM_PCT,
+        'trailing_tp_floor_pct': row['trailing_tp_floor_pct'] if 'trailing_tp_floor_pct' in row.keys() else Config.TRADE_TRAILING_TP_FLOOR_PCT,
         'updated_at': row['updated_at'],
     }
 
@@ -4308,7 +4325,8 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
                                  dca_trigger_pct: float = None, dca_max_count: int = None,
                                  condition_check_interval_sec: int = None, per_position_cap_krw: float = None,
                                  rsi_exit_enabled: bool = None, rsi_exit_period: int = None,
-                                 rsi_exit_overbought: float = None,
+                                 rsi_exit_overbought: float = None, trailing_tp_enabled: bool = None,
+                                 trailing_tp_arm_pct: float = None, trailing_tp_floor_pct: float = None,
                                  broker: str = 'upbit') -> dict:
     """매매 전략 파라미터 저장(upsert, 브로커별 1행, 부분 갱신 — None인 필드는 기존값 유지). 저장된 값을 반환."""
     current = get_trade_strategy_settings(broker)
@@ -4326,6 +4344,9 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
         'rsi_exit_enabled': rsi_exit_enabled if rsi_exit_enabled is not None else current['rsi_exit_enabled'],
         'rsi_exit_period': rsi_exit_period if rsi_exit_period is not None else current['rsi_exit_period'],
         'rsi_exit_overbought': rsi_exit_overbought if rsi_exit_overbought is not None else current['rsi_exit_overbought'],
+        'trailing_tp_enabled': trailing_tp_enabled if trailing_tp_enabled is not None else current['trailing_tp_enabled'],
+        'trailing_tp_arm_pct': trailing_tp_arm_pct if trailing_tp_arm_pct is not None else current['trailing_tp_arm_pct'],
+        'trailing_tp_floor_pct': trailing_tp_floor_pct if trailing_tp_floor_pct is not None else current['trailing_tp_floor_pct'],
     }
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -4335,8 +4356,9 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
             (broker, max_position_krw, max_concurrent_positions, stop_loss_pct, take_profit_pct,
              loop_interval_sec, stop_loss_confirm_cycles, dca_trigger_pct, dca_max_count,
              condition_check_interval_sec, per_position_cap_krw,
-             rsi_exit_enabled, rsi_exit_period, rsi_exit_overbought, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             rsi_exit_enabled, rsi_exit_period, rsi_exit_overbought,
+             trailing_tp_enabled, trailing_tp_arm_pct, trailing_tp_floor_pct, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(broker) DO UPDATE SET
             max_position_krw=excluded.max_position_krw,
             max_concurrent_positions=excluded.max_concurrent_positions,
@@ -4350,13 +4372,17 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
             rsi_exit_enabled=excluded.rsi_exit_enabled,
             rsi_exit_period=excluded.rsi_exit_period,
             rsi_exit_overbought=excluded.rsi_exit_overbought,
+            trailing_tp_enabled=excluded.trailing_tp_enabled,
+            trailing_tp_arm_pct=excluded.trailing_tp_arm_pct,
+            trailing_tp_floor_pct=excluded.trailing_tp_floor_pct,
             per_position_cap_krw=excluded.per_position_cap_krw,
             updated_at=excluded.updated_at
     ''', (broker, merged['max_position_krw'], merged['max_concurrent_positions'], merged['stop_loss_pct'],
           merged['take_profit_pct'], merged['loop_interval_sec'], merged['stop_loss_confirm_cycles'],
           merged['dca_trigger_pct'], merged['dca_max_count'], merged['condition_check_interval_sec'],
           merged['per_position_cap_krw'], int(bool(merged['rsi_exit_enabled'])), merged['rsi_exit_period'],
-          merged['rsi_exit_overbought'], timestamp))
+          merged['rsi_exit_overbought'], int(bool(merged['trailing_tp_enabled'])), merged['trailing_tp_arm_pct'],
+          merged['trailing_tp_floor_pct'], timestamp))
     conn.commit()
     conn.close()
     merged['updated_at'] = timestamp
