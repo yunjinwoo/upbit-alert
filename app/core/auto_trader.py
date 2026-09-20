@@ -584,6 +584,19 @@ def get_live_dashboard_summary() -> dict:
             'recovery_partial_stop_count': tracked.get('recovery_partial_stop_count') if tracked else 0,
         }
 
+    def _condition_fields(ticker):
+        """정밀검사 opt-in 여부와 마지막 검사 결과. condition_passed가 None이면 "아직 검사 결과 없음"
+        = 다음 사이클에 SKIP된다는 뜻이라, 화면에서 검사 루프가 도는지 눈으로 확인할 수 있게 한다.
+        후보 행과 보유 전용 행(extra_positions)이 같은 값을 써야 한다 — 한쪽만 채우면 그 행의
+        체크박스가 DB와 다른 상태로 그려진다."""
+        status = condition_status_map.get(ticker)
+        return {
+            'condition_watch': ticker in condition_watch_tickers,
+            'condition_passed': status['passed'] if status else None,
+            'condition_detail': status['detail'] if status else None,
+            'condition_checked_at': status['checked_at'] if status else None,
+        }
+
     preview_positions = []
     for ticker, pos in real_positions.items():
         if ticker not in in_scope_tickers:
@@ -599,13 +612,7 @@ def get_live_dashboard_summary() -> dict:
     for cand in candidates:
         ticker = cand['ticker']
         cand['approved'] = ticker in approved_tickers
-        # 정밀검사 opt-in 여부와 마지막 검사 결과. condition_passed가 None이면 "아직 검사 결과 없음"
-        # = 다음 사이클에 SKIP된다는 뜻이라, 화면에서 검사 루프가 도는지 눈으로 확인할 수 있게 한다.
-        status = condition_status_map.get(ticker)
-        cand['condition_watch'] = ticker in condition_watch_tickers
-        cand['condition_passed'] = status['passed'] if status else None
-        cand['condition_detail'] = status['detail'] if status else None
-        cand['condition_checked_at'] = status['checked_at'] if status else None
+        cand.update(_condition_fields(ticker))
         pos = real_positions.get(ticker)
         if pos:
             price = cached_price(ticker)
@@ -648,6 +655,7 @@ def get_live_dashboard_summary() -> dict:
             'approved': ticker in approved_tickers,
             'next_action': preview.action if preview else None,
             'next_status': preview.status if preview else None,
+            **_condition_fields(ticker),
             **_held_extra_fields(ticker, pos),
             **invested_gauge_fields(pos.qty, pos.avg_buy_price, per_position_cap_krw),
         })
