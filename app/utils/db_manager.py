@@ -582,6 +582,9 @@ def init_db():
     # stop_loss_confirm_cycles: 트레일링 손절 조건이 몇 사이클 연속으로 유지돼야 실제로 매도할지(기본 1=즉시,
     # 기존 동작과 동일). dca_trigger_pct: 물타기(추가매수) 체크된 포지션이 몇 % 하락(평단 대비)했을 때
     # 추가매수를 실행할지(기본 10%). dca_max_count: 포지션당 물타기 최대 허용 횟수(기본 2회, 무제한 방지).
+    # conditions_observe_only: 정밀 매수조건 "관찰 모드" — 켜면 조건 검사/화면 라벨은 그대로 돌지만
+    # 매수를 막지는 않는다(진입 게이트 해제). 조건을 켜자마자 매수가 멈추는 게 부담스러울 때
+    # 한동안 결과만 지켜보라고 둔 스위치다(app/core/auto_trader.py의 conditions_gate_active 참고).
     # rsi_exit_*: RSI 과매수 매도조건(기본 비활성화) — 켜면 15분봉 RSI(rsi_exit_period)가
     # rsi_exit_overbought 이상일 때 손익/트레일링과 무관하게 즉시 매도한다(app/core/exit_conditions.py,
     # app/core/trade_strategy.py의 evaluate_exits() 참고).
@@ -598,6 +601,7 @@ def init_db():
             dca_trigger_pct REAL NOT NULL DEFAULT 10.0,
             dca_max_count INTEGER NOT NULL DEFAULT 2,
             condition_check_interval_sec INTEGER NOT NULL DEFAULT 60,
+            conditions_observe_only INTEGER NOT NULL DEFAULT 0,
             per_position_cap_krw REAL NOT NULL DEFAULT 300000,
             rsi_exit_enabled INTEGER NOT NULL DEFAULT 0,
             rsi_exit_period INTEGER NOT NULL DEFAULT 14,
@@ -798,6 +802,9 @@ def init_db():
         # 매매 사이클을 재구성한다 — trade_order_log는 HOLD/SKIP까지 매 사이클 쌓여 커지므로,
         # 그 대부분을 건너뛰고 체결만 꺼내오도록 인덱스를 둔다(get_trade_fill_rows 참고).
         'CREATE INDEX IF NOT EXISTS idx_trade_order_log_fills ON trade_order_log(broker, mode, decision, id)',
+
+        # 정밀 매수조건 관찰 모드(기본 꺼짐) — 켜면 조건은 검사하되 매수는 막지 않는다.
+        'ALTER TABLE trade_strategy_settings ADD COLUMN conditions_observe_only INTEGER NOT NULL DEFAULT 0',
 
     ]
     for sql in migrations:
@@ -4457,6 +4464,7 @@ def get_trade_strategy_settings(broker: str = 'upbit') -> dict:
             'dca_trigger_pct': Config.TRADE_DCA_TRIGGER_PCT,
             'dca_max_count': Config.TRADE_DCA_MAX_COUNT,
             'condition_check_interval_sec': Config.TRADE_CONDITION_CHECK_INTERVAL_SEC,
+            'conditions_observe_only': Config.TRADE_CONDITIONS_OBSERVE_ONLY,
             'per_position_cap_krw': Config.TRADE_PER_POSITION_CAP_KRW,
             'rsi_exit_enabled': Config.TRADE_RSI_EXIT_ENABLED,
             'rsi_exit_period': Config.TRADE_RSI_EXIT_PERIOD,
@@ -4477,6 +4485,7 @@ def get_trade_strategy_settings(broker: str = 'upbit') -> dict:
         'dca_trigger_pct': row['dca_trigger_pct'],
         'dca_max_count': row['dca_max_count'],
         'condition_check_interval_sec': row['condition_check_interval_sec'],
+        'conditions_observe_only': bool(row['conditions_observe_only']) if 'conditions_observe_only' in row.keys() else Config.TRADE_CONDITIONS_OBSERVE_ONLY,
         'per_position_cap_krw': row['per_position_cap_krw'] if 'per_position_cap_krw' in row.keys() else Config.TRADE_PER_POSITION_CAP_KRW,
         'rsi_exit_enabled': bool(row['rsi_exit_enabled']) if 'rsi_exit_enabled' in row.keys() else Config.TRADE_RSI_EXIT_ENABLED,
         'rsi_exit_period': row['rsi_exit_period'] if 'rsi_exit_period' in row.keys() else Config.TRADE_RSI_EXIT_PERIOD,
@@ -4496,7 +4505,8 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
                                  stop_loss_pct: float = None, take_profit_pct: float = None,
                                  loop_interval_sec: int = None, stop_loss_confirm_cycles: int = None,
                                  dca_trigger_pct: float = None, dca_max_count: int = None,
-                                 condition_check_interval_sec: int = None, per_position_cap_krw: float = None,
+                                 condition_check_interval_sec: int = None, conditions_observe_only: bool = None,
+                                 per_position_cap_krw: float = None,
                                  rsi_exit_enabled: bool = None, rsi_exit_period: int = None,
                                  rsi_exit_overbought: float = None, trailing_tp_enabled: bool = None,
                                  trailing_tp_arm_pct: float = None, trailing_tp_floor_pct: float = None,
@@ -4535,6 +4545,7 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
         'dca_trigger_pct': dca_trigger_pct if dca_trigger_pct is not None else current['dca_trigger_pct'],
         'dca_max_count': dca_max_count if dca_max_count is not None else current['dca_max_count'],
         'condition_check_interval_sec': condition_check_interval_sec if condition_check_interval_sec is not None else current['condition_check_interval_sec'],
+        'conditions_observe_only': conditions_observe_only if conditions_observe_only is not None else current['conditions_observe_only'],
         'per_position_cap_krw': per_position_cap_krw if per_position_cap_krw is not None else current['per_position_cap_krw'],
         'rsi_exit_enabled': rsi_exit_enabled if rsi_exit_enabled is not None else current['rsi_exit_enabled'],
         'rsi_exit_period': rsi_exit_period if rsi_exit_period is not None else current['rsi_exit_period'],
@@ -4562,11 +4573,11 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
         INSERT INTO trade_strategy_settings
             (broker, max_position_krw, max_concurrent_positions, stop_loss_pct, take_profit_pct,
              loop_interval_sec, stop_loss_confirm_cycles, dca_trigger_pct, dca_max_count,
-             condition_check_interval_sec, per_position_cap_krw,
+             condition_check_interval_sec, conditions_observe_only, per_position_cap_krw,
              rsi_exit_enabled, rsi_exit_period, rsi_exit_overbought,
              trailing_tp_enabled, trailing_tp_arm_pct, trailing_tp_floor_pct,
              {recovery_columns}, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, {recovery_placeholders}, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, {recovery_placeholders}, ?)
         ON CONFLICT(broker) DO UPDATE SET
             max_position_krw=excluded.max_position_krw,
             max_concurrent_positions=excluded.max_concurrent_positions,
@@ -4577,6 +4588,7 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
             dca_trigger_pct=excluded.dca_trigger_pct,
             dca_max_count=excluded.dca_max_count,
             condition_check_interval_sec=excluded.condition_check_interval_sec,
+            conditions_observe_only=excluded.conditions_observe_only,
             rsi_exit_enabled=excluded.rsi_exit_enabled,
             rsi_exit_period=excluded.rsi_exit_period,
             rsi_exit_overbought=excluded.rsi_exit_overbought,
@@ -4589,7 +4601,8 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
     ''', (broker, merged['max_position_krw'], merged['max_concurrent_positions'], merged['stop_loss_pct'],
           merged['take_profit_pct'], merged['loop_interval_sec'], merged['stop_loss_confirm_cycles'],
           merged['dca_trigger_pct'], merged['dca_max_count'], merged['condition_check_interval_sec'],
-          merged['per_position_cap_krw'], int(bool(merged['rsi_exit_enabled'])), merged['rsi_exit_period'],
+          int(bool(merged['conditions_observe_only'])), merged['per_position_cap_krw'],
+          int(bool(merged['rsi_exit_enabled'])), merged['rsi_exit_period'],
           merged['rsi_exit_overbought'], int(bool(merged['trailing_tp_enabled'])), merged['trailing_tp_arm_pct'],
           merged['trailing_tp_floor_pct'], *recovery_values, timestamp))
     conn.commit()
@@ -4733,6 +4746,19 @@ def conditions_enabled(broker: str = 'upbit') -> bool:
     """정밀 매수조건이 하나라도 켜져 있는지. 켜진 게 하나도 없으면 진입 게이트 자체가 없는 것과 같아서,
     매매 루프(evaluate_entries)도 검사 루프(entry_condition_checker)도 이 값으로 통째로 건너뛴다."""
     return any(c['enabled'] for c in get_trade_condition_settings(broker))
+
+
+def conditions_observe_only_enabled(broker: str = 'upbit') -> bool:
+    """정밀 매수조건 "관찰 모드"가 켜져 있는지(trade_strategy_settings.conditions_observe_only).
+    켜두면 검사 루프와 화면 라벨은 그대로 돌지만 매수는 막지 않는다."""
+    return bool(get_trade_strategy_settings(broker)['conditions_observe_only'])
+
+
+def conditions_gate_active(broker: str = 'upbit') -> bool:
+    """정밀 매수조건이 실제로 매수를 막는 상태인지 — 조건이 하나라도 켜져 있고(conditions_enabled)
+    관찰 모드가 아닐 때만 True. 매매 루프(evaluate_entries)는 이 값을 쓰고, 검사 루프
+    (entry_condition_checker)는 관찰 모드에서도 결과를 갱신해야 하므로 conditions_enabled를 쓴다."""
+    return conditions_enabled(broker) and not conditions_observe_only_enabled(broker)
 
 
 def set_trade_condition_setting(condition_key: str, enabled: bool = None, logic_group: str = None,
