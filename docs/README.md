@@ -15,7 +15,7 @@
 | [auto-trade-upbit-live.md](auto-trade-upbit-live.md) | ✅ 운영 중 | 업비트 실거래 — 화면(DB)에서 매매 대상/실행 on-off 제어, 2단계 승인 + 안전장치 |
 | [auto-trade-toss-paper.md](auto-trade-toss-paper.md) | ⏸️ 중단 (2026-08-22 실거래 전환) | 2단계 — 토스증권(국내주식) 모의매매 엔진. 코드는 남아있지만 배포 목록에서 제외 |
 | [auto-trade-toss-live.md](auto-trade-toss-live.md) | ✅ 운영 중 (2026-08-22~) | 토스증권 실거래 — 업비트 실거래와 동일 구조, 정수 주 단위·체결 폴링만 다름 |
-| [auto-trade-recovery-dca.md](auto-trade-recovery-dca.md) | 📝 설계 초안 (Q3·Q4 결정 대기) | 회복형 분할 물타기 — 깊은 하락에서 소액 분할매수 → 소폭 반등 익절 반복 + 하드캡 |
+| [auto-trade-recovery-dca.md](auto-trade-recovery-dca.md) | ✅ 구현 완료 · 기본 꺼짐 | 회복형 분할 물타기 — 깊은 하락에서 소액 분할매수 → 소폭 반등 익절 반복 + 하드캡(투입 상한 · 소액 손절 · 시간 하드스톱) |
 | [auto-trade-downside-watch.md](auto-trade-downside-watch.md) | ✅ Phase 1 머지됨 (PR #62, 2026-09-03) · Phase 2 미정 | 하락위험 코인 관심목록 — 매수 파이프라인의 거울상, 표시 전용 |
 | [auto-trade-performance.md](auto-trade-performance.md) | ✅ 머지됨 (PR #71, 2026-09-18) | 매매 성과 화면 — 매수→매도를 한 사이클로 묶어 승률·누적 손익·진입 신호별 기여도 조회 (읽기 전용) |
 

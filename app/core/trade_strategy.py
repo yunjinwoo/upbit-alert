@@ -19,8 +19,14 @@
        평단 기준으로 손절/익절 판단을 다시 시작한다.
        (물타기는 포지션당 dca_max_count회까지만 — 그 횟수에 도달하면 일반 손절과 동일하게 동작하는
        안전장치. 무제한으로 계속 물타면 하락장에서 손실이 무한정 커질 수 있기 때문)
+
+회복형 분할 물타기(recovery DCA) 모드가 켜져 있으면(cfg.TRADE_RECOVERY_DCA_ENABLED) 위 청산 로직
+전체가 _evaluate_exit_recovery()로 대체된다 — 트레일링 손절 없이 "깊은 하락에서 소액 물타기 → 새
+평단 조금 위에서 소폭 익절"을 반복하고, 물타기 상한을 다 쓴 뒤에만 소액 손절/시간 하드스톱으로
+정리한다. 기본값은 꺼짐. 설계와 결정 근거는 docs/auto-trade-recovery-dca.md.
 """
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Callable, List, Optional
 
 
@@ -42,6 +48,175 @@ class TradeDecision:
     peak_price: Optional[float] = None
     streak: Optional[int] = None
     status: Optional[str] = None
+    recovery: bool = False       # 회복형 분할 물타기 모드의 판단인지 — 체결 후 갱신할 상태가 달라서
+                                 # auto_trader._execute()가 이 플래그로 분기한다(회복형 카운터/쿨다운)
+    partial_sell: bool = False   # 전량이 아닌 일부 매도(회복형 소액 손절)인지 — 매도 후 포지션이 남는다
+
+
+TS_FORMAT = '%Y-%m-%d %H:%M:%S'
+
+
+def _parse_ts(value) -> Optional[datetime]:
+    """DB에 문자열로 저장된 시각('YYYY-MM-DD HH:MM:SS')을 datetime으로. 비었거나 형식이 깨졌으면 None."""
+    if not value:
+        return None
+    try:
+        return datetime.strptime(str(value)[:19], TS_FORMAT)
+    except ValueError:
+        return None
+
+
+def _minutes_since(value, now: datetime) -> Optional[float]:
+    """value(문자열 시각) 이후 지난 시간(분). 파싱 불가/빈 값이면 None — 호출부는 "제한 없음"으로 취급한다."""
+    ts = _parse_ts(value)
+    return None if ts is None else (now - ts).total_seconds() / 60
+
+
+def _evaluate_exit_recovery(pos: dict, price: float, cfg, rsi_now: float = None,
+                            now: datetime = None) -> TradeDecision:
+    """회복형 분할 물타기(recovery DCA) 모드의 청산 판단 1건 — 순수 함수(시각조차 인자로 받음).
+
+    설계/결정 근거는 docs/auto-trade-recovery-dca.md. 요약하면 "깊은 하락에서 소액으로 나눠 물타
+    평단을 낮추고, 새 평단 조금 위에서 소폭 익절로 빠져나오는 걸 반복한다". 이 모드에서는 트레일링
+    손절(최고가 대비 하락률)이 동작하지 않는다 — 큰 손절을 안 하는 게 이 모드의 전제라서.
+
+    판정 순서(먼저 걸린 게 이김):
+      ① 익절 — 기존 익절 기준(더 큰 목표)을 먼저 보고, 없으면 회복형 익절 기준(+5%)으로 전량 매도
+      ② RSI 과매수 매도 — 켜져 있어도 "수익 구간"에서만. 손실 구간에서 RSI로 팔면 결국 큰 손절이
+         되어 이 모드의 전제가 깨지므로 일부러 제외한다(기존 모드에서는 손익과 무관하게 매도)
+      ③ 시간 하드스톱 — 물타기 상한을 다 쓴 뒤 N일이 지나도 손실이면 전량 정리(자본이 무기한 묶이는
+         것에 대한 유일한 출구. 0이면 비활성)
+      ④ 물타기 — 평단 대비 -트리거% 이하 + 쿨다운 경과 + 횟수·투입액 상한 이내면 소액 추가매수.
+         평단이 내려가므로 다음 트리거(-20%)와 익절선(+5%) 모두 새 평단 기준으로 자동 이동한다
+      ⑤ 소액 손절 — "물타기를 더 못 하게 된 뒤에만" 동작. 평단 대비 -부분손절% 이하면 보유량의 일부만
+         덜어낸다. 물타기 가능 구간에서 같이 돌리면 같은 구간에서 사고 파는 게 겹치므로 상한 소진을
+         전제 조건으로 뒀다
+      ⑥ 그 외 HOLD — 상한을 다 썼으면 status='recovery_capped'(반등 대기), 아직 남았으면
+         'recovery_dca_pending'(물타기 대기)
+
+    트레일링 추적값(peak_price/below_stop_streak)은 이 모드의 판단에 쓰이지 않지만 HOLD마다 계속
+    갱신해둔다 — 나중에 이 모드를 끄면 곧바로 트레일링 손절이 이 값을 참조하는데, 멈춰 있던 옛 최고가가
+    남아 있으면 모드를 끈 직후에 바로 손절 연속확인이 시작되는 사고가 난다."""
+    now = now or datetime.now()
+    ticker = pos['ticker']
+    qty = pos['qty']
+    avg_price = pos['avg_buy_price']
+    pnl_krw = (price - avg_price) * qty
+    pnl_pct = (price - avg_price) / avg_price * 100 if avg_price else 0.0
+    peak = max(pos.get('peak_price') or avg_price, price)
+
+    def sell(reason, sell_qty=None, partial=False):
+        return TradeDecision(
+            ticker, 'SELL', reason=reason, price=price, qty=sell_qty if sell_qty is not None else qty,
+            pnl_krw=pnl_krw, pnl_pct=pnl_pct, recovery=True, partial_sell=partial,
+        )
+
+    def hold(reason, status):
+        return TradeDecision(
+            ticker, 'HOLD', reason=reason, price=price, qty=qty, pnl_krw=pnl_krw, pnl_pct=pnl_pct,
+            peak_price=peak, streak=0, status=status, recovery=True,
+        )
+
+    # ① 익절 — 기존 익절 기준이 더 높으므로 그쪽이 먼저 걸리면 더 크게 먹고 나온다
+    if pnl_pct >= cfg.TRADE_TAKE_PROFIT_PCT:
+        return sell(f'take_profit({pnl_pct:.2f}%)')
+    recovery_tp = cfg.TRADE_RECOVERY_TAKE_PROFIT_PCT
+    if recovery_tp > 0 and pnl_pct >= recovery_tp:
+        return sell(f'recovery_take_profit({pnl_pct:.2f}% >= {recovery_tp:.2f}%)')
+
+    # ② RSI 과매수 매도 — 수익 구간에서만(위 docstring 참고)
+    if getattr(cfg, 'TRADE_RSI_EXIT_ENABLED', False) and pnl_pct >= 0:
+        rsi_overbought = getattr(cfg, 'TRADE_RSI_EXIT_OVERBOUGHT', None)
+        if rsi_now is not None and rsi_overbought is not None and rsi_now >= rsi_overbought:
+            return sell(f'rsi_exit(RSI {rsi_now:.1f}>={rsi_overbought:.1f}, 평단대비 {pnl_pct:.2f}%)')
+
+    # 물타기 여력 — 횟수와 누적 투입액 둘 다 남아 있어야 한다
+    dca_count = pos.get('recovery_dca_count') or 0
+    max_count = cfg.TRADE_RECOVERY_DCA_MAX_COUNT
+    dca_amount = cfg.TRADE_RECOVERY_DCA_AMOUNT_KRW
+    invested = pos.get('total_invested_krw') or 0
+    max_invested = cfg.TRADE_RECOVERY_MAX_INVESTED_KRW
+    count_left = dca_count < max_count
+    budget_left = max_invested <= 0 or invested + dca_amount <= max_invested
+    capped = not (count_left and budget_left)
+
+    # 쿨다운/시간 하드스톱의 기준 시각 — 마지막 물타기, 없으면 최초 진입 시점.
+    # 상한이 "횟수 소진"으로 찼으면 마지막 물타기 시각이 곧 상한 도달 시각이고, 투입액이 모자라
+    # 한 번도 못 물탄 경우엔 진입 시점부터가 이미 상한 도달 상태다.
+    last_dca_at = pos.get('last_dca_at') or pos.get('entry_at')
+
+    # ③ 시간 하드스톱 — 상한을 다 쓴 뒤로 N일이 지났는데 여전히 손실이면 정리.
+    # 손실이 아닐 때(0% ~ 익절선 사이)는 굳이 팔지 않고 반등을 더 기다린다.
+    time_stop_days = getattr(cfg, 'TRADE_RECOVERY_TIME_STOP_DAYS', 0) or 0
+    if capped and time_stop_days > 0 and pnl_pct < 0:
+        minutes_capped = _minutes_since(last_dca_at, now)
+        if minutes_capped is not None and minutes_capped >= time_stop_days * 24 * 60:
+            return sell(
+                f'recovery_time_stop(상한 소진 후 {minutes_capped / 1440:.1f}일 경과, 평단대비 {pnl_pct:.2f}%)'
+            )
+
+    # ④ 물타기 — 평단 대비 -트리거% 이하 + 쿨다운 경과
+    trigger_pct = cfg.TRADE_RECOVERY_DCA_TRIGGER_PCT
+    cooldown_min = cfg.TRADE_RECOVERY_DCA_COOLDOWN_MIN
+    if not capped:
+        if pnl_pct > -trigger_pct:
+            return hold(
+                f'recovery_dca_pending({dca_count + 1}/{max_count}회, 평단대비 {pnl_pct:.2f}%, '
+                f'목표 -{trigger_pct:.2f}%)',
+                'recovery_dca_pending',
+            )
+        elapsed_min = _minutes_since(last_dca_at, now)
+        if elapsed_min is not None and elapsed_min < cooldown_min:
+            return hold(
+                f'recovery_dca_cooldown({dca_count + 1}/{max_count}회, 평단대비 {pnl_pct:.2f}%, '
+                f'쿨다운 {elapsed_min:.0f}/{cooldown_min}분)',
+                'recovery_dca_pending',
+            )
+        return TradeDecision(
+            ticker, 'DCA_BUY',
+            reason=f'recovery_dca({dca_count + 1}/{max_count}회, 평단대비 {pnl_pct:.2f}%, {dca_amount:,.0f}원)',
+            price=price, amount_krw=dca_amount, pnl_krw=pnl_krw, pnl_pct=pnl_pct,
+            peak_price=peak, streak=0, recovery=True,
+        )
+
+    # ⑤ 소액 손절 — 물타기를 더 못 하게 된 뒤에만(위 docstring 참고)
+    cap_reason = f'{dca_count}/{max_count}회' if not count_left else f'투입 {invested:,.0f}원/{max_invested:,.0f}원'
+    partial_pct = getattr(cfg, 'TRADE_RECOVERY_PARTIAL_STOP_PCT', 0) or 0
+    if partial_pct > 0 and pnl_pct <= -partial_pct:
+        partial_cooldown_min = getattr(cfg, 'TRADE_RECOVERY_PARTIAL_STOP_COOLDOWN_MIN', 0) or 0
+        # 직전 소액 손절, 없으면 마지막 물타기(=상한 도달) 시점부터 간격을 센다 — 물탄 직후 곧바로
+        # 일부를 되팔지 않게 하기 위함
+        last_partial_at = pos.get('last_partial_stop_at') or last_dca_at
+        elapsed_min = _minutes_since(last_partial_at, now)
+        if elapsed_min is not None and elapsed_min < partial_cooldown_min:
+            return hold(
+                f'recovery_partial_cooldown(평단대비 {pnl_pct:.2f}%, '
+                f'{elapsed_min:.0f}/{partial_cooldown_min}분)',
+                'recovery_capped',
+            )
+
+        ratio = (getattr(cfg, 'TRADE_RECOVERY_PARTIAL_STOP_RATIO', 0) or 0) / 100
+        min_order_krw = getattr(cfg, 'TRADE_MIN_ORDER_KRW', 0) or 0
+        position_krw = qty * price
+        sell_krw = position_krw * ratio
+        # 거래소 최소 주문금액 때문에 너무 작은 조각은 주문 자체가 거부된다 — 최소 주문금액까지
+        # 올려서 팔고, 그래도 남는 쪽이 최소 주문금액 미만이면 더는 쪼갤 수 없으니 전량 매도한다
+        # (남긴 조각을 다음 번에 팔 수 없어 영원히 정리 못 하는 상태가 되는 걸 막음).
+        if sell_krw < min_order_krw:
+            sell_krw = min_order_krw
+        if position_krw - sell_krw < min_order_krw:
+            return sell(
+                f'recovery_partial_stop_all(평단대비 {pnl_pct:.2f}%, 남길 수량이 최소주문금액 미만 — 전량, {cap_reason})'
+            )
+        sell_qty = qty * (sell_krw / position_krw) if position_krw else 0
+        return sell(
+            f'recovery_partial_stop(평단대비 {pnl_pct:.2f}%, 보유량 {sell_krw / position_krw * 100:.0f}% '
+            f'≈ {sell_krw:,.0f}원, {cap_reason})',
+            sell_qty=sell_qty, partial=True,
+        )
+
+    # ⑥ 상한 소진 — 반등(익절)을 기다리며 계속 보유
+    return hold(f'recovery_capped({cap_reason}, 평단대비 {pnl_pct:.2f}%)', 'recovery_capped')
 
 
 def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional[float]], cfg,
@@ -55,9 +230,13 @@ def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional
     쓰이지 않는다(대시보드 체크박스는 과거 이력 표시용으로만 남아있을 수 있음).
 
     rsi_map: {ticker: RSI값|None} — cfg.TRADE_RSI_EXIT_ENABLED가 켜져 있을 때 auto_trader.py가
-    미리 조회해 넘긴다(app/core/exit_conditions.py 참고). 꺼져 있거나 값이 없으면 이 판단은 건너뛴다."""
+    미리 조회해 넘긴다(app/core/exit_conditions.py 참고). 꺼져 있거나 값이 없으면 이 판단은 건너뛴다.
+
+    cfg.TRADE_RECOVERY_DCA_ENABLED가 켜져 있으면 포지션마다 아래 판단 대신
+    _evaluate_exit_recovery()를 쓴다(회복형 분할 물타기 — 트레일링 손절을 쓰지 않는 별도 모드)."""
     decisions = []
     rsi_map = rsi_map or {}
+    recovery_mode = getattr(cfg, 'TRADE_RECOVERY_DCA_ENABLED', False)
     for pos in positions:
         ticker = pos['ticker']
         qty = pos['qty']
@@ -69,6 +248,12 @@ def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional
         price = get_price_fn(ticker)
         if not price:
             decisions.append(TradeDecision(ticker, 'SKIP', reason='시세 조회 실패'))
+            continue
+
+        # 회복형 분할 물타기 모드 — 아래 트레일링 손절/물타기 로직 전체를 대체한다
+        # (docs/auto-trade-recovery-dca.md, _evaluate_exit_recovery() docstring 참고)
+        if recovery_mode:
+            decisions.append(_evaluate_exit_recovery(pos, price, cfg, rsi_now=rsi_map.get(ticker)))
             continue
 
         peak = max(pos.get('peak_price') or avg_price, price)
