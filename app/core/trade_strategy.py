@@ -362,20 +362,21 @@ def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional
 
 def evaluate_entries(candidates: List[dict], positions: List[dict], cash_balance: float,
                       get_price_fn: Callable[[str], Optional[float]], cfg,
-                      condition_watch_tickers: set = None, condition_status_map: dict = None) -> List[TradeDecision]:
+                      conditions_active: bool = False, condition_status_map: dict = None) -> List[TradeDecision]:
     """진입 후보(coin_screening_daily 필터 결과) 중 신규 매수 대상을 판단한다.
     한 사이클 안에서 여러 종목을 연속 매수할 수 있으므로, 판단 도중 보유 종목 수/가상 현금을
     누적 반영해가며 계산한다(실제 체결은 auto_trader.py가 순차 실행).
 
-    condition_watch_tickers: 대시보드에서 "정밀검사" 체크된 티커 집합(entry_conditions.py 참고).
-    이 집합에 없는 후보는 기존과 동일하게(추가 제약 없이) 판단한다 — 정밀조건은 opt-in.
+    conditions_active: 정밀 매수조건(entry_conditions.py)이 하나라도 켜져 있는지. 켜져 있으면
+    후보 전체가 이 게이트를 통과해야 한다 — 예전엔 종목별 "정밀검사" 체크(opt-in)였지만, 조건을
+    켜놓고도 종목을 안 골라서 아무 데도 적용되지 않는 일이 잦아 "켜면 전부 적용"으로 바꿨다.
+    조건을 하나도 안 켜면 False라 기존과 동일하게(추가 제약 없이) 판단한다.
     condition_status_map: entry_condition_checker.py가 캐시해둔 {ticker: {passed, detail, checked_at}}.
-    watch 대상인데 아직 검사 결과가 없거나(검사 루프가 안 떠 있음) 통과 못 했으면 SKIP — DB 접근은
+    조건이 켜져 있는데 아직 검사 결과가 없거나(검사 루프가 안 떠 있음) 통과 못 했으면 SKIP — DB 접근은
     호출부(auto_trader.py)에서 이미 끝났고, 여기선 값만 읽는 순수 함수로 유지."""
     decisions = []
     held_tickers = {p['ticker'] for p in positions}
     open_count = len(positions)
-    condition_watch_tickers = condition_watch_tickers or set()
     condition_status_map = condition_status_map or {}
 
     for cand in candidates:
@@ -391,7 +392,7 @@ def evaluate_entries(candidates: List[dict], positions: List[dict], cash_balance
             decisions.append(TradeDecision(ticker, 'SKIP', reason='가상 현금 부족'))
             continue
 
-        if ticker in condition_watch_tickers:
+        if conditions_active:
             status = condition_status_map.get(ticker)
             if not status:
                 decisions.append(TradeDecision(ticker, 'SKIP', reason='정밀조건 검사 결과 없음(검사 루프 확인 필요)'))
@@ -411,7 +412,7 @@ def evaluate_entries(candidates: List[dict], positions: List[dict], cash_balance
             else 'near_ma200+above_cloud_1d' if cand.get('near_ma200') and cand.get('above_cloud_1d') and not cand.get('above_cloud')
             else 'near_ma200+above_cloud'
         )
-        reason = f'{base_reason}+정밀조건충족' if ticker in condition_watch_tickers else base_reason
+        reason = f'{base_reason}+정밀조건충족' if conditions_active else base_reason
         decisions.append(TradeDecision(
             ticker, 'BUY', reason=reason, price=price, amount_krw=cfg.TRADE_MAX_POSITION_KRW,
         ))

@@ -39,9 +39,9 @@ from app.utils.db_manager import (
     get_trade_strategy_settings,
     update_position_tracking,
     mark_position_dca_used,
-    get_condition_watch_tickers,
     get_condition_status_map,
     get_trade_condition_settings,
+    conditions_enabled,
 )
 
 logger = get_logger()
@@ -206,12 +206,15 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
                 watchlist_tickers = get_watchlist_tickers(broker.broker_name, broker.mode)
                 candidates = [c for c in candidates if c['ticker'] in watchlist_tickers]
 
-            condition_watch_tickers = get_condition_watch_tickers(broker.broker_name, broker.mode)
+            # 업비트와 같은 규칙: 정밀 매수조건을 하나라도 켜두면 후보 전체가 게이트를 통과해야 한다.
+            # 토스 조건은 전부 꺼진 채(기본값) 화면도 없어서 지금은 항상 False다 — 켜려면
+            # toss-condition-check-bot을 먼저 띄워야 검사 결과가 채워진다(안 그러면 전부 SKIP).
+            conditions_active = conditions_enabled(broker.broker_name)
             condition_status_map = get_condition_status_map(broker.broker_name, broker.mode)
 
             entry_decisions = evaluate_entries(
                 candidates, positions, account['cash_balance'], broker.get_current_price, strategy_cfg,
-                condition_watch_tickers=condition_watch_tickers, condition_status_map=condition_status_map,
+                conditions_active=conditions_active, condition_status_map=condition_status_map,
             )
             for decision in entry_decisions:
                 _execute(decision, broker)
@@ -299,7 +302,6 @@ def get_dashboard_summary() -> dict:
 
     held_tickers = {p['ticker'] for p in positions}
     approved_tickers = get_approved_candidate_tickers(broker.broker_name, broker.mode)
-    condition_watch_tickers = get_condition_watch_tickers(broker.broker_name, broker.mode)
     condition_status_map = get_condition_status_map(broker.broker_name, broker.mode)
     candidates = get_stock_screening_candidates()
     for cand in candidates:
@@ -307,7 +309,6 @@ def get_dashboard_summary() -> dict:
         cand['already_held'] = ticker in held_tickers
         cand['candidate_reason'] = 'breakout_1d' if cand.get('breakout_1d') else ('near_ma200+above_cloud' if cand.get('near_ma200') and cand.get('above_cloud') else 'momentum_confluence')
         cand['approved'] = ticker in approved_tickers
-        cand['condition_watch'] = ticker in condition_watch_tickers
         status = condition_status_map.get(ticker)
         cand['condition_passed'] = status['passed'] if status else None
         cand['condition_detail'] = status['detail'] if status else None

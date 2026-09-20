@@ -865,26 +865,9 @@ def set_live_candidate_watchlist_api():
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-@app.route('/api/auto-trade/live/candidates/condition-watch', methods=['POST'])
-def set_live_candidate_condition_watch_api():
-    """"🔴 실거래" 표의 "정밀검사" 체크박스 상태 저장(실거래 mode='live' 기준 — 실거래 루프가 진입
-    게이트를 볼 때 읽는 것과 같은 mode여야 한다). 켜진 종목만 entry_condition_checker.py
-    (`python main.py condition_check`)가 별도 주기로 일봉/5분봉/1분봉을 조회해 정밀 매수조건을
-    검사하고, 그 결과를 통과해야 매수 판단까지 간다.
-
-    ⚠️ 검사 프로세스가 떠 있지 않으면 검사 결과 자체가 없어서 그 종목은 매번 SKIP된다(안전 방향
-    이지만 "왜 안 사지?"의 원인이 되므로 화면에 마지막 검사 시각을 같이 보여준다).
-    body: {ticker: str, enabled: bool}"""
-    body = request.get_json(silent=True) or {}
-    ticker = (body.get('ticker') or '').strip()
-    enabled = bool(body.get('enabled'))
-    if not ticker:
-        return jsonify({'status': 'error', 'message': 'ticker가 필요합니다.'}), 400
-    try:
-        set_candidate_condition_watch('upbit', 'live', ticker, enabled)
-        return jsonify({'status': 'success', 'ticker': ticker, 'enabled': enabled})
-    except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+# 정밀 매수조건은 종목별 opt-in이 아니라 조건 단위 on/off로 바뀌어서(조건을 켜면 실거래 승인된
+# 전 종목에 적용), "🔴 실거래" 표의 정밀검사 체크박스와 그 저장 엔드포인트를 걷어냈다. 설정은
+# /api/auto-trade/conditions/settings 하나로만 바꾼다.
 
 @app.route('/api/auto-trade/live/downside/watchlist', methods=['POST'])
 def set_live_downside_watchlist_api():
