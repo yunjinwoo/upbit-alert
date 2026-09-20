@@ -363,7 +363,7 @@
 
     <div class="card-panel mb-3">
         <div class="section-title mb-2 collapsible-header" onclick="toggleCollapse(this, 'conditionsCardBody')">
-            <span>🔬 정밀 매수조건 (진입 게이트 — 종목별 opt-in)</span>
+            <span>🔬 정밀 매수조건 (진입 게이트 — 켜면 승인된 전 종목에 적용)</span>
             <span class="collapse-chevron" id="conditionsCardChevron">▾</span>
         </div>
         <div id="conditionsCardBody">
@@ -373,16 +373,17 @@
                 <span id="conditionsSavedMsg" class="text-muted" style="font-size:0.76rem"></span>
             </div>
             <div class="mt-2 text-muted" style="font-size:0.72rem">
-                * 위 "🔴 실거래" 표에서 <b>정밀검사</b>를 체크한 종목에만 적용되는 <b>추가</b> 조건입니다.
-                체크하지 않은 종목은 지금까지와 똑같이 스크리닝 조건만으로 매수 판단합니다.
+                * 스크리닝 신호 위에 얹는 <b>추가</b> 조건입니다. 여기서 조건을 하나라도 켜면
+                <b>실거래 승인된 모든 종목</b>이 그 조건까지 통과해야 매수합니다. 하나도 안 켜두면
+                지금까지와 똑같이 스크리닝 조건만으로 판단합니다(종목별로 따로 켜고 끄지 않습니다).
                 <br>* 여러 조건을 켜면 <code>AND</code> 그룹은 <b>전부</b> 충족해야 하고, <code>OR</code> 그룹은
                 <b>하나만</b> 충족하면 됩니다(최종 = AND 전부 통과 AND (OR 그룹이 비었거나 하나 이상 통과)).
-                조건을 하나도 안 켜두면 정밀검사를 체크해도 추가 제약 없이 통과합니다.
                 <br>* <b class="text-danger">검사 프로세스가 떠 있어야 동작합니다</b> —
                 <code>condition-check-bot</code>(<code>python main.py condition_check</code>)이 별도 주기로
                 일봉/5분봉/1분봉을 조회해 결과를 캐시하고, 매매 루프는 그 캐시만 읽습니다.
-                프로세스가 없으면 검사 결과가 없어서 해당 종목은 매번 <b>SKIP</b>됩니다(사지 않는 쪽으로
-                안전하게 동작). 표의 정밀검사 칸에 "검사 없음"이 뜨면 이 경우입니다.
+                프로세스가 없으면 검사 결과가 없어서 <b>승인된 종목을 매번 SKIP</b>합니다(사지 않는 쪽으로
+                안전하게 동작). 표의 정밀검사 칸에 "검사 없음"이 뜨면 이 경우입니다 — 조건을 전부 끄면
+                게이트가 사라져 다시 평소대로 매수합니다.
             </div>
         </div>
     </div>
@@ -650,15 +651,15 @@
              + `<span class="invest-label${over ? ' over' : ''}">${cb} / ${capTxt} (${Math.round(ratio * 100)}%${over ? ' 초과' : ''})</span>`;
     }
 
-    // 정밀검사(진입 게이트) 셀 — 체크박스 + 마지막 검사 결과. condition_passed가 null이면 아직
-    // 검사 결과가 없다는 뜻이고, 그 상태로 체크를 켜두면 실거래 루프가 그 종목을 매번 SKIP한다
-    // (안전 방향이지만 "왜 안 사지?"의 원인이라, 검사 루프가 도는지 여기서 바로 보이게 한다).
+    // 정밀검사(진입 게이트) 셀 — 읽기 전용 라벨. 켜고 끄는 건 아래 "🔬 정밀 매수조건" 카드에서
+    // 조건 단위로만 하고(종목별 opt-in 체크박스는 없앴다 — "실거래 승인"과 생김새가 같아 헷갈렸고,
+    // 조건을 켜놓고 종목을 안 골라 아무 데도 적용되지 않는 일이 잦았다), 여기선 그 결과만 보여준다.
+    // condition_passed가 null이면 아직 검사 결과가 없다는 뜻이고, 그 상태면 실거래 루프가 그 종목을
+    // 매번 SKIP한다(안전 방향이지만 "왜 안 사지?"의 원인이라 여기서 바로 보이게 한다).
     function conditionCellHtml(ticker, row) {
-        const watching = !!row.condition_watch;
-        const cb = `<input type="checkbox" ${watching ? 'checked' : ''}
-                        title="켜면 아래 '정밀 매수조건'을 통과해야 이 종목을 매수합니다"
-                        onchange="toggleConditionWatch('${ticker}', this)">`;
-        if (!watching) return cb;
+        if (!_conditions.some(c => c.enabled)) {
+            return `<span class="text-muted" title="아래 '정밀 매수조건'에서 조건을 켜면 적용됩니다">미적용</span>`;
+        }
 
         let badge;
         if (row.condition_passed === null || row.condition_passed === undefined) {
@@ -671,7 +672,7 @@
         const at = row.condition_checked_at
             ? `<div style="font-size:0.64rem; color:#94a3b8">${row.condition_checked_at}</div>`
             : '';
-        return `${cb}<div style="margin-top:2px">${badge}</div>${at}`;
+        return `${badge}${at}`;
     }
 
     function conditionDetailText(detail) {
@@ -914,16 +915,15 @@
         vol_ratio_threshold: '거래량 배수(이상)',
     };
 
-    // 표 위 한 줄 요약. 게이트가 실제로 걸리려면 "켜진 조건"과 "정밀검사를 체크한 종목"이 둘 다
-    // 있어야 하는데, 조건은 접힌 카드 안에 있고 종목은 표를 훑어야 알 수 있어서 둘 다 안 보였다.
+    // 표 위 한 줄 요약. 어떤 조건이 걸려 있는지는 접힌 카드 안에 있어서 펼치지 않으면 안 보였다.
     // renderConditions()가 _conditions를 채운 뒤에 호출해야 한다.
     function renderConditionSummary(rows) {
         const el = document.getElementById('liveConditionSummary');
         if (!el) return;
         const enabled = _conditions.filter(c => c.enabled);
         if (!enabled.length) {
-            el.innerHTML = '🔬 <b>정밀 매수조건: 켜진 조건 없음</b>'
-                + ' — 종목별 "정밀검사"를 체크해도 추가 제약 없이 통과합니다.';
+            el.innerHTML = '🔬 <b>정밀 매수조건: 꺼짐</b>'
+                + ' — 1차 신호만으로 매수합니다. 아래 카드에서 조건을 켜면 승인된 전 종목에 적용됩니다.';
             return;
         }
         // 조건 결합은 evaluate_conditions()와 같은 규칙: AND 그룹은 전부 충족, OR 그룹은 하나만
@@ -936,11 +936,12 @@
             })
             .filter(Boolean).join(' / ');
 
-        const watched = (rows || []).filter(r => r.condition_watch).map(r => r.ticker);
-        const watchedText = watched.length
-            ? `적용 종목 ${watched.length}개 — ${watched.join(', ')}`
-            : '<b>적용 종목 없음</b> — 표의 "정밀검사"를 체크한 종목에만 적용됩니다.';
-        el.innerHTML = `🔬 정밀 매수조건 <b>${groupText}</b> · ${watchedText}`;
+        // 게이트는 "실거래 승인"된 종목에만 의미가 있다(승인 안 된 종목은 어차피 매수 대상이 아님).
+        const approved = (rows || []).filter(r => r.approved).length;
+        const scopeText = approved
+            ? `실거래 승인 ${approved}개 종목에 적용 중`
+            : '<b>실거래 승인된 종목이 없어 지금은 적용될 곳이 없습니다.</b>';
+        el.innerHTML = `🔬 정밀 매수조건 <b>${groupText}</b> · ${scopeText}`;
     }
 
     function renderConditions(conditions, checkIntervalSec) {
@@ -1013,26 +1014,6 @@
             msg.className = 'text-danger';
         }
         setTimeout(() => { msg.textContent = ''; }, 4000);
-    }
-
-    async function toggleConditionWatch(ticker, checkbox) {
-        const nextEnabled = checkbox.checked;
-        checkbox.disabled = true;
-        try {
-            const res = await fetch('api/auto-trade/live/candidates/condition-watch', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ticker, enabled: nextEnabled }),
-            });
-            const json = await res.json();
-            if (json.status !== 'success') throw new Error(json.message);
-            await loadLiveSummary();
-        } catch (e) {
-            alert('정밀검사 설정 저장 실패: ' + e.message);
-            checkbox.checked = !nextEnabled;
-        } finally {
-            checkbox.disabled = false;
-        }
     }
 
     async function toggleWatchlist(ticker, checkbox) {

@@ -1,11 +1,15 @@
-"""정밀 매수조건(일봉/5분봉/1분봉) 검사 루프 — 대시보드에서 "정밀검사" 체크한 종목만 대상으로,
-자동매매 루프(TRADE_LOOP_INTERVAL_SEC)와 별개 주기(TRADE_CONDITION_CHECK_INTERVAL_SEC, 기본 60초)로
-캔들을 조회해 app/core/entry_conditions.py의 판단 결과를 trade_condition_status에 캐시한다.
+"""정밀 매수조건(일봉/5분봉/1분봉) 검사 루프 — 실거래 승인된 종목을 대상으로, 자동매매 루프
+(TRADE_LOOP_INTERVAL_SEC)와 별개 주기(TRADE_CONDITION_CHECK_INTERVAL_SEC, 기본 60초)로 캔들을
+조회해 app/core/entry_conditions.py의 판단 결과를 trade_condition_status에 캐시한다.
 
 python main.py condition_check 로 독립 프로세스 실행(auto_trader.py의 trade와 같은 이유로 격리 —
 main.py의 start_all()에는 포함하지 않음). auto_trader.py의 evaluate_entries()는 이 캐시만 읽고
 직접 캔들을 재조회하지 않는다(전체 후보를 매 매매 사이클마다 다중 시간대로 조회하면 API 호출이
-너무 많아지므로, 사용자가 지정한 소수 종목만 이 별도 루프가 담당).
+너무 많아지므로, 실제로 매수 대상이 될 수 있는 소수 종목만 이 별도 루프가 담당).
+
+검사 대상은 매매 루프가 진입 판단에서 보는 집합과 같아야 한다 — run_trade_cycle()은 승인(approved)
+∩ 매매대상(watchlist)으로 좁힌 뒤 게이트를 적용하므로, 여기서도 같은 교집합만 검사한다. 조건을
+하나도 안 켜뒀으면 게이트 자체가 없으니 조회도 하지 않는다(부하 0).
 """
 import time
 
@@ -14,7 +18,8 @@ import pyupbit
 from app.utils.logger import get_logger
 from app.core.entry_conditions import evaluate_conditions
 from app.utils.db_manager import (
-    get_condition_watch_tickers,
+    get_approved_candidate_tickers,
+    get_watchlist_tickers,
     get_trade_condition_settings,
     save_condition_status,
     save_job_run_log,
@@ -25,9 +30,8 @@ logger = get_logger()
 
 JOB_NAME = "entry_condition_check"
 # 실거래(live)와 같은 mode를 봐야 한다 — auto_trader.run_trade_cycle()이 진입 게이트를 볼 때
-# get_condition_watch_tickers(broker.broker_name, broker.mode)로 조회하는데 실거래 브로커의
-# mode가 'live'라, 여기서 'paper'를 쓰면 검사 대상도 결과도 실거래 루프와 영영 만나지 않는다
-# (업비트 모의매매 루프는 이미 폐지돼서 paper 쪽을 볼 소비자도 없음).
+# 실거래 브로커의 mode가 'live'라, 여기서 'paper'를 쓰면 검사 대상도 결과도 실거래 루프와 영영
+# 만나지 않는다(업비트 모의매매 루프는 이미 폐지돼서 paper 쪽을 볼 소비자도 없음).
 BROKER, MODE = "upbit", "live"
 
 
@@ -41,14 +45,18 @@ def _get_candles(ticker: str, interval: str, count: int):
 
 
 def run_condition_check_cycle(trigger_type: str = None) -> dict:
-    """1사이클: "정밀검사" 체크된 종목마다 켜진 조건들을 계산해 trade_condition_status에 저장."""
+    """1사이클: 실거래 승인된 종목마다 켜진 조건들을 계산해 trade_condition_status에 저장."""
     start_time = time.strftime('%Y-%m-%d %H:%M:%S')
     success = True
     error_message = None
     checked = 0
     try:
-        tickers = get_condition_watch_tickers(BROKER, MODE)
-        condition_settings = get_trade_condition_settings()
+        condition_settings = get_trade_condition_settings(BROKER)
+        if not any(c['enabled'] for c in condition_settings):
+            tickers = set()  # 켜진 조건이 없으면 게이트가 없는 것과 같아 캔들 조회를 아예 안 한다.
+        else:
+            tickers = (get_approved_candidate_tickers(BROKER, MODE)
+                       & get_watchlist_tickers(BROKER, MODE))
         for ticker in tickers:
             try:
                 result = evaluate_conditions(ticker, condition_settings, _get_candles)

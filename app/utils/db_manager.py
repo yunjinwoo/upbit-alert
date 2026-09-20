@@ -624,9 +624,10 @@ def init_db():
     # 매매 대상 코인 수동 승인(체크박스) — 사용자가 후보 중 일부만 체크하면 그 종목만 진입 대상으로
     # 좁힌다(대시보드/auto_trader.py 참고). 체크된 행이 하나도 없으면 기존처럼 전체 후보를 대상으로 함.
     # 체크 안 한 종목은 행 자체가 없어도 되므로(기본 미승인), 실제로 한 번이라도 토글된 종목만 저장된다.
-    # condition_watch: "정밀 매수조건 검사" 대상 여부(별도 체크박스) — approved와 독립적인 opt-in.
-    # 켜진 종목만 entry_condition_checker.py가 주기적으로 일봉/5분봉/1분봉을 조회해 조건을 검사한다
-    # (전체 후보를 매번 다중 시간대로 조회하면 API 호출이 너무 많아지므로, 사용자가 지정한 종목만 대상).
+    # condition_watch: 정밀 매수조건의 예전 종목별 opt-in 플래그 — 업비트 쪽에서는 더 이상 읽지 않는다.
+    # "실거래 승인"과 생김새가 같은 체크박스라 헷갈렸고 조건만 켜두고 종목을 안 골라 아무 데도 적용되지
+    # 않는 일이 잦아서, 조건을 켜면 승인된 전 종목에 적용되는 방식으로 바꿨다(entry_condition_checker.py는
+    # approved ∩ watchlist를 검사한다). 토스 쪽 엔드포인트가 아직 이 컬럼을 쓰고 있어 컬럼 자체는 남겨둔다.
     # watchlist: 실거래(live) 전용 1단계 필터 — "🎯 매매 대상 코인" 표에서 관심 등록한 종목만
     # "🔴 실거래" 표(2단계, approved로 실제 매수 승인)에 나타난다. approved와 별개 opt-in이라
     # watchlist 없이 approved만 켜는 건 UI상 불가능(이중 안전장치, app/core/auto_trader.py 참고).
@@ -4726,6 +4727,12 @@ def get_trade_condition_settings(broker: str = 'upbit') -> list:
         except (TypeError, ValueError):
             r['params'] = {}
     return rows
+
+
+def conditions_enabled(broker: str = 'upbit') -> bool:
+    """정밀 매수조건이 하나라도 켜져 있는지. 켜진 게 하나도 없으면 진입 게이트 자체가 없는 것과 같아서,
+    매매 루프(evaluate_entries)도 검사 루프(entry_condition_checker)도 이 값으로 통째로 건너뛴다."""
+    return any(c['enabled'] for c in get_trade_condition_settings(broker))
 
 
 def set_trade_condition_setting(condition_key: str, enabled: bool = None, logic_group: str = None,

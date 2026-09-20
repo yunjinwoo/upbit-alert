@@ -49,9 +49,9 @@ from app.utils.db_manager import (
     backfill_position_cost_basis,
     mark_recovery_dca_used,
     mark_recovery_partial_stop,
-    get_condition_watch_tickers,
     get_condition_status_map,
     get_trade_condition_settings,
+    conditions_enabled,
     try_acquire_trade_cycle_lock,
     release_trade_cycle_lock,
 )
@@ -341,13 +341,14 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
                 candidates = [c for c in candidates if c['ticker'] in watchlist_tickers]
 
             # 정밀 매수조건(일봉/5분봉/1분봉) — entry_condition_checker.py가 별도 루프로 캐시해둔 결과만
-            # 읽는다(여기서 직접 캔들을 재조회하지 않음). "정밀검사" 체크된 종목만 이 결과로 추가 게이팅됨.
-            condition_watch_tickers = get_condition_watch_tickers(broker.broker_name, broker.mode)
+            # 읽는다(여기서 직접 캔들을 재조회하지 않음). 조건을 하나라도 켜두면 여기까지 온 후보
+            # 전체가 이 게이트를 통과해야 한다(예전엔 종목별 "정밀검사" 체크가 필요했다).
+            conditions_active = conditions_enabled(broker.broker_name)
             condition_status_map = get_condition_status_map(broker.broker_name, broker.mode)
 
             entry_decisions = evaluate_entries(
                 candidates, positions, account['cash_balance'], broker.get_current_price, strategy_cfg,
-                condition_watch_tickers=condition_watch_tickers, condition_status_map=condition_status_map,
+                conditions_active=conditions_active, condition_status_map=condition_status_map,
             )
             for decision in entry_decisions:
                 _execute(decision, broker)
@@ -447,7 +448,6 @@ def get_dashboard_summary() -> dict:
     # 여기서 후보마다 현재가를 새로 조회하면 종목 수만큼 네트워크 호출이 늘어 페이지가 느려지므로 생략.
     held_tickers = {p['ticker'] for p in positions}
     approved_tickers = get_approved_candidate_tickers(broker.broker_name, broker.mode)
-    condition_watch_tickers = get_condition_watch_tickers(broker.broker_name, broker.mode)
     condition_status_map = get_condition_status_map(broker.broker_name, broker.mode)
     candidates = get_coin_screening_candidates()
     for cand in candidates:
@@ -455,7 +455,6 @@ def get_dashboard_summary() -> dict:
         cand['already_held'] = ticker in held_tickers
         cand['candidate_reason'] = _candidate_reason(cand)
         cand['approved'] = ticker in approved_tickers
-        cand['condition_watch'] = ticker in condition_watch_tickers
         status = condition_status_map.get(ticker)
         cand['condition_passed'] = status['passed'] if status else None
         cand['condition_detail'] = status['detail'] if status else None
@@ -518,7 +517,6 @@ def get_live_dashboard_summary() -> dict:
     watchlist_tickers = get_watchlist_tickers(broker.broker_name, broker.mode)
     # 정밀 매수조건(진입 게이트) — run_trade_cycle()이 진입 판단에서 읽는 것과 같은 broker/mode로
     # 조회해야 화면과 실제 판단이 어긋나지 않는다(entry_condition_checker.py가 이 mode로 채운다).
-    condition_watch_tickers = get_condition_watch_tickers(broker.broker_name, broker.mode)
     condition_status_map = get_condition_status_map(broker.broker_name, broker.mode)
     # 이 봇과 무관하게 보유 중인 다른 코인들(실거래 기능과 상관없이 원래 갖고 있던 코인)까지
     # 화면에 다 나열하면 진짜 매매 대상이 뭔지 헷갈리므로, "승인했거나 이미 봇이 추적 중인" 종목만
@@ -585,13 +583,12 @@ def get_live_dashboard_summary() -> dict:
         }
 
     def _condition_fields(ticker):
-        """정밀검사 opt-in 여부와 마지막 검사 결과. condition_passed가 None이면 "아직 검사 결과 없음"
-        = 다음 사이클에 SKIP된다는 뜻이라, 화면에서 검사 루프가 도는지 눈으로 확인할 수 있게 한다.
-        후보 행과 보유 전용 행(extra_positions)이 같은 값을 써야 한다 — 한쪽만 채우면 그 행의
-        체크박스가 DB와 다른 상태로 그려진다."""
+        """마지막 정밀조건 검사 결과(표의 "정밀검사" 칸에 라벨로 표시). condition_passed가 None이면
+        "아직 검사 결과 없음" = 조건이 켜져 있다면 다음 사이클에 SKIP된다는 뜻이라, 화면에서 검사
+        루프가 도는지 눈으로 확인할 수 있게 한다. 후보 행과 보유 전용 행(extra_positions)이 같은
+        값을 써야 한다 — 한쪽만 채우면 그 행만 다른 상태로 그려진다."""
         status = condition_status_map.get(ticker)
         return {
-            'condition_watch': ticker in condition_watch_tickers,
             'condition_passed': status['passed'] if status else None,
             'condition_detail': status['detail'] if status else None,
             'condition_checked_at': status['checked_at'] if status else None,
