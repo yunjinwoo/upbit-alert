@@ -43,6 +43,19 @@
         .chart-link { color: #4da6ff; text-decoration: none; font-size: 0.78rem; }
         .chart-link:hover { text-decoration: underline; }
         .loading-row td { text-align: center; color: #94a3b8; padding: 30px; }
+
+        /* 스크리닝 후보와 겹치는 줄은 한눈에 찾을 수 있게 강조 — 이 화면을 보는 목적 자체가
+           "순위 중에서 진입 근거가 이미 있는 게 뭔가"를 고르는 것이라서. */
+        .rank-table tr.is-candidate td { background: #f0fdf4; }
+        .rank-table tr.is-candidate td:first-child { box-shadow: inset 3px 0 0 #22c55e; }
+        .rank-table tr.is-candidate:hover td { background: #dcfce7; }
+        .sig-badges { margin-top: 2px; display: flex; flex-wrap: wrap; gap: 3px; }
+        .sig-badge { background: #dcfce7; color: #15803d; font-size: 0.64rem; padding: 1px 5px; border-radius: 9px; white-space: nowrap; }
+        .sig-badge.watch { background: #fef3c7; color: #b45309; }
+        .panel-count { font-size: 0.72rem; font-weight: 500; color: #94a3b8; margin-left: 6px; }
+        .rank-table td:nth-last-child(2) { text-align: center; }
+        .watch-check { cursor: pointer; width: 15px; height: 15px; vertical-align: middle; }
+        .watch-check:disabled { cursor: wait; opacity: 0.5; }
     </style>
 </head>
 <body>
@@ -62,7 +75,7 @@
     <div class="row g-3">
         <div class="col-lg-6">
             <div class="card-panel">
-                <div class="panel-title">📈 당일 상승률 상위 10</div>
+                <div class="panel-title">📈 당일 상승률 상위 10<span class="panel-count" id="gainersCount"></span></div>
                 <div class="rank-wrap">
                     <table class="rank-table">
                         <thead>
@@ -72,11 +85,12 @@
                                 <th>현재가</th>
                                 <th>등락률</th>
                                 <th>거래대금</th>
+                                <th>매매대상</th>
                                 <th>차트</th>
                             </tr>
                         </thead>
                         <tbody id="gainersBody">
-                            <tr class="loading-row"><td colspan="6">로딩 중...</td></tr>
+                            <tr class="loading-row"><td colspan="7">로딩 중...</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -85,7 +99,7 @@
 
         <div class="col-lg-6">
             <div class="card-panel">
-                <div class="panel-title">💰 당일 거래대금 상위 10</div>
+                <div class="panel-title">💰 당일 거래대금 상위 10<span class="panel-count" id="valueCount"></span></div>
                 <div class="rank-wrap">
                     <table class="rank-table">
                         <thead>
@@ -95,11 +109,12 @@
                                 <th>현재가</th>
                                 <th>등락률</th>
                                 <th>거래대금</th>
+                                <th>매매대상</th>
                                 <th>차트</th>
                             </tr>
                         </thead>
                         <tbody id="valueBody">
-                            <tr class="loading-row"><td colspan="6">로딩 중...</td></tr>
+                            <tr class="loading-row"><td colspan="7">로딩 중...</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -111,6 +126,9 @@
         * 등락률은 업비트 화면과 같은 기준(전일 종가 = KST 0시 대비 현재가). 거래대금은 KST 0시부터 누적된 당일 원화 거래대금이며 억 원 단위로 표시합니다.
         &nbsp;|&nbsp; 대상은 KRW 마켓 전 종목이고 스테이블코인도 빼지 않습니다 — USDT 거래대금 자체가 자금 흐름 신호라서입니다.
         &nbsp;|&nbsp; 코인 스크리닝과 달리 현재가 API 1회 호출이라 새로고침하면 바로 최신값이 나옵니다.
+        &nbsp;|&nbsp; <strong>초록색 줄</strong>은 코인 스크리닝의 진입 후보(돌파·200선근접+구름위·모멘텀 컨플루언스)와 겹치는 종목이고, 뱃지는 켜진 신호입니다.
+        &nbsp;|&nbsp; <strong>매매대상</strong> 체크는 자동매매 화면의 "🎯 매매 대상 코인"(1단계 관심 등록)과 같은 값이라 어느 쪽에서 켜도 똑같이 반영됩니다. 다만 실거래 표(2단계)에는 스크리닝 후보와 겹칠 때만 올라오므로, 초록색 줄에 체크하는 게 바로 효과가 있습니다.
+        &nbsp;|&nbsp; 순위만 보고 넣으면 이미 오른 뒤에 따라 사는 셈이 됩니다 — 진입 근거는 스크리닝 신호로 보고, 순위는 그중 돈과 관심이 몰린 쪽을 고르는 용도로 쓰세요.
     </div>
 </div>
 
@@ -132,27 +150,65 @@
     function renderRows(tbodyId, rows) {
         const tbody = document.getElementById(tbodyId);
         if (!rows || !rows.length) {
-            tbody.innerHTML = '<tr class="loading-row"><td colspan="6">데이터가 없습니다.</td></tr>';
+            tbody.innerHTML = '<tr class="loading-row"><td colspan="7">데이터가 없습니다.</td></tr>';
             return;
         }
         tbody.innerHTML = rows.map((r, i) => {
             const cls = r.change_rate > 0 ? 'change-pos' : (r.change_rate < 0 ? 'change-neg' : '');
             const sign = r.change_rate > 0 ? '+' : '';
             const upbitUrl = `https://upbit.com/exchange?code=CRIX.UPBIT.${r.ticker}`;
+            const badges = (r.screening_candidate ? (r.signals || []) : [])
+                .map(s => `<span class="sig-badge">${s}</span>`).join('');
+            // 스크리닝 후보가 아닌 종목도 체크해 둘 수는 있지만, 실거래 표에는 스크리닝 후보와
+            // 겹칠 때만 올라온다(auto_trader.py가 두 목록의 교집합을 쓴다) — 그 점을 툴팁으로 알린다.
+            const watchTitle = r.screening_candidate
+                ? '매매 대상(관심 등록) — 자동매매 실거래 표에 올라옵니다'
+                : '지금은 스크리닝 후보가 아니라 체크해도 실거래 표에 오르지 않습니다 (후보가 되면 적용)';
             return `
-                <tr>
+                <tr class="${r.screening_candidate ? 'is-candidate' : ''}">
                     <td class="rank-no">${i + 1}</td>
                     <td>
                         <div class="coin-name">${r.name}</div>
                         <div class="coin-ticker">${r.ticker}</div>
+                        ${badges ? `<div class="sig-badges">${badges}</div>` : ''}
                     </td>
                     <td>${fmtPrice(r.price)}</td>
                     <td class="${cls}">${sign}${r.change_rate}%</td>
                     <td>${fmtValue(r.trade_value)}</td>
+                    <td><input type="checkbox" class="watch-check" data-ticker="${r.ticker}"
+                               ${r.watchlisted ? 'checked' : ''} title="${watchTitle}"
+                               onchange="toggleWatchlist('${r.ticker}', this)"></td>
                     <td><a class="chart-link" href="${upbitUrl}" target="_blank" rel="noopener">📈</a></td>
                 </tr>
             `;
         }).join('');
+    }
+
+    async function toggleWatchlist(ticker, checkbox) {
+        const next = checkbox.checked;
+        // 같은 종목이 상승률/거래대금 양쪽 표에 동시에 나올 수 있다 — 한쪽만 바뀌면 화면이 서로
+        // 어긋나 보이므로 같은 티커의 체크박스를 전부 함께 다룬다.
+        const twins = [...document.querySelectorAll(`.watch-check[data-ticker="${ticker}"]`)];
+        twins.forEach(c => { c.checked = next; c.disabled = true; });
+        try {
+            const res = await fetch('api/auto-trade/live/candidates/watchlist', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ticker, watchlisted: next }),
+            });
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+        } catch (e) {
+            alert('매매 대상 등록 저장 실패: ' + e.message);
+            twins.forEach(c => { c.checked = !next; });
+        } finally {
+            twins.forEach(c => { c.disabled = false; });
+        }
+    }
+
+    function renderOverlapCount(spanId, rows) {
+        const n = (rows || []).filter(r => r.screening_candidate).length;
+        document.getElementById(spanId).textContent = n ? `스크리닝 후보 ${n}개` : '겹치는 후보 없음';
     }
 
     async function load() {
@@ -168,10 +224,18 @@
 
             renderRows('gainersBody', json.top_gainers);
             renderRows('valueBody', json.top_trade_value);
+            renderOverlapCount('gainersCount', json.top_gainers);
+            renderOverlapCount('valueCount', json.top_trade_value);
+
+            // 스크리닝은 하루 한 번 도는 스냅샷이라 순위(실시간)와 기준 시각이 다르다.
+            // 언제 것과 비교한 겹침인지 같이 보여줘야 오래된 스냅샷을 믿고 넣는 일이 없다.
+            const screening = json.screening_updated_at
+                ? ` · 스크리닝 후보 ${json.screening_count}개 (${json.screening_updated_at} 기준)`
+                : ' · 스크리닝 스냅샷 없음';
             document.getElementById('updatedAt').textContent =
-                `기준 ${json.fetched_at} (KST) · ${json.total_count}개 종목`;
+                `기준 ${json.fetched_at} (KST) · ${json.total_count}개 종목${screening}`;
         } catch (e) {
-            const msg = `<tr class="loading-row"><td colspan="6">불러오지 못했습니다: ${e.message}</td></tr>`;
+            const msg = `<tr class="loading-row"><td colspan="7">불러오지 못했습니다: ${e.message}</td></tr>`;
             document.getElementById('gainersBody').innerHTML = msg;
             document.getElementById('valueBody').innerHTML = msg;
             document.getElementById('updatedAt').textContent = '';
