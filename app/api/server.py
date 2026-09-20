@@ -1207,13 +1207,19 @@ def set_candidate_condition_watch_api():
 @app.route('/api/auto-trade/conditions/settings', methods=['POST'])
 def set_trade_condition_settings_api():
     """정밀 매수조건(일봉 20MA 위/5분봉 지지반등/1분봉 볼밴+거래량 돌파 등) 설정 저장 — 여러 건
-    한 번에 부분 갱신 가능. body: {conditions: [{condition_key, enabled?, logic_group?, params?}, ...]}
-    logic_group은 'AND' 또는 'OR'만 허용. params는 조건별로 다른 키를 부분 갱신(넘긴 키만 덮어씀)."""
+    한 번에 부분 갱신 가능. body: {conditions: [{condition_key, enabled?, logic_group?, params?}, ...],
+    observe_only?: bool}
+    logic_group은 'AND' 또는 'OR'만 허용. params는 조건별로 다른 키를 부분 갱신(넘긴 키만 덮어씀).
+    observe_only는 조건별 설정이 아니라 브로커 단위 스위치라 trade_strategy_settings에 저장한다 —
+    켜두면 조건 검사와 화면 라벨은 그대로 돌지만 매수를 막지 않는다(진입 게이트 해제)."""
     body = request.get_json(silent=True) or {}
     conditions = body.get('conditions')
     if not isinstance(conditions, list) or not conditions:
         return jsonify({'status': 'error', 'message': 'conditions 배열이 필요합니다.'}), 400
     try:
+        observe_only = body.get('observe_only')
+        if observe_only is not None:
+            set_trade_strategy_settings(conditions_observe_only=bool(observe_only))
         updated = []
         for c in conditions:
             condition_key = (c.get('condition_key') or '').strip()
@@ -1232,7 +1238,8 @@ def set_trade_condition_settings_api():
                 logic_group=logic_group,
                 params=params,
             ))
-        return jsonify({'status': 'success', 'conditions': updated})
+        return jsonify({'status': 'success', 'conditions': updated,
+                        'observe_only': get_trade_strategy_settings()['conditions_observe_only']})
     except ValueError as e:
         return jsonify({'status': 'error', 'message': str(e)}), 400
     except Exception as e:

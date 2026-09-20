@@ -51,7 +51,7 @@ from app.utils.db_manager import (
     mark_recovery_partial_stop,
     get_condition_status_map,
     get_trade_condition_settings,
-    conditions_enabled,
+    conditions_gate_active,
     try_acquire_trade_cycle_lock,
     release_trade_cycle_lock,
 )
@@ -343,7 +343,9 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
             # 정밀 매수조건(일봉/5분봉/1분봉) — entry_condition_checker.py가 별도 루프로 캐시해둔 결과만
             # 읽는다(여기서 직접 캔들을 재조회하지 않음). 조건을 하나라도 켜두면 여기까지 온 후보
             # 전체가 이 게이트를 통과해야 한다(예전엔 종목별 "정밀검사" 체크가 필요했다).
-            conditions_active = conditions_enabled(broker.broker_name)
+            # 단, "관찰 모드"(conditions_observe_only)면 게이트를 걸지 않는다 — 검사와 화면 라벨은
+            # 그대로 돌아가고 매수만 평소처럼 진행된다(conditions_gate_active 참고).
+            conditions_active = conditions_gate_active(broker.broker_name)
             condition_status_map = get_condition_status_map(broker.broker_name, broker.mode)
 
             entry_decisions = evaluate_entries(
@@ -696,6 +698,9 @@ def get_live_dashboard_summary() -> dict:
         # 정밀 매수조건 설정(브로커 단위 — mode 구분 없음). 화면에서 조건별 on/off·파라미터를 수정한다.
         'conditions': get_trade_condition_settings(broker.broker_name),
         'condition_check_interval_sec': strategy_settings['condition_check_interval_sec'],
+        # 관찰 모드면 조건이 켜져 있어도 매수를 막지 않는다 — 표의 정밀검사 라벨과 요약 문구가
+        # "참고용"임을 화면에서 구분해 보여주기 위해 같이 내려준다.
+        'conditions_observe_only': bool(strategy_settings['conditions_observe_only']),
     }
 
 

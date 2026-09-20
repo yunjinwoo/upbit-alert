@@ -41,7 +41,7 @@ from app.utils.db_manager import (
     mark_position_dca_used,
     get_condition_status_map,
     get_trade_condition_settings,
-    conditions_enabled,
+    conditions_gate_active,
 )
 
 logger = get_logger()
@@ -209,7 +209,7 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
             # 업비트와 같은 규칙: 정밀 매수조건을 하나라도 켜두면 후보 전체가 게이트를 통과해야 한다.
             # 토스 조건은 전부 꺼진 채(기본값) 화면도 없어서 지금은 항상 False다 — 켜려면
             # toss-condition-check-bot을 먼저 띄워야 검사 결과가 채워진다(안 그러면 전부 SKIP).
-            conditions_active = conditions_enabled(broker.broker_name)
+            conditions_active = conditions_gate_active(broker.broker_name)
             condition_status_map = get_condition_status_map(broker.broker_name, broker.mode)
 
             entry_decisions = evaluate_entries(

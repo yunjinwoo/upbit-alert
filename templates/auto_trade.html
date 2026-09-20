@@ -367,6 +367,11 @@
             <span class="collapse-chevron" id="conditionsCardChevron">▾</span>
         </div>
         <div id="conditionsCardBody">
+            <label class="form-label mb-2 d-block" style="font-size:0.76rem; color:#334155">
+                <input type="checkbox" id="conditionsObserveOnly" style="margin-right:4px">
+                <b>관찰 모드</b> — 조건을 검사해서 결과만 표의 "정밀검사" 칸에 보여주고,
+                <b>매수는 막지 않습니다</b>(조건이 실제로 어떻게 걸리는지 먼저 지켜볼 때).
+            </label>
             <div id="conditionsBody">로딩 중...</div>
             <div class="d-flex align-items-center gap-2 pt-2">
                 <button class="btn-search" onclick="saveConditions()">저장</button>
@@ -384,6 +389,9 @@
                 프로세스가 없으면 검사 결과가 없어서 <b>승인된 종목을 매번 SKIP</b>합니다(사지 않는 쪽으로
                 안전하게 동작). 표의 정밀검사 칸에 "검사 없음"이 뜨면 이 경우입니다 — 조건을 전부 끄면
                 게이트가 사라져 다시 평소대로 매수합니다.
+                <br>* <b>관찰 모드</b>를 켜두면 위의 게이트 동작이 전부 빠집니다 — 검사는 그대로 돌아
+                라벨만 채우고, 매수는 조건과 무관하게 1차 신호대로 진행합니다. 결과를 보고 믿을 만하면
+                관찰 모드를 끄면 그때부터 실제로 매수를 거릅니다.
             </div>
         </div>
     </div>
@@ -656,23 +664,34 @@
     // 조건을 켜놓고 종목을 안 골라 아무 데도 적용되지 않는 일이 잦았다), 여기선 그 결과만 보여준다.
     // condition_passed가 null이면 아직 검사 결과가 없다는 뜻이고, 그 상태면 실거래 루프가 그 종목을
     // 매번 SKIP한다(안전 방향이지만 "왜 안 사지?"의 원인이라 여기서 바로 보이게 한다).
+    // 관찰 모드(_conditionsObserveOnly)에서는 어느 라벨이든 매수를 막지 않으므로, 결과를 같은 자리에
+    // 보여주되 "참고"로 표시하고 색도 경고색을 쓰지 않는다(안 사는 이유로 오해하지 않게).
     function conditionCellHtml(ticker, row) {
         if (!_conditions.some(c => c.enabled)) {
             return `<span class="text-muted" title="아래 '정밀 매수조건'에서 조건을 켜면 적용됩니다">미적용</span>`;
         }
 
+        const observe = _conditionsObserveOnly;
+        const detail = escapeAttr(conditionDetailText(row.condition_detail));
         let badge;
         if (row.condition_passed === null || row.condition_passed === undefined) {
-            badge = `<span class="signal-badge signal-badge-mild" title="검사 결과가 없어 다음 사이클에 SKIP됩니다 — condition-check-bot이 떠 있는지 확인하세요">검사 없음</span>`;
+            const noResultTitle = observe
+                ? '검사 결과가 없습니다 — condition-check-bot이 떠 있는지 확인하세요(관찰 모드라 매수는 그대로 진행됩니다)'
+                : '검사 결과가 없어 다음 사이클에 SKIP됩니다 — condition-check-bot이 떠 있는지 확인하세요';
+            badge = `<span class="signal-badge signal-badge-mild" title="${noResultTitle}">검사 없음</span>`;
         } else if (row.condition_passed) {
-            badge = `<span class="signal-badge signal-badge-good" title="${escapeAttr(conditionDetailText(row.condition_detail))}">통과</span>`;
+            badge = `<span class="signal-badge signal-badge-good" title="${detail}">통과</span>`;
+        } else if (observe) {
+            badge = `<span class="signal-badge signal-badge-mild" title="${detail}">미충족</span>`;
         } else {
-            badge = `<span class="signal-badge signal-badge-warn" title="${escapeAttr(conditionDetailText(row.condition_detail))}">미충족</span>`;
+            badge = `<span class="signal-badge signal-badge-warn" title="${detail}">미충족</span>`;
         }
+        const observeNote = observe
+            ? `<div style="font-size:0.64rem; color:#94a3b8">참고(관찰 모드)</div>` : '';
         const at = row.condition_checked_at
             ? `<div style="font-size:0.64rem; color:#94a3b8">${row.condition_checked_at}</div>`
             : '';
-        return `${badge}${at}`;
+        return `${badge}${observeNote}${at}`;
     }
 
     function conditionDetailText(detail) {
@@ -740,7 +759,8 @@
             engineStatusText.className = 'engine-status-text ' + (json.engine_enabled ? 'engine-status-on' : 'engine-status-off');
             renderCycleTiming(json);
             // 행 툴팁이 조건 라벨(CONDITION_LABELS)을 쓰므로 표를 그리기 전에 먼저 채운다.
-            renderConditions(json.conditions || [], json.condition_check_interval_sec);
+            renderConditions(json.conditions || [], json.condition_check_interval_sec,
+                             json.conditions_observe_only);
             renderConditionSummary([...(json.candidates || []), ...(json.extra_positions || [])]);
 
             const dcaMaxCount = json.dca_max_count ?? 1;  // ??만 사용 — 0(물타기 완전 비활성화)은 유효한
@@ -904,6 +924,7 @@
     // (db_manager가 브로커별로 3종을 기본 비활성으로 시딩) — 화면은 live-summary가 넘겨준 걸 그대로
     // 그리고, 파라미터 키도 서버가 준 params 객체에서 뽑아 쓴다(여기에 조건 목록을 중복 정의하지 않음).
     let _conditions = [];
+    let _conditionsObserveOnly = false;  // 관찰 모드: 조건은 검사하되 매수는 막지 않음
     let CONDITION_LABELS = {};
 
     const CONDITION_PARAM_LABELS = {
@@ -936,6 +957,13 @@
             })
             .filter(Boolean).join(' / ');
 
+        // 관찰 모드면 조건이 켜져 있어도 매수를 막지 않는다 — 라벨만 채우는 상태라는 걸 먼저 알린다.
+        if (_conditionsObserveOnly) {
+            el.innerHTML = `🔬 정밀 매수조건 <b>${groupText}</b> · <b>관찰 모드 — 결과만 표시하고`
+                         + ` 매수는 막지 않습니다.</b> 아래 카드에서 관찰 모드를 끄면 그때부터 게이트가 걸립니다.`;
+            return;
+        }
+
         // 게이트는 "실거래 승인"된 종목에만 의미가 있다(승인 안 된 종목은 어차피 매수 대상이 아님).
         const approved = (rows || []).filter(r => r.approved).length;
         const scopeText = approved
@@ -944,8 +972,13 @@
         el.innerHTML = `🔬 정밀 매수조건 <b>${groupText}</b> · ${scopeText}`;
     }
 
-    function renderConditions(conditions, checkIntervalSec) {
+    function renderConditions(conditions, checkIntervalSec, observeOnly) {
         if (Array.isArray(conditions)) _conditions = conditions;
+        if (observeOnly !== undefined) {
+            _conditionsObserveOnly = !!observeOnly;
+            const observeBox = document.getElementById('conditionsObserveOnly');
+            if (observeBox) observeBox.checked = _conditionsObserveOnly;
+        }
         CONDITION_LABELS = Object.fromEntries(_conditions.map(c => [c.condition_key, c.label || c.condition_key]));
         const body = document.getElementById('conditionsBody');
         if (!_conditions.length) {
@@ -1002,7 +1035,10 @@
             const res = await fetch('api/auto-trade/conditions/settings', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ conditions: Object.values(byKey) }),
+                body: JSON.stringify({
+                    conditions: Object.values(byKey),
+                    observe_only: !!document.getElementById('conditionsObserveOnly').checked,
+                }),
             });
             const json = await res.json();
             if (json.status !== 'success') throw new Error(json.message);
