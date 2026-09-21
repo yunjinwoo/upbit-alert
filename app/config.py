@@ -9,6 +9,10 @@ class Config:
 
     # Database
     DB_NAME = "alerts.db"
+    # 백테스트용 과거 캔들 캐시 — 운영 DB와 파일을 분리한다(1시간봉 3개월이면 60만 행이라 섞으면
+    # alerts.db 백업/조회가 같이 무거워지고, 캔들은 언제든 다시 받을 수 있는 파생 데이터라
+    # 날려도 되는 파일로 두는 게 맞다). app/backtest/candle_store.py 참고.
+    BACKTEST_DB_NAME = "backtest_candles.db"
 
     # Upbit Settings — 분봉은 노이즈가 커서 4시간봉 하나만 대표로 남기고, 일봉/주봉을 더해 3개 타임프레임으로 감시
     UPBIT_INTERVALS = {

@@ -102,6 +102,13 @@ def normalize_exit_reason(reason: Optional[str]) -> str:
         return 'trailing_take_profit'
     if text.startswith('강제매도'):
         return MANUAL_SELL_REASON
+    # 백테스트(app/backtest/engine.py)에서만 나오는 청산 사유 — 실매매 로그에는 들어오지 않는다.
+    # 기준선(정해진 시간만 보유)과 구간 끝 강제 정리를 '기타'로 뭉뚱그리면 백테스트 리포트의
+    # 청산사유 표가 읽히지 않아서 이름을 남겨 둔다.
+    if text.startswith('hold_period'):
+        return 'hold_period'
+    if text.startswith('backtest_end'):
+        return 'backtest_end'
     return '기타'
 
 
