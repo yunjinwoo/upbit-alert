@@ -19,6 +19,8 @@
 | [auto-trade-downside-watch.md](auto-trade-downside-watch.md) | ✅ Phase 1 머지됨 (PR #62, 2026-09-03) · Phase 2 미정 | 하락위험 코인 관심목록 — 매수 파이프라인의 거울상, 표시 전용 |
 | [auto-trade-performance.md](auto-trade-performance.md) | ✅ 머지됨 (PR #71, 2026-09-18) | 매매 성과 화면 — 매수→매도를 한 사이클로 묶어 승률·누적 손익·진입 신호별 기여도 조회 (읽기 전용) |
 
+| [backtest.md](backtest.md) | ✅ 구현 완료 (2026-09-21) | 백테스트 — 당일 상승률/거래대금 상위 종목에 기존 진입·청산 로직을 과거 캔들로 돌려 성과 비교 (수집은 서버 전용) |
+
 관련 게이지 기능(종목당 투입원금 상한 표시)은 `auto-trade-recovery-dca.md`의 1단계로 이미 머지됨(PR #59).
 
 ---

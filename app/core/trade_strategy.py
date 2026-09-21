@@ -228,7 +228,7 @@ def _evaluate_exit_recovery(pos: dict, price: float, cfg, rsi_now: float = None,
 
 
 def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional[float]], cfg,
-                    rsi_map: dict = None) -> List[TradeDecision]:
+                    rsi_map: dict = None, now: datetime = None) -> List[TradeDecision]:
     """보유 포지션마다 익절/RSI 과매수 매도/트레일링 손절(연속 확인 포함)/물타기 여부를 판단한다.
 
     물타기는 종목별 dca_enabled 체크박스와 무관하게 항상 먼저 시도한다 — 손절 조건이 연속확인까지
@@ -245,7 +245,12 @@ def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional
     미리 조회해 넘긴다(app/core/exit_conditions.py 참고). 꺼져 있거나 값이 없으면 이 판단은 건너뛴다.
 
     cfg.TRADE_RECOVERY_DCA_ENABLED가 켜져 있으면 포지션마다 아래 판단 대신
-    _evaluate_exit_recovery()를 쓴다(회복형 분할 물타기 — 트레일링 손절을 쓰지 않는 별도 모드)."""
+    _evaluate_exit_recovery()를 쓴다(회복형 분할 물타기 — 트레일링 손절을 쓰지 않는 별도 모드).
+
+    now: 회복형 모드의 쿨다운/시간 하드스톱이 기준으로 삼을 현재 시각. 실매매에서는 넘기지 않아
+    벽시계(datetime.now())를 쓰지만, 백테스트(app/backtest/engine.py)는 과거의 한 시점을 돌리는
+    것이라 반드시 그때의 시각을 넘겨야 한다 — 안 넘기면 "오늘"과 비교해 쿨다운이 항상 지난 것으로
+    판정된다."""
     decisions = []
     rsi_map = rsi_map or {}
     recovery_mode = getattr(cfg, 'TRADE_RECOVERY_DCA_ENABLED', False)
@@ -265,7 +270,7 @@ def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional
         # 회복형 분할 물타기 모드 — 아래 트레일링 손절/물타기 로직 전체를 대체한다
         # (docs/auto-trade-recovery-dca.md, _evaluate_exit_recovery() docstring 참고)
         if recovery_mode:
-            decisions.append(_evaluate_exit_recovery(pos, price, cfg, rsi_now=rsi_map.get(ticker)))
+            decisions.append(_evaluate_exit_recovery(pos, price, cfg, rsi_now=rsi_map.get(ticker), now=now))
             continue
 
         peak = max(pos.get('peak_price') or avg_price, price)
@@ -406,7 +411,9 @@ def evaluate_entries(candidates: List[dict], positions: List[dict], cash_balance
             decisions.append(TradeDecision(ticker, 'SKIP', reason='시세 조회 실패'))
             continue
 
-        base_reason = (
+        # entry_reason이 실려 있으면 그대로 쓴다 — 스크리닝이 아닌 다른 기준으로 고른 후보
+        # (백테스트의 당일 상승률/거래대금 순위 등)가 스크리닝 신호 이름을 뒤집어쓰지 않게 하기 위함.
+        base_reason = cand.get('entry_reason') or (
             'breakout_4h' if cand.get('breakout_4h')
             else 'breakout_1d' if cand.get('breakout_1d')
             else 'near_ma200+above_cloud_1d' if cand.get('near_ma200') and cand.get('above_cloud_1d') and not cand.get('above_cloud')
