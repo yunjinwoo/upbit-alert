@@ -99,6 +99,10 @@ def _effective_strategy_config() -> SimpleNamespace:
         TRADE_TRAILING_TP_ENABLED=s['trailing_tp_enabled'],
         TRADE_TRAILING_TP_ARM_PCT=s['trailing_tp_arm_pct'],
         TRADE_TRAILING_TP_FLOOR_PCT=s['trailing_tp_floor_pct'],
+        TRADE_TIGHT_STOP_ENABLED=s['tight_stop_enabled'],
+        TRADE_TIGHT_STOP_INITIAL_PCT=s['tight_stop_initial_pct'],
+        TRADE_TIGHT_STOP_ARM_PCT=s['tight_stop_arm_pct'],
+        TRADE_TIGHT_STOP_TRAIL_PCT=s['tight_stop_trail_pct'],
         # 회복형 분할 물타기(docs/auto-trade-recovery-dca.md) — 기본값은 꺼짐.
         # TRADE_MIN_ORDER_KRW는 대시보드에서 바꾸는 값이 아니라 거래소 제약이라 Config에서 직접 읽는다
         # (부분 매도 금액이 이 밑으로 내려가면 쪼개지 않고 전량 매도).
@@ -695,6 +699,12 @@ def get_live_dashboard_summary() -> dict:
         # (recovery_dca_count/recovery_dca_max_count) — 화면이 어느 쪽을 보여줄지 정할 수 있게 같이 내려준다.
         'recovery_dca_enabled': bool(strategy_cfg.TRADE_RECOVERY_DCA_ENABLED),
         'recovery_dca_max_count': strategy_cfg.TRADE_RECOVERY_DCA_MAX_COUNT,
+        # 짧은 손절 · 긴 수익 모드가 켜져 있으면 물타기를 아예 하지 않으므로 표의 "물타기 n/m" 칸과
+        # 상태 뱃지가 달라진다(docs/auto-trade-tight-stop.md) — 화면이 구분할 수 있게 같이 내려준다.
+        'tight_stop_enabled': bool(getattr(strategy_cfg, 'TRADE_TIGHT_STOP_ENABLED', False)),
+        'tight_stop_initial_pct': getattr(strategy_cfg, 'TRADE_TIGHT_STOP_INITIAL_PCT', None),
+        'tight_stop_arm_pct': getattr(strategy_cfg, 'TRADE_TIGHT_STOP_ARM_PCT', None),
+        'tight_stop_trail_pct': getattr(strategy_cfg, 'TRADE_TIGHT_STOP_TRAIL_PCT', None),
         # 정밀 매수조건 설정(브로커 단위 — mode 구분 없음). 화면에서 조건별 on/off·파라미터를 수정한다.
         'conditions': get_trade_condition_settings(broker.broker_name),
         'condition_check_interval_sec': strategy_settings['condition_check_interval_sec'],

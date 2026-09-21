@@ -139,6 +139,21 @@ class Config:
     TRADE_TRAILING_TP_FLOOR_PCT = 2.0       # 감시 중 현재 수익률이 이 값 이하로 내려오면 즉시 매도
                                             # (단 수익 구간일 때만 — 손실로 돌아섰으면 기존 손절/물타기 흐름)
 
+    # ── 짧은 손절 · 긴 수익(tight stop) — docs/auto-trade-tight-stop.md
+    # "손절은 짧게, 수익은 길게"를 위한 청산 모드. 기존 로직은 손절폭(TRADE_STOP_LOSS_PCT) 하나가
+    # "손실을 끊는 폭"과 "수익을 지키는 폭"을 겸해서, 짧게 줄이면 오른 종목도 금방 털리고 넓게 두면
+    # 손실이 커지는 문제가 있었다. 그래서 이 모드는 두 폭을 분리한다.
+    #   · 수익 전환 전(고점 수익률 < ARM_PCT): 평단 대비 -INITIAL_PCT에서 즉시 손절(짧게 끊는다)
+    #   · 고점 수익률이 ARM_PCT를 넘은 뒤: 고점 대비 -TRAIL_PCT까지 버틴다(수익을 길게 끌고 간다)
+    # 켜면 물타기(TRADE_DCA_*)를 쓰지 않는다 — 손실 종목에 원금을 더 넣는 건 "짧은 손절"과 정반대라
+    # 같이 켜면 손절이 다시 늘어진다. 되돌림 익절(TRADE_TRAILING_TP_*)도 수익을 3~4%에서 끊는 규칙이라
+    # 이 모드에서는 무시한다(app/core/trade_strategy.py의 evaluate_exits 참고).
+    # 기본값은 꺼짐 — 켜기 전까지 기존 동작은 전혀 바뀌지 않는다.
+    TRADE_TIGHT_STOP_ENABLED = False      # 짧은 손절 · 긴 수익 모드 on/off
+    TRADE_TIGHT_STOP_INITIAL_PCT = 2.0    # 수익 전환 전 손절 기준 — 평단 대비 이 % 이상 하락하면 즉시 매도
+    TRADE_TIGHT_STOP_ARM_PCT = 5.0        # 고점 수익률(평단 대비, %)이 이 값을 넘으면 트레일링 구간으로 전환
+    TRADE_TIGHT_STOP_TRAIL_PCT = 8.0      # 전환 후 허용 하락폭 — 고점 대비 이 % 이상 밀리면 매도
+
     # ── 회복형 분할 물타기(recovery DCA) — docs/auto-trade-recovery-dca.md
     # 깊은 하락에서 소액으로 나눠 물타고, 새 평단 조금 위에서 소폭 익절로 빠져나오는 걸 반복하는
     # 청산 모드. 켜면 이 포지션들에 대해 트레일링 손절(TRADE_STOP_LOSS_PCT)을 쓰지 않고 아래

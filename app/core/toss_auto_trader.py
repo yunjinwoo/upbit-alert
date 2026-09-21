@@ -66,6 +66,10 @@ def _effective_strategy_config() -> SimpleNamespace:
         TRADE_TRAILING_TP_ENABLED=s['trailing_tp_enabled'],
         TRADE_TRAILING_TP_ARM_PCT=s['trailing_tp_arm_pct'],
         TRADE_TRAILING_TP_FLOOR_PCT=s['trailing_tp_floor_pct'],
+        TRADE_TIGHT_STOP_ENABLED=s['tight_stop_enabled'],
+        TRADE_TIGHT_STOP_INITIAL_PCT=s['tight_stop_initial_pct'],
+        TRADE_TIGHT_STOP_ARM_PCT=s['tight_stop_arm_pct'],
+        TRADE_TIGHT_STOP_TRAIL_PCT=s['tight_stop_trail_pct'],
     )
 
 

@@ -75,6 +75,8 @@
         .status-stop_pending { background: #fef3c7; color: #92400e; }
         .status-dca_pending { background: #dbeafe; color: #1d4ed8; }
         .status-trailing_tp_armed { background: #dcfce7; color: #15803d; }
+        .status-tight_watch { background: #fef9c3; color: #854d0e; }
+        .status-tight_trailing { background: #dcfce7; color: #15803d; }
         .status-dca_done { background: #f3e8ff; color: #7e22ce; }
         .status-recovery_dca_pending { background: #e0f2fe; color: #0369a1; }
         .status-recovery_capped { background: #ffedd5; color: #9a3412; }
@@ -155,6 +157,7 @@
         <!-- 어떤 정밀조건이 켜져 있고 어느 종목에 적용되는지를 표 위에서 바로 보여준다 — 아래
              "🔬 정밀 매수조건" 카드는 접혀 있어서, 펼치지 않으면 켜진 조건을 알 수 없었다. -->
         <div id="liveConditionSummary" class="text-muted mb-2" style="font-size:0.76rem"></div>
+        <div id="liveExitModeSummary" class="text-muted mb-2" style="font-size:0.76rem"></div>
         <div class="table-wrap">
             <table class="trade-table">
                 <thead>
@@ -272,6 +275,26 @@
                 </div>
             </div>
             <div class="settings-group">
+                <div class="settings-group-label">짧은 손절 · 긴 수익</div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">
+                        <input type="checkbox" id="setTightStopEnabled" style="margin-right:4px">사용
+                    </label>
+                </div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">짧은 손절(평단대비 -%)</label>
+                    <input type="number" id="setTightStopInitial" class="form-control form-control-sm" style="width:130px" min="0.1" step="0.1">
+                </div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">트레일링 전환(고점 +%)</label>
+                    <input type="number" id="setTightStopArm" class="form-control form-control-sm" style="width:130px" min="0.1" step="0.5">
+                </div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">전환 후 허용 하락(고점대비 -%)</label>
+                    <input type="number" id="setTightStopTrail" class="form-control form-control-sm" style="width:160px" min="0.1" step="0.5">
+                </div>
+            </div>
+            <div class="settings-group">
                 <div class="settings-group-label">회복형 분할 물타기</div>
                 <div>
                     <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">
@@ -347,6 +370,16 @@
             판단합니다. <b>수익 구간일 때만 매도</b>하므로, 사이클 사이에 급락해 이미 손실이면 이 조건으로는
             팔지 않고 기존 손절·물타기 흐름을 그대로 탑니다. 기본은 꺼짐이고, 아래 <b>회복형 분할 물타기</b>를
             켠 경우에는 그 모드가 청산 판단 전체를 대신하므로 이 조건은 동작하지 않습니다.
+            <br>* <b>짧은 손절 · 긴 수익</b>(기본 꺼짐): 켜면 <b>손실을 끊는 폭</b>과 <b>수익을 지키는 폭</b>을
+            갈라서 씁니다. 아직 수익 전환 전이면 평단 대비 <b>-짧은 손절%</b>에서 <b>연속확인 없이 바로</b>
+            매도하고, 수익률이 한 번이라도 <b>트레일링 전환%</b>를 넘으면 그때부터 고점 대비
+            <b>허용 하락%</b>까지 버팁니다(예: 손절 -2% / 전환 +5% / 허용 -8%). 전환된 뒤에는 손절선이
+            <b>본전 아래로 내려가지 않습니다</b> — 벌어둔 포지션을 손실로 되돌려보내지 않기 위함입니다.
+            이 모드에서는 <b>물타기를 하지 않고</b>(손실 종목에 더 넣는 건 짧은 손절과 반대), 위
+            <b>되돌림 익절</b>도 동작하지 않습니다(수익을 3~4%에서 끊는 규칙이라 방향이 반대).
+            <b>익절 기준</b>과 <b>RSI 매도</b>는 그대로 앞단에 남으므로, 수익을 길게 끌고 가려면 익절 기준을
+            충분히 높게(예: 30%) 두세요. 아래 <b>회복형 분할 물타기</b>를 같이 켜면 그 모드가 우선합니다.
+            자세한 설계는 <code>docs/auto-trade-tight-stop.md</code>.
             <br>* <b>회복형 분할 물타기</b>(기본 꺼짐): 켜면 <b>트레일링 손절을 쓰지 않고</b> 이 설정만으로
             판단합니다 — 평단 대비 <b>-트리거%</b>까지 빠지면 쿨다운을 두고 <b>1회 물타기 금액</b>만큼 소액으로
             나눠 사서 평단을 낮추고, 새 평단 대비 <b>+반등 익절%</b>에서 전량 매도하는 걸 반복합니다.
@@ -619,6 +652,10 @@
     // 받아 여기 보관한다 (docs/auto-trade-recovery-dca.md).
     let LIVE_RECOVERY = { enabled: false, maxCount: 0 };
 
+    // 짧은 손절 · 긴 수익 모드가 켜져 있으면 물타기를 하지 않아 상태 뱃지가 달라진다
+    // (docs/auto-trade-tight-stop.md). 요약 응답에서 한 번 받아 보관한다.
+    let LIVE_TIGHT_STOP = false;
+
     function liveStatusBadge(row, dcaMaxCount) {
         if (!row.held) {
             return row.approved
@@ -633,6 +670,14 @@
             if (row.next_action === 'SELL') return '<span class="status-badge status-stop_pending">🔴 다음 사이클 매도 예정</span>';
             if (row.next_action === 'DCA_BUY') return `<span class="status-badge status-recovery_dca_pending">🔵 다음 사이클 회복형 물타기 예정(${n + 1}/${max})</span>`;
             return `<span class="decision-badge decision-HOLD">정상 보유중(${n}/${max})</span>`;
+        }
+        if (LIVE_TIGHT_STOP) {
+            // 이 모드는 물타기를 하지 않으므로 "물타기 n/m" 뱃지를 쓰지 않는다 — 지금 짧은 손절선을
+            // 보고 있는지(전환 전), 고점을 따라가는 중인지(전환 후)만 보여준다.
+            if (row.next_action === 'SELL') return '<span class="status-badge status-stop_pending">🔴 다음 사이클 매도 예정</span>';
+            if (row.next_status === 'tight_trailing') return '<span class="status-badge status-tight_trailing">🟢 트레일링 구간(수익 유지중)</span>';
+            if (row.next_status === 'tight_watch') return '<span class="status-badge status-tight_watch">🟡 짧은 손절 구간</span>';
+            return '<span class="decision-badge decision-HOLD">정상 보유중</span>';
         }
         const dcaCount = row.dca_count || 0;
         if (dcaCount >= dcaMaxCount) return `<span class="status-badge status-dca_done">🟣 물타기 ${dcaCount}/${dcaMaxCount} 완료</span>`;
@@ -711,7 +756,11 @@
         const dcaExhausted = dcaCount >= dcaMaxCount;
         const dcaCheckbox = !held
             ? '<span class="empty-val">—</span>'
-            : LIVE_RECOVERY.enabled
+            : LIVE_TIGHT_STOP
+                // 짧은 손절 · 긴 수익 모드는 물타기를 하지 않는다 — 체크 상태를 그대로 보여주면
+                // "체크했으니 물탄다"고 오해하므로 쓰지 않는다는 것만 알린다.
+                ? '<span class="text-muted" title="짧은 손절 · 긴 수익 모드에서는 물타기를 하지 않습니다">미사용</span>'
+                : LIVE_RECOVERY.enabled
                 // 회복형 모드에서는 물타기 여부가 이 체크박스가 아니라 회복형 파라미터(트리거/쿨다운/상한)로
                 // 결정된다 — 체크 상태를 그대로 보여주면 "껐으니 안 물탄다"고 오해하므로 횟수만 표시한다.
                 ? `<span title="회복형 분할 물타기 모드에서는 종목별 체크박스와 무관하게 회복형 파라미터로 판단합니다">회복형 ${row.recovery_dca_count || 0}/${LIVE_RECOVERY.maxCount}회</span>`
@@ -769,6 +818,8 @@
                 enabled: !!json.recovery_dca_enabled,
                 maxCount: json.recovery_dca_max_count ?? 0,
             };
+            LIVE_TIGHT_STOP = !!json.tight_stop_enabled;
+            renderExitModeSummary(json);
             const perPositionCap = json.per_position_cap_krw ?? null;
             const rows = [];
             for (const c of (json.candidates || [])) {
@@ -938,6 +989,26 @@
 
     // 표 위 한 줄 요약. 어떤 조건이 걸려 있는지는 접힌 카드 안에 있어서 펼치지 않으면 안 보였다.
     // renderConditions()가 _conditions를 채운 뒤에 호출해야 한다.
+    // 청산 모드 한 줄 요약 — 설정 카드를 펼치지 않아도 지금 어떤 규칙으로 파는지 보이게 한다.
+    // 기본(트레일링 손절 + 물타기)일 때는 아무것도 띄우지 않는다 — 평소 상태까지 한 줄 차지하면
+    // 정작 모드가 바뀌었을 때 눈에 안 들어온다.
+    function renderExitModeSummary(json) {
+        const el = document.getElementById('liveExitModeSummary');
+        if (!el) return;
+        if (json.tight_stop_enabled) {
+            el.innerHTML = `✂️ <b>청산: 짧은 손절 · 긴 수익</b> — 수익 전환 전에는 평단대비 `
+                + `<b>-${json.tight_stop_initial_pct}%</b>에서 즉시 손절, 고점 수익률이 `
+                + `<b>+${json.tight_stop_arm_pct}%</b>를 넘으면 고점대비 <b>-${json.tight_stop_trail_pct}%</b>까지 `
+                + `버팁니다(본전 아래로는 내려가지 않음). 이 모드에서는 물타기와 되돌림 익절을 쓰지 않습니다.`;
+            return;
+        }
+        if (json.recovery_dca_enabled) {
+            el.innerHTML = '🔁 <b>청산: 회복형 분할 물타기</b> — 트레일링 손절 대신 회복형 파라미터로 판단합니다.';
+            return;
+        }
+        el.innerHTML = '';
+    }
+
     function renderConditionSummary(rows) {
         const el = document.getElementById('liveConditionSummary');
         if (!el) return;
@@ -1242,7 +1313,7 @@
         }
     }
 
-    const SETTINGS_INPUT_IDS = ['setMaxPosition', 'setMaxPositions', 'setStopLoss', 'setTakeProfit', 'setLoopInterval', 'setStopConfirm', 'setDcaTrigger', 'setDcaMaxCount', 'setPerPositionCap', 'setRsiExitEnabled', 'setRsiExitPeriod', 'setRsiExitOverbought', 'setTrailingTpEnabled', 'setTrailingTpArm', 'setTrailingTpFloor', 'setRecoveryEnabled', 'setRecoveryTrigger', 'setRecoveryAmount', 'setRecoveryCooldown', 'setRecoveryTakeProfit', 'setRecoveryMaxCount', 'setRecoveryMaxInvested', 'setRecoveryTimeStopDays', 'setRecoveryPartialPct', 'setRecoveryPartialRatio', 'setRecoveryPartialCooldown'];
+    const SETTINGS_INPUT_IDS = ['setMaxPosition', 'setMaxPositions', 'setStopLoss', 'setTakeProfit', 'setLoopInterval', 'setStopConfirm', 'setDcaTrigger', 'setDcaMaxCount', 'setPerPositionCap', 'setRsiExitEnabled', 'setRsiExitPeriod', 'setRsiExitOverbought', 'setTrailingTpEnabled', 'setTrailingTpArm', 'setTrailingTpFloor', 'setTightStopEnabled', 'setTightStopInitial', 'setTightStopArm', 'setTightStopTrail', 'setRecoveryEnabled', 'setRecoveryTrigger', 'setRecoveryAmount', 'setRecoveryCooldown', 'setRecoveryTakeProfit', 'setRecoveryMaxCount', 'setRecoveryMaxInvested', 'setRecoveryTimeStopDays', 'setRecoveryPartialPct', 'setRecoveryPartialRatio', 'setRecoveryPartialCooldown'];
 
     function populateSettingsInputs(settings) {
         // 사용자가 입력창 하나를 타이핑 중인 동안엔 이번 새로고침으로 값을 덮어쓰지 않음
@@ -1262,6 +1333,10 @@
         document.getElementById('setTrailingTpEnabled').checked = !!settings.trailing_tp_enabled;
         document.getElementById('setTrailingTpArm').value = settings.trailing_tp_arm_pct ?? '';
         document.getElementById('setTrailingTpFloor').value = settings.trailing_tp_floor_pct ?? '';
+        document.getElementById('setTightStopEnabled').checked = !!settings.tight_stop_enabled;
+        document.getElementById('setTightStopInitial').value = settings.tight_stop_initial_pct ?? '';
+        document.getElementById('setTightStopArm').value = settings.tight_stop_arm_pct ?? '';
+        document.getElementById('setTightStopTrail').value = settings.tight_stop_trail_pct ?? '';
         document.getElementById('setRecoveryEnabled').checked = !!settings.recovery_dca_enabled;
         document.getElementById('setRecoveryTrigger').value = settings.recovery_dca_trigger_pct ?? '';
         document.getElementById('setRecoveryAmount').value = settings.recovery_dca_amount_krw ?? '';
@@ -1292,6 +1367,10 @@
             trailing_tp_enabled: document.getElementById('setTrailingTpEnabled').checked,
             trailing_tp_arm_pct: Number(document.getElementById('setTrailingTpArm').value),
             trailing_tp_floor_pct: Number(document.getElementById('setTrailingTpFloor').value),
+            tight_stop_enabled: document.getElementById('setTightStopEnabled').checked,
+            tight_stop_initial_pct: Number(document.getElementById('setTightStopInitial').value),
+            tight_stop_arm_pct: Number(document.getElementById('setTightStopArm').value),
+            tight_stop_trail_pct: Number(document.getElementById('setTightStopTrail').value),
             recovery_dca_enabled: document.getElementById('setRecoveryEnabled').checked,
             recovery_dca_trigger_pct: Number(document.getElementById('setRecoveryTrigger').value),
             recovery_dca_amount_krw: Number(document.getElementById('setRecoveryAmount').value),

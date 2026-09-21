@@ -609,6 +609,10 @@ def init_db():
             trailing_tp_enabled INTEGER NOT NULL DEFAULT 0,
             trailing_tp_arm_pct REAL NOT NULL DEFAULT 3.0,
             trailing_tp_floor_pct REAL NOT NULL DEFAULT 2.0,
+            tight_stop_enabled INTEGER NOT NULL DEFAULT 0,
+            tight_stop_initial_pct REAL NOT NULL DEFAULT 2.0,
+            tight_stop_arm_pct REAL NOT NULL DEFAULT 5.0,
+            tight_stop_trail_pct REAL NOT NULL DEFAULT 8.0,
             recovery_dca_enabled INTEGER NOT NULL DEFAULT 0,
             recovery_dca_trigger_pct REAL NOT NULL DEFAULT 20.0,
             recovery_dca_amount_krw REAL NOT NULL DEFAULT 50000,
@@ -805,6 +809,11 @@ def init_db():
 
         # 정밀 매수조건 관찰 모드(기본 꺼짐) — 켜면 조건은 검사하되 매수는 막지 않는다.
         'ALTER TABLE trade_strategy_settings ADD COLUMN conditions_observe_only INTEGER NOT NULL DEFAULT 0',
+        # 짧은 손절 · 긴 수익 모드(docs/auto-trade-tight-stop.md) — 기본 꺼짐이라 켜기 전까진 동작 동일
+        'ALTER TABLE trade_strategy_settings ADD COLUMN tight_stop_enabled INTEGER NOT NULL DEFAULT 0',
+        'ALTER TABLE trade_strategy_settings ADD COLUMN tight_stop_initial_pct REAL NOT NULL DEFAULT 2.0',
+        'ALTER TABLE trade_strategy_settings ADD COLUMN tight_stop_arm_pct REAL NOT NULL DEFAULT 5.0',
+        'ALTER TABLE trade_strategy_settings ADD COLUMN tight_stop_trail_pct REAL NOT NULL DEFAULT 8.0',
 
     ]
     for sql in migrations:
@@ -855,6 +864,10 @@ def init_db():
                 trailing_tp_enabled INTEGER NOT NULL DEFAULT 0,
                 trailing_tp_arm_pct REAL NOT NULL DEFAULT 3.0,
                 trailing_tp_floor_pct REAL NOT NULL DEFAULT 2.0,
+                tight_stop_enabled INTEGER NOT NULL DEFAULT 0,
+                tight_stop_initial_pct REAL NOT NULL DEFAULT 2.0,
+                tight_stop_arm_pct REAL NOT NULL DEFAULT 5.0,
+                tight_stop_trail_pct REAL NOT NULL DEFAULT 8.0,
                 recovery_dca_enabled INTEGER NOT NULL DEFAULT 0,
                 recovery_dca_trigger_pct REAL NOT NULL DEFAULT 20.0,
                 recovery_dca_amount_krw REAL NOT NULL DEFAULT 50000,
@@ -4425,6 +4438,18 @@ def release_trade_cycle_lock(broker: str, mode: str, holder: str) -> None:
         conn.close()
 
 
+def _TIGHT_STOP_SETTING_DEFAULTS() -> dict:
+    """짧은 손절 · 긴 수익(tight stop) 파라미터의 app/config.py 기본값 — 컬럼/행이 아직 없는 DB에서도
+    get_trade_strategy_settings()가 같은 키 집합을 돌려주도록 한 곳에 모아둔다
+    (docs/auto-trade-tight-stop.md). 키 순서가 set_trade_strategy_settings()의 컬럼 순서와 같다."""
+    return {
+        'tight_stop_enabled': Config.TRADE_TIGHT_STOP_ENABLED,
+        'tight_stop_initial_pct': Config.TRADE_TIGHT_STOP_INITIAL_PCT,
+        'tight_stop_arm_pct': Config.TRADE_TIGHT_STOP_ARM_PCT,
+        'tight_stop_trail_pct': Config.TRADE_TIGHT_STOP_TRAIL_PCT,
+    }
+
+
 def _RECOVERY_SETTING_DEFAULTS() -> dict:
     """회복형 분할 물타기(recovery DCA) 파라미터의 app/config.py 기본값 — 컬럼/행이 아직 없는
     DB에서도 get_trade_strategy_settings()가 같은 키 집합을 항상 돌려주도록 한 곳에 모아둔다
@@ -4472,6 +4497,7 @@ def get_trade_strategy_settings(broker: str = 'upbit') -> dict:
             'trailing_tp_enabled': Config.TRADE_TRAILING_TP_ENABLED,
             'trailing_tp_arm_pct': Config.TRADE_TRAILING_TP_ARM_PCT,
             'trailing_tp_floor_pct': Config.TRADE_TRAILING_TP_FLOOR_PCT,
+            **_TIGHT_STOP_SETTING_DEFAULTS(),
             **_RECOVERY_SETTING_DEFAULTS(),
             'updated_at': None,
         }
@@ -4494,6 +4520,10 @@ def get_trade_strategy_settings(broker: str = 'upbit') -> dict:
         'trailing_tp_arm_pct': row['trailing_tp_arm_pct'] if 'trailing_tp_arm_pct' in row.keys() else Config.TRADE_TRAILING_TP_ARM_PCT,
         'trailing_tp_floor_pct': row['trailing_tp_floor_pct'] if 'trailing_tp_floor_pct' in row.keys() else Config.TRADE_TRAILING_TP_FLOOR_PCT,
         **{
+            key: (bool(row[key]) if key == 'tight_stop_enabled' else row[key]) if key in row.keys() else default
+            for key, default in _TIGHT_STOP_SETTING_DEFAULTS().items()
+        },
+        **{
             key: (bool(row[key]) if key == 'recovery_dca_enabled' else row[key]) if key in row.keys() else default
             for key, default in _RECOVERY_SETTING_DEFAULTS().items()
         },
@@ -4510,6 +4540,8 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
                                  rsi_exit_enabled: bool = None, rsi_exit_period: int = None,
                                  rsi_exit_overbought: float = None, trailing_tp_enabled: bool = None,
                                  trailing_tp_arm_pct: float = None, trailing_tp_floor_pct: float = None,
+                                 tight_stop_enabled: bool = None, tight_stop_initial_pct: float = None,
+                                 tight_stop_arm_pct: float = None, tight_stop_trail_pct: float = None,
                                  recovery_dca_enabled: bool = None, recovery_dca_trigger_pct: float = None,
                                  recovery_dca_amount_krw: float = None, recovery_dca_cooldown_min: int = None,
                                  recovery_take_profit_pct: float = None, recovery_dca_max_count: int = None,
@@ -4535,6 +4567,12 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
         'recovery_partial_stop_ratio': recovery_partial_stop_ratio,
         'recovery_partial_stop_cooldown_min': recovery_partial_stop_cooldown_min,
     }
+    tight_stop_args = {
+        'tight_stop_enabled': tight_stop_enabled,
+        'tight_stop_initial_pct': tight_stop_initial_pct,
+        'tight_stop_arm_pct': tight_stop_arm_pct,
+        'tight_stop_trail_pct': tight_stop_trail_pct,
+    }
     merged = {
         'max_position_krw': max_position_krw if max_position_krw is not None else current['max_position_krw'],
         'max_concurrent_positions': max_concurrent_positions if max_concurrent_positions is not None else current['max_concurrent_positions'],
@@ -4554,8 +4592,19 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
         'trailing_tp_arm_pct': trailing_tp_arm_pct if trailing_tp_arm_pct is not None else current['trailing_tp_arm_pct'],
         'trailing_tp_floor_pct': trailing_tp_floor_pct if trailing_tp_floor_pct is not None else current['trailing_tp_floor_pct'],
     }
+    for key in _TIGHT_STOP_SETTING_DEFAULTS():
+        merged[key] = tight_stop_args[key] if tight_stop_args[key] is not None else current[key]
     for key in _RECOVERY_SETTING_DEFAULTS():
         merged[key] = recovery_args[key] if recovery_args[key] is not None else current[key]
+
+    tight_stop_keys = list(_TIGHT_STOP_SETTING_DEFAULTS())
+    tight_stop_columns = ', '.join(tight_stop_keys)
+    tight_stop_placeholders = ', '.join('?' for _ in tight_stop_keys)
+    tight_stop_updates = ', '.join(f'{key}=excluded.{key}' for key in tight_stop_keys)
+    tight_stop_values = [
+        int(bool(merged[key])) if key == 'tight_stop_enabled' else merged[key]
+        for key in tight_stop_keys
+    ]
 
     recovery_keys = list(_RECOVERY_SETTING_DEFAULTS())
     recovery_columns = ', '.join(recovery_keys)
@@ -4576,8 +4625,8 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
              condition_check_interval_sec, conditions_observe_only, per_position_cap_krw,
              rsi_exit_enabled, rsi_exit_period, rsi_exit_overbought,
              trailing_tp_enabled, trailing_tp_arm_pct, trailing_tp_floor_pct,
-             {recovery_columns}, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, {recovery_placeholders}, ?)
+             {tight_stop_columns}, {recovery_columns}, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, {tight_stop_placeholders}, {recovery_placeholders}, ?)
         ON CONFLICT(broker) DO UPDATE SET
             max_position_krw=excluded.max_position_krw,
             max_concurrent_positions=excluded.max_concurrent_positions,
@@ -4596,6 +4645,7 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
             trailing_tp_arm_pct=excluded.trailing_tp_arm_pct,
             trailing_tp_floor_pct=excluded.trailing_tp_floor_pct,
             per_position_cap_krw=excluded.per_position_cap_krw,
+            {tight_stop_updates},
             {recovery_updates},
             updated_at=excluded.updated_at
     ''', (broker, merged['max_position_krw'], merged['max_concurrent_positions'], merged['stop_loss_pct'],
@@ -4604,7 +4654,7 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
           int(bool(merged['conditions_observe_only'])), merged['per_position_cap_krw'],
           int(bool(merged['rsi_exit_enabled'])), merged['rsi_exit_period'],
           merged['rsi_exit_overbought'], int(bool(merged['trailing_tp_enabled'])), merged['trailing_tp_arm_pct'],
-          merged['trailing_tp_floor_pct'], *recovery_values, timestamp))
+          merged['trailing_tp_floor_pct'], *tight_stop_values, *recovery_values, timestamp))
     conn.commit()
     conn.close()
     merged['updated_at'] = timestamp

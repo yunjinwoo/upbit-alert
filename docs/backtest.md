@@ -79,6 +79,9 @@ python backtest.py run --from-db --entry-hour 9
 
 # 파라미터 바꿔가며
 python backtest.py run --take-profit 7 --stop-loss 3 --trailing-tp --min-trade-value 1000000000
+
+# 짧은 손절 · 긴 수익 모드(docs/auto-trade-tight-stop.md) — 익절을 높게 둬야 수익이 안 잘린다
+python backtest.py run --selection gainers --tight-stop --take-profit 30
 ```
 
 `--from-db`를 주면 `app/config.py` 기본값 대신 대시보드에 저장된 설정으로 돌린다 —
@@ -91,7 +94,10 @@ python backtest.py run --take-profit 7 --stop-loss 3 --trailing-tp --min-trade-v
   중요하다(그게 실제로 못 버티고 끄게 되는 지점이다).
 - **Profit Factor** — 총이익 ÷ 총손실. 1.0 미만이면 이긴 돈보다 잃은 돈이 많다. 승률이 높아도 이게
   1 미만이면 "자주 조금 벌고 가끔 크게 잃는" 모양이다.
-- **청산 사유별** — `take_profit`이 대부분이면 익절선이 낮아 먹을 걸 못 먹고 나오는 것일 수 있고,
+- **청산 사유별** — 짧은 손절 · 긴 수익 모드는 `tight_stop_loss`(짧게 끊은 손실) /
+  `tight_trail_exit`(트레일링으로 확정한 이익) / `tight_breakeven_exit`(본전에서 막은 건)으로 따로
+  잡힌다. 이 모드는 승률보다 **손익비**로 읽어야 한다 — 자주 조금씩 끊기는 대신 이익 한 건이 커야
+  합이 맞는 구조다. `take_profit`이 대부분이면 익절선이 낮아 먹을 걸 못 먹고 나오는 것일 수 있고,
   `stop_loss`가 압도적이면 진입이 늦다는 뜻이다. `backtest_end`는 구간 끝에 강제 정리된 건이라
   판단 근거로 쓰지 않는다.
 - **기준선과의 차이** — 현재 청산 로직이 기준선보다 나쁘면, 그 종목 선정에는 이 청산이 안 맞는 것이다.

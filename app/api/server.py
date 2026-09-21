@@ -1032,6 +1032,9 @@ def set_trade_strategy_settings_api():
      stop_loss_confirm_cycles, dca_trigger_pct, dca_max_count, rsi_exit_enabled, rsi_exit_period,
      rsi_exit_overbought, trailing_tp_enabled, trailing_tp_arm_pct, trailing_tp_floor_pct}
 
+    짧은 손절 · 긴 수익(docs/auto-trade-tight-stop.md) 파라미터도 같은 방식으로 부분 갱신한다:
+    {tight_stop_enabled, tight_stop_initial_pct, tight_stop_arm_pct, tight_stop_trail_pct}
+
     회복형 분할 물타기(docs/auto-trade-recovery-dca.md) 파라미터도 같은 방식으로 부분 갱신한다:
     {recovery_dca_enabled, recovery_dca_trigger_pct, recovery_dca_amount_krw, recovery_dca_cooldown_min,
      recovery_take_profit_pct, recovery_dca_max_count, recovery_max_invested_krw, recovery_time_stop_days,
@@ -1124,6 +1127,26 @@ def set_trade_strategy_settings_api():
             _floor = _floor if _floor is not None else _current['trailing_tp_floor_pct']
             if _arm <= _floor:
                 raise ValueError('되돌림 익절 발동 기준(%)은 매도 기준보다 커야 합니다.')
+
+        # ── 짧은 손절 · 긴 수익(docs/auto-trade-tight-stop.md). 세 값 모두 "폭"이라 0 이하는 막는다 —
+        # 손절 폭이 0이면 진입 즉시 손절되고, 전환 기준이 0이면 사자마자 트레일링 구간이 된다.
+        if 'tight_stop_enabled' in body:
+            kwargs['tight_stop_enabled'] = bool(body['tight_stop_enabled'])
+        if 'tight_stop_initial_pct' in body:
+            v = float(body['tight_stop_initial_pct'])
+            if v <= 0:
+                raise ValueError('짧은 손절 기준(%)은 0보다 커야 합니다.')
+            kwargs['tight_stop_initial_pct'] = v
+        if 'tight_stop_arm_pct' in body:
+            v = float(body['tight_stop_arm_pct'])
+            if v <= 0:
+                raise ValueError('트레일링 전환 기준(%)은 0보다 커야 합니다.')
+            kwargs['tight_stop_arm_pct'] = v
+        if 'tight_stop_trail_pct' in body:
+            v = float(body['tight_stop_trail_pct'])
+            if v <= 0:
+                raise ValueError('트레일링 허용 하락폭(%)은 0보다 커야 합니다.')
+            kwargs['tight_stop_trail_pct'] = v
 
         # ── 회복형 분할 물타기(docs/auto-trade-recovery-dca.md).
         # 0을 "비활성"으로 쓰는 세 파라미터(시간 하드스톱 일수/소액 손절 기준·비율)만 0을 허용하고,
@@ -1460,6 +1483,26 @@ def set_toss_trade_strategy_settings_api():
             _floor = _floor if _floor is not None else _current['trailing_tp_floor_pct']
             if _arm <= _floor:
                 raise ValueError('되돌림 익절 발동 기준(%)은 매도 기준보다 커야 합니다.')
+
+        # ── 짧은 손절 · 긴 수익(docs/auto-trade-tight-stop.md). 세 값 모두 "폭"이라 0 이하는 막는다 —
+        # 손절 폭이 0이면 진입 즉시 손절되고, 전환 기준이 0이면 사자마자 트레일링 구간이 된다.
+        if 'tight_stop_enabled' in body:
+            kwargs['tight_stop_enabled'] = bool(body['tight_stop_enabled'])
+        if 'tight_stop_initial_pct' in body:
+            v = float(body['tight_stop_initial_pct'])
+            if v <= 0:
+                raise ValueError('짧은 손절 기준(%)은 0보다 커야 합니다.')
+            kwargs['tight_stop_initial_pct'] = v
+        if 'tight_stop_arm_pct' in body:
+            v = float(body['tight_stop_arm_pct'])
+            if v <= 0:
+                raise ValueError('트레일링 전환 기준(%)은 0보다 커야 합니다.')
+            kwargs['tight_stop_arm_pct'] = v
+        if 'tight_stop_trail_pct' in body:
+            v = float(body['tight_stop_trail_pct'])
+            if v <= 0:
+                raise ValueError('트레일링 허용 하락폭(%)은 0보다 커야 합니다.')
+            kwargs['tight_stop_trail_pct'] = v
 
         settings = set_trade_strategy_settings(broker='toss', **kwargs)
         return jsonify({'status': 'success', 'settings': settings})
