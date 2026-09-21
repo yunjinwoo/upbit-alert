@@ -11,6 +11,7 @@ assert + print 스크립트다.
   2. 거래대금 누적이 KST 자정에 0으로 리셋되는가 (업비트의 "당일" 정의)
   3. 체결가가 판단 봉의 종가가 아니라 다음 봉의 시가인가 (미래를 당겨쓰지 않음)
   4. 기존 청산 로직(익절/트레일링 손절)이 백테스트에서 그대로 동작하는가
+  4-1. 짧은 손절 · 긴 수익 모드가 백테스트에서도 그대로 동작하는가(물타기 없이 짧게 끊는지)
   5. 기준선(정해진 시간 보유)이 그 시간에 맞춰 청산하는가
   6. 성과 리포트가 기존 집계 모듈로 만들어지는가
 """
@@ -158,6 +159,27 @@ def test_stop_loss_fires(md):
     print(f"✓ 트레일링 손절이 걸린다 ({len(stops)}건)")
 
 
+def test_tight_stop_mode_fires(md):
+    """짧은 손절 · 긴 수익 모드(docs/auto-trade-tight-stop.md)가 백테스트에서도 그대로 동작하는가 —
+    내내 내려가는 CCC는 짧은 손절로 끊기고, 이 모드에서는 물타기가 한 건도 나가지 않아야 한다."""
+    cfg = strategy_config(overrides={
+        'TRADE_TAKE_PROFIT_PCT': 50.0, 'TRADE_DCA_MAX_COUNT': 2,
+        'TRADE_TIGHT_STOP_ENABLED': True, 'TRADE_TIGHT_STOP_INITIAL_PCT': 2.0,
+        'TRADE_TIGHT_STOP_ARM_PCT': 5.0, 'TRADE_TIGHT_STOP_TRAIL_PCT': 8.0,
+        'TRADE_MAX_POSITION_KRW': 100_000, 'TRADE_MAX_CONCURRENT_POSITIONS': 5,
+    })
+    result = run_backtest(md, cfg, BacktestParams(selection=SELECT_TRADE_VALUE, top_n=3, initial_cash=1_000_000))
+    stops = [o for o in result.orders
+             if o['decision'] == 'SELL' and o['reason'].startswith('tight_stop_loss')]
+    assert stops, [o['reason'] for o in result.orders if o['decision'] == 'SELL']
+    assert any(o['ticker'] == 'KRW-CCC' for o in stops), stops
+    # 물타기 최대 횟수를 2회로 줘도 이 모드에서는 추가매수가 나가지 않는다
+    assert not [o for o in result.orders if o['decision'] == 'DCA_BUY'], result.orders
+    # 짧은 손절이라 손실 폭이 기준(-2%) 근처에서 끊겨야 한다(체결가는 다음 봉 시가라 약간의 여유를 둠)
+    assert all(o['pnl_pct'] > -8 for o in stops), stops
+    print(f"✓ 짧은 손절이 걸리고 물타기가 없다 ({len(stops)}건, 최악 {min(o['pnl_pct'] for o in stops):.1f}%)")
+
+
 def test_hold_baseline(md):
     """기준선 — 보유 시간이 차면 손익과 무관하게 청산한다."""
     cfg = strategy_config(overrides={'TRADE_MAX_POSITION_KRW': 100_000, 'TRADE_MAX_CONCURRENT_POSITIONS': 5})
@@ -214,6 +236,7 @@ if __name__ == '__main__':
         test_fill_price_is_next_candle_open(md, day2)
         test_take_profit_fires(md)
         test_stop_loss_fires(md)
+        test_tight_stop_mode_fires(md)
         test_hold_baseline(md)
         test_report_builds(md)
         print('\n전부 통과')

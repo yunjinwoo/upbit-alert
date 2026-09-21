@@ -92,6 +92,15 @@ def normalize_exit_reason(reason: Optional[str]) -> str:
         return 'recovery_partial_stop'
     if text.startswith('recovery_time_stop'):
         return 'recovery_time_stop'
+    # 짧은 손절 · 긴 수익(docs/auto-trade-tight-stop.md) — 손절과 트레일링 청산을 따로 묶는다.
+    # "짧게 끊은 손실"과 "길게 끌다 트레일링으로 확정한 이익"의 건수·평균이 갈려 보여야 이 모드가
+    # 의도대로 도는지(손실은 작게, 이익은 크게) 성과 화면에서 확인할 수 있다.
+    if text.startswith('tight_stop_loss'):
+        return 'tight_stop_loss'
+    if text.startswith('tight_trail_exit'):
+        return 'tight_trail_exit'
+    if text.startswith('tight_breakeven_exit'):
+        return 'tight_breakeven_exit'
     if text.startswith('take_profit'):
         return 'take_profit'
     if text.startswith('stop_loss'):

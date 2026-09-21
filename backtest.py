@@ -4,6 +4,7 @@
     python backtest.py status                                     # 캐시에 뭐가 들어있는지
     python backtest.py run --selection gainers                    # 상승률 상위 10 + 현재 청산 로직
     python backtest.py run --compare                              # 선정 2종 × (현재 로직 / 기준선) 비교
+    python backtest.py run --tight-stop --take-profit 30          # 짧은 손절 · 긴 수익 모드
 
 collect는 업비트 API에 닿아야 하므로 서버(49.247.202.50)에서 돌린다. run은 캐시만 읽으므로 어디서든
 돈다 — 한 번 모아두면 파라미터를 바꿔가며 몇 번이고 다시 돌릴 수 있다.
@@ -79,6 +80,10 @@ def _overrides(args) -> dict:
         'TRADE_MAX_CONCURRENT_POSITIONS': args.max_positions,
         'TRADE_RSI_EXIT_ENABLED': True if args.rsi_exit else None,
         'TRADE_TRAILING_TP_ENABLED': True if args.trailing_tp else None,
+        'TRADE_TIGHT_STOP_ENABLED': True if args.tight_stop else None,
+        'TRADE_TIGHT_STOP_INITIAL_PCT': args.tight_initial,
+        'TRADE_TIGHT_STOP_ARM_PCT': args.tight_arm,
+        'TRADE_TIGHT_STOP_TRAIL_PCT': args.tight_trail,
         'TRADE_RECOVERY_DCA_ENABLED': True if args.recovery else None,
     }
 
@@ -177,6 +182,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument('--max-positions', dest='max_positions', type=int, help='동시 보유 종목 수 덮어쓰기')
     p_run.add_argument('--rsi-exit', dest='rsi_exit', action='store_true', help='RSI 과매수 매도 켜기')
     p_run.add_argument('--trailing-tp', dest='trailing_tp', action='store_true', help='되돌림 익절 켜기')
+    p_run.add_argument('--tight-stop', dest='tight_stop', action='store_true',
+                       help='짧은 손절 · 긴 수익 모드로 돌리기(손절폭과 트레일링폭 분리, 물타기 없음)')
+    p_run.add_argument('--tight-initial', dest='tight_initial', type=float,
+                       help='짧은 손절 기준(%%, 평단 대비) 덮어쓰기 — --tight-stop과 같이 쓴다')
+    p_run.add_argument('--tight-arm', dest='tight_arm', type=float,
+                       help='트레일링 전환 기준(%%, 고점 수익률) 덮어쓰기')
+    p_run.add_argument('--tight-trail', dest='tight_trail', type=float,
+                       help='전환 후 허용 하락폭(%%, 고점 대비) 덮어쓰기')
     p_run.add_argument('--recovery', action='store_true', help='회복형 분할 물타기 모드로 돌리기')
     p_run.add_argument('--json', help='상세 결과(주문 내역/자산 곡선)를 이 경로에 JSON으로 저장')
     p_run.set_defaults(func=cmd_run)

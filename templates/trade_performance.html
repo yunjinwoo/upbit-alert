@@ -66,6 +66,9 @@
         .exit-stop_loss { background: #dbeafe; color: #1d4ed8; }
         .exit-rsi_exit { background: #fef3c7; color: #b45309; }
         .exit-trailing_take_profit { background: #dcfce7; color: #15803d; }
+        .exit-tight_stop_loss { background: #dbeafe; color: #1d4ed8; }
+        .exit-tight_trail_exit { background: #dcfce7; color: #15803d; }
+        .exit-tight_breakeven_exit { background: #fef9c3; color: #854d0e; }
         .exit-other { background: #f1f5f9; color: #64748b; }
         .dca-badge { font-size: 0.68rem; font-weight: 700; padding: 1px 6px; border-radius: 8px; background: #f3e8ff; color: #7e22ce; }
 
@@ -294,7 +297,8 @@
     }
 
     function exitBadge(kind) {
-        const known = ['take_profit', 'stop_loss', 'rsi_exit', 'trailing_take_profit'];
+        const known = ['take_profit', 'stop_loss', 'rsi_exit', 'trailing_take_profit',
+                       'tight_stop_loss', 'tight_trail_exit', 'tight_breakeven_exit'];
         const cls = known.includes(kind) ? `exit-${kind}` : 'exit-other';
         return `<span class="exit-badge ${cls}">${escHtml(kind)}</span>`;
     }

@@ -27,6 +27,12 @@
        (물타기는 포지션당 dca_max_count회까지만 — 그 횟수에 도달하면 일반 손절과 동일하게 동작하는
        안전장치. 무제한으로 계속 물타면 하락장에서 손실이 무한정 커질 수 있기 때문)
 
+짧은 손절 · 긴 수익(tight stop) 모드가 켜져 있으면(cfg.TRADE_TIGHT_STOP_ENABLED) 위 3)~5)가
+_evaluate_exit_tight_stop()으로 대체된다 — 손실을 끊는 폭과 수익을 지키는 폭을 분리해서, 아직
+수익 전환 전이면 평단 대비 -initial_pct에서 바로 끊고, 고점 수익률이 arm_pct를 넘긴 뒤에는 고점 대비
+trail_pct까지(단 본전 아래로는 내려가지 않게) 버틴다. 물타기는 이 모드에서 동작하지 않는다.
+기본값은 꺼짐. 설계와 결정 근거는 docs/auto-trade-tight-stop.md.
+
 회복형 분할 물타기(recovery DCA) 모드가 켜져 있으면(cfg.TRADE_RECOVERY_DCA_ENABLED) 위 청산 로직
 전체가 _evaluate_exit_recovery()로 대체된다 — 트레일링 손절 없이 "깊은 하락에서 소액 물타기 → 새
 평단 조금 위에서 소폭 익절"을 반복하고, 물타기 상한을 다 쓴 뒤에만 소액 손절/시간 하드스톱으로
@@ -44,7 +50,9 @@ class TradeDecision:
     peak_price/streak: 청산 판단(evaluate_exits)에서만 채워지는, 다음 사이클을 위해 DB에 다시
     저장해야 할 트레일링 손절 추적값. status는 대시보드에 "대기 상태"를 보여주기 위한 값
     (None=평시, 'stop_pending'=손절 조건 연속확인 대기, 'dca_pending'=물타기 트리거 대기,
-    'trailing_tp_armed'=고점 수익률이 트리거를 넘어 되돌림 익절 감시 중)."""
+    'trailing_tp_armed'=고점 수익률이 트리거를 넘어 되돌림 익절 감시 중,
+    'tight_watch'=짧은 손절 모드에서 아직 수익 전환 전(짧은 손절선 적용 중),
+    'tight_trailing'=짧은 손절 모드에서 고점 수익률이 전환 기준을 넘어 긴 트레일링 적용 중)."""
     ticker: str
     action: str  # 'BUY' / 'SELL' / 'HOLD' / 'SKIP' / 'DCA_BUY'
     reason: str
@@ -227,6 +235,72 @@ def _evaluate_exit_recovery(pos: dict, price: float, cfg, rsi_now: float = None,
     return hold(f'recovery_capped({cap_reason}, 평단대비 {pnl_pct:.2f}%)', 'recovery_capped')
 
 
+def _evaluate_exit_tight_stop(pos: dict, price: float, peak: float, cfg) -> TradeDecision:
+    """짧은 손절 · 긴 수익(tight stop) 모드의 청산 판단 — docs/auto-trade-tight-stop.md.
+
+    기존 로직은 손절폭(cfg.TRADE_STOP_LOSS_PCT) 하나가 "손실을 끊는 폭"과 "수익을 지키는 폭"을
+    겸하고 있어서, 짧게 줄이면 오르던 종목도 금방 털리고 넓게 두면 손실이 커졌다. 여기서는 그 둘을
+    수익 전환 여부로 갈라서 서로 다른 값을 쓴다.
+
+      · 전환 전(고점 수익률 < arm_pct): 평단 대비 -initial_pct에서 즉시 매도 — "손절은 짧게".
+        연속 확인(stop_loss_confirm_cycles)을 기다리지 않는다. 짧게 끊는 게 목적인데 몇 사이클을
+        더 기다리면 그만큼 손실이 깊어지기 때문.
+      · 전환 후(고점 수익률 >= arm_pct): 고점 대비 trail_pct까지 밀려도 들고 간다 — "수익은 길게".
+        단 손절선은 평단(본전) 아래로 내려가지 않는다 — 한 번 arm_pct까지 벌어둔 포지션을 다시
+        손실로 돌려보내면 짧은 손절을 둔 의미가 없어진다. 그래서 실제 손절선은
+        max(고점×(1-trail_pct), 평단)이고, 고점이 충분히 높아져 트레일링 손절선이 평단 위로
+        올라온 뒤부터 그 선이 같이 따라 올라간다.
+
+    물타기(DCA)는 이 모드에서 하지 않는다 — 손실 종목에 원금을 더 넣는 건 "짧은 손절"과 정반대라
+    같이 두면 손절이 다시 늘어진다. 익절(take_profit_pct)과 RSI 과매수 매도는 이 모드에서도 앞단에
+    그대로 남아 있으므로, 수익을 길게 끌고 가려면 익절 기준을 충분히 높게 두거나 꺼야 한다.
+    """
+    ticker = pos['ticker']
+    qty = pos['qty']
+    avg_price = pos['avg_buy_price']
+    initial_pct = getattr(cfg, 'TRADE_TIGHT_STOP_INITIAL_PCT', 2.0)
+    arm_pct = getattr(cfg, 'TRADE_TIGHT_STOP_ARM_PCT', 5.0)
+    trail_pct = getattr(cfg, 'TRADE_TIGHT_STOP_TRAIL_PCT', 8.0)
+
+    pnl_krw = (price - avg_price) * qty
+    pnl_pct = (price - avg_price) / avg_price * 100 if avg_price else 0.0
+    peak_pnl_pct = (peak - avg_price) / avg_price * 100 if avg_price else 0.0
+    drawdown_from_peak_pct = (peak - price) / peak * 100 if peak else 0.0
+
+    # 고점 수익률이 한 번이라도 전환 기준을 넘었으면 트레일링 구간(현재가가 다시 내려와도 유지된다 —
+    # peak_price가 보유 중 최고가라 값이 줄지 않기 때문)
+    if peak_pnl_pct >= arm_pct:
+        trail_stop_price = peak * (1 - trail_pct / 100)
+        stop_price = max(trail_stop_price, avg_price)  # 본전 아래로는 손절선을 내리지 않는다
+        if price <= stop_price:
+            kind = 'trail' if trail_stop_price >= avg_price else 'breakeven'
+            return TradeDecision(
+                ticker, 'SELL',
+                reason=f'tight_{kind}_exit(고점 {peak_pnl_pct:.2f}% → 현재 {pnl_pct:.2f}%, 허용 고점대비 -{trail_pct:.2f}%)',
+                price=price, qty=qty, pnl_krw=pnl_krw, pnl_pct=pnl_pct,
+            )
+        return TradeDecision(
+            ticker, 'HOLD',
+            reason=f'tight_trailing(고점 {peak_pnl_pct:.2f}%, 현재 {pnl_pct:.2f}%, 고점대비 -{drawdown_from_peak_pct:.2f}%/{trail_pct:.2f}%)',
+            price=price, qty=qty, pnl_krw=pnl_krw, pnl_pct=pnl_pct,
+            peak_price=peak, streak=0, status='tight_trailing',
+        )
+
+    # 아직 전환 전 — 짧은 손절선만 본다(평단 대비)
+    if pnl_pct <= -initial_pct:
+        return TradeDecision(
+            ticker, 'SELL',
+            reason=f'tight_stop_loss(평단대비 {pnl_pct:.2f}%, 기준 -{initial_pct:.2f}%)',
+            price=price, qty=qty, pnl_krw=pnl_krw, pnl_pct=pnl_pct,
+        )
+    return TradeDecision(
+        ticker, 'HOLD',
+        reason=f'tight_watch(평단대비 {pnl_pct:.2f}%, 손절 -{initial_pct:.2f}% / 전환 +{arm_pct:.2f}%)',
+        price=price, qty=qty, pnl_krw=pnl_krw, pnl_pct=pnl_pct,
+        peak_price=peak, streak=0, status='tight_watch',
+    )
+
+
 def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional[float]], cfg,
                     rsi_map: dict = None, now: datetime = None) -> List[TradeDecision]:
     """보유 포지션마다 익절/RSI 과매수 매도/트레일링 손절(연속 확인 포함)/물타기 여부를 판단한다.
@@ -243,6 +317,9 @@ def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional
 
     rsi_map: {ticker: RSI값|None} — cfg.TRADE_RSI_EXIT_ENABLED가 켜져 있을 때 auto_trader.py가
     미리 조회해 넘긴다(app/core/exit_conditions.py 참고). 꺼져 있거나 값이 없으면 이 판단은 건너뛴다.
+
+    cfg.TRADE_TIGHT_STOP_ENABLED가 켜져 있으면 익절/RSI 매도 다음부터(되돌림 익절 · 트레일링 손절 ·
+    물타기 대신) _evaluate_exit_tight_stop()이 판단한다 — 짧은 손절 · 긴 수익 모드.
 
     cfg.TRADE_RECOVERY_DCA_ENABLED가 켜져 있으면 포지션마다 아래 판단 대신
     _evaluate_exit_recovery()를 쓴다(회복형 분할 물타기 — 트레일링 손절을 쓰지 않는 별도 모드).
@@ -279,7 +356,11 @@ def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional
         pnl_pct = (price - avg_price) / avg_price * 100 if avg_price else 0.0
         # 고점 수익률 — 보유 중 최고가로 평단 대비 수익률을 계산한 값(되돌림 익절 판단용)
         peak_pnl_pct = (peak - avg_price) / avg_price * 100 if avg_price else 0.0
-        trailing_tp_enabled = bool(getattr(cfg, 'TRADE_TRAILING_TP_ENABLED', False))
+        # 짧은 손절 · 긴 수익 모드 — 되돌림 익절(④)/트레일링 손절(⑤⑥)/물타기(⑦)를 대신한다.
+        # 되돌림 익절은 수익을 3~4%에서 끊는 규칙이라 "수익은 길게"와 방향이 반대다. 그래서 두
+        # 설정이 동시에 켜져 있어도 이 모드가 이기고, 되돌림 익절은 감시 표시조차 하지 않는다.
+        tight_stop_enabled = bool(getattr(cfg, 'TRADE_TIGHT_STOP_ENABLED', False))
+        trailing_tp_enabled = bool(getattr(cfg, 'TRADE_TRAILING_TP_ENABLED', False)) and not tight_stop_enabled
         trailing_tp_arm_pct = getattr(cfg, 'TRADE_TRAILING_TP_ARM_PCT', None)
         trailing_tp_floor_pct = getattr(cfg, 'TRADE_TRAILING_TP_FLOOR_PCT', None)
         trailing_tp_armed = bool(
@@ -305,7 +386,12 @@ def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional
                 ))
                 continue
 
-        # ③ 고점 대비 되돌림 익절 — 목표 수익률에 못 닿았어도 고점 수익률이 arm_pct 이상 올라갔다가
+        # ③ 짧은 손절 · 긴 수익 모드 — 아래 ④~⑦(되돌림 익절/트레일링 손절/물타기)를 전부 대신한다
+        if tight_stop_enabled:
+            decisions.append(_evaluate_exit_tight_stop(pos, price, peak, cfg))
+            continue
+
+        # ④ 고점 대비 되돌림 익절 — 목표 수익률에 못 닿았어도 고점 수익률이 arm_pct 이상 올라갔다가
         # 현재 수익률이 floor_pct 이하로 되돌아왔으면 즉시 이익 확정(연속 확인 없음).
         # 단 "익절"이므로 아직 수익 구간(pnl_pct > 0)일 때만 판다 — 루프 주기 사이에 급락해 이미
         # 손실로 돌아섰다면 이 조건으로 팔지 않고 아래의 트레일링 손절/물타기 흐름에 맡긴다
@@ -319,7 +405,7 @@ def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional
             ))
             continue
 
-        # ④ 트레일링 손절 조건(최고가 대비 하락률) 미충족 — 정상 보유, 연속 카운트 리셋
+        # ⑤ 트레일링 손절 조건(최고가 대비 하락률) 미충족 — 정상 보유, 연속 카운트 리셋
         if drawdown_from_peak_pct < cfg.TRADE_STOP_LOSS_PCT:
             armed_note = f', 되돌림익절 감시중(고점 {peak_pnl_pct:.2f}%)' if trailing_tp_armed else ''
             decisions.append(TradeDecision(
@@ -331,7 +417,7 @@ def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional
             ))
             continue
 
-        # ⑤ 트레일링 손절 조건 충족 — 연속 확인 카운트 증가
+        # ⑥ 트레일링 손절 조건 충족 — 연속 확인 카운트 증가
         new_streak = streak + 1
         if new_streak < cfg.TRADE_STOP_LOSS_CONFIRM_CYCLES:
             decisions.append(TradeDecision(
@@ -341,7 +427,7 @@ def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional
             ))
             continue
 
-        # ⑥ 연속 확인까지 끝남 — 아직 dca_max_count에 안 닿았으면(체크박스와 무관) -dca_trigger_pct까지
+        # ⑦ 연속 확인까지 끝남 — 아직 dca_max_count에 안 닿았으면(체크박스와 무관) -dca_trigger_pct까지
         # 한 번 더 대기, 다 썼으면 손절
         if dca_count < dca_max_count:
             if pnl_pct <= -cfg.TRADE_DCA_TRIGGER_PCT:
