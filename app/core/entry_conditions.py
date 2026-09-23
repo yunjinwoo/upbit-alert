@@ -1,10 +1,11 @@
-"""정밀 매수조건(다중 시간대: 일봉/5분봉/1분봉) 판단 로직.
+"""정밀 매수조건(다중 시간대: 주봉/일봉/5분봉/1분봉) 판단 로직.
 
 app/core/trade_strategy.py와 같은 이유로 순수 함수 위주로 구성 — 캔들 조회(get_price_fn 격의
 get_candles_fn)만 콜백으로 주입받고, DB는 여기서 직접 건드리지 않는다. 실제 캔들 조회/DB 저장은
 app/core/entry_condition_checker.py(오케스트레이션 레이어)에서 수행한다.
 
-조건 3종(기본 비활성화, 대시보드에서 켜야 동작):
+조건 4종(기본 비활성화, 대시보드에서 켜야 동작):
+  - weekly_rsi_above: 주봉 RSI가 기준값(기본 65) 이상 — 업비트만(토스 캔들 API엔 주봉이 없음)
   - daily_above_ma: 일봉 종가가 N일 이동평균 이상
   - m5_ma_support: 5분봉이 N선에 지지받고 반등 — 저가가 이평선 근접까지 눌렸다가 종가는 이평선 위로 마감
   - m1_bb_breakout_volume: 1분봉이 볼린저밴드 상단을 거래량 동반 돌파
@@ -16,6 +17,26 @@ app/core/entry_condition_checker.py(오케스트레이션 레이어)에서 수�
 """
 from typing import Callable, Optional
 import pandas as pd
+
+from app.core.exit_conditions import compute_rsi
+
+
+def check_weekly_rsi_above(df: Optional[pd.DataFrame], params: dict) -> dict:
+    """주봉 RSI가 기준값 이상인지. 다른 조건과 달리 판정은 진행 중인 이번 주 봉까지 포함한 값으로
+    한다 — 확정 주봉은 최대 일주일 전 값이라 차트에 지금 보이는 RSI와 크게 어긋나기 때문. 지난주
+    확정값은 메시지에만 같이 남긴다."""
+    period = int(params.get('rsi_period', 14))
+    threshold = float(params.get('threshold', 65))
+    rsi_now = compute_rsi(df, period, include_current=True)
+    if rsi_now is None:
+        return {'passed': False, 'message': f'주봉 데이터 부족(RSI{period} 계산에 {period * 2 + 1}주 이상 필요)'}
+    rsi_prev = compute_rsi(df, period)
+    passed = bool(rsi_now >= threshold)
+    prev_text = f', 지난주 확정 {rsi_prev:.1f}' if rsi_prev is not None else ''
+    return {
+        'passed': passed,
+        'message': f'주봉 RSI {rsi_now:.1f}{prev_text} vs 기준 {threshold:g} ({"이상" if passed else "미만"})',
+    }
 
 
 def check_daily_above_ma(df: Optional[pd.DataFrame], params: dict) -> dict:
@@ -87,6 +108,12 @@ def check_m1_bb_breakout_volume(df: Optional[pd.DataFrame], params: dict) -> dic
 
 # condition_key -> (판단 함수, 캔들 조회 파라미터: interval/count)
 CONDITION_SPECS = {
+    'weekly_rsi_above': {
+        'fn': check_weekly_rsi_above,
+        'interval': 'week',
+        # RSI는 EWM 평활이라 워밍업이 길수록 차트 값과 가까워진다 — 업비트 1회 조회 최대치(200)로 받는다.
+        'count_fn': lambda params: 200,
+    },
     'daily_above_ma': {
         'fn': check_daily_above_ma,
         'interval': 'day',

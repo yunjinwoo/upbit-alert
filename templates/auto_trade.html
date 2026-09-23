@@ -131,6 +131,23 @@
         </div>
     </div>
 
+    <!-- 시장 지표 — 표시 전용(매매 루프는 이 값을 보지 않음). app/core/market_indicators.py -->
+    <div class="card-panel mb-3">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+            <div class="section-title mb-0">📈 시장 지표 (비트코인 RSI · 도미넌스)</div>
+            <span id="marketIndicatorsUpdatedAt" class="text-muted" style="font-size:0.74rem"></span>
+        </div>
+        <div id="marketIndicatorsBody" class="stat-grid mb-1">
+            <div class="stat-box"><div class="stat-label">로딩 중...</div></div>
+        </div>
+        <div class="text-muted" style="font-size:0.72rem">
+            * BTC RSI(14)는 업비트 KRW-BTC 캔들 기준이며, 차트에 지금 보이는 값과 맞추려고 <b>진행 중인 봉까지
+            포함</b>해 계산합니다(괄호 안은 직전에 마감된 봉의 값). 65 이상은 노랑, 70 이상은 빨강, 30 이하는 파랑입니다.
+            <br>* BTC 도미넌스는 전체 암호화폐 시가총액 중 비트코인 비중으로, 업비트에는 없는 값이라
+            <b>CoinGecko</b>에서 가져옵니다(5분 캐시). <b>표시 전용</b>이며 자동매매 판단에는 쓰지 않습니다.
+        </div>
+    </div>
+
     <div class="card-panel mb-3" style="border:1px solid #fecaca">
         <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
             <div class="section-title mb-0">🔴 실거래 (업비트 — 진짜 계좌, 실주문 발생)</div>
@@ -418,10 +435,14 @@
                 <b>하나만</b> 충족하면 됩니다(최종 = AND 전부 통과 AND (OR 그룹이 비었거나 하나 이상 통과)).
                 <br>* <b class="text-danger">검사 프로세스가 떠 있어야 동작합니다</b> —
                 <code>condition-check-bot</code>(<code>python main.py condition_check</code>)이 별도 주기로
-                일봉/5분봉/1분봉을 조회해 결과를 캐시하고, 매매 루프는 그 캐시만 읽습니다.
+                주봉/일봉/5분봉/1분봉을 조회해 결과를 캐시하고, 매매 루프는 그 캐시만 읽습니다.
                 프로세스가 없으면 검사 결과가 없어서 <b>승인된 종목을 매번 SKIP</b>합니다(사지 않는 쪽으로
                 안전하게 동작). 표의 정밀검사 칸에 "검사 없음"이 뜨면 이 경우입니다 — 조건을 전부 끄면
                 게이트가 사라져 다시 평소대로 매수합니다.
+                <br>* <b>주봉 RSI</b> 조건은 이번 주 진행 중인 봉까지 포함한 RSI(차트에 지금 보이는 값)로
+                판정합니다 — 마감된 주봉은 최대 일주일 전 값이라서요. 표의 정밀검사 라벨에 마우스를 올리면 지난주
+                마감값도 같이 보입니다. 주봉 RSI 계산에는 상장 후 최소 29주치 캔들이 필요해, 신규 상장 종목은 "데이터 부족"으로
+                미충족 처리됩니다.
                 <br>* <b>관찰 모드</b>를 켜두면 위의 게이트 동작이 전부 빠집니다 — 검사는 그대로 돌아
                 라벨만 채우고, 매수는 조건과 무관하게 1차 신호대로 진행합니다. 결과를 보고 믿을 만하면
                 관찰 모드를 끄면 그때부터 실제로 매수를 거릅니다.
@@ -985,6 +1006,8 @@
         bb_mult: '볼린저 배수',
         vol_lookback: '거래량 평균 봉수',
         vol_ratio_threshold: '거래량 배수(이상)',
+        rsi_period: 'RSI 기간',
+        threshold: '기준값(이상)',
     };
 
     // 표 위 한 줄 요약. 어떤 조건이 걸려 있는지는 접힌 카드 안에 있어서 펼치지 않으면 안 보였다.
@@ -1402,8 +1425,76 @@
         }
     }
 
+    // ── 시장 지표(BTC RSI · 도미넌스). 서버가 소스별로 캐시하므로 1분마다 다시 불러도 부담이 없다.
+    function rsiBox(entry) {
+        const v = entry && entry.value;
+        let color = '#1a1a2e', badge = '';
+        if (v !== null && v !== undefined) {
+            if (v >= 70) { color = '#b91c1c'; badge = '<span class="signal-badge signal-badge-warn">과매수</span>'; }
+            else if (v >= 65) { color = '#b45309'; badge = '<span class="signal-badge signal-badge-mild">65 이상</span>'; }
+            else if (v <= 30) { color = '#1d4ed8'; badge = '<span class="signal-badge signal-badge-good">과매도</span>'; }
+        }
+        const valText = (v === null || v === undefined) ? '<span class="empty-val">—</span>' : Number(v).toFixed(1);
+        const prev = entry && entry.prev_closed;
+        const prevText = (prev === null || prev === undefined) ? '' :
+            `<span class="text-muted" style="font-size:0.72rem; font-weight:400"> (마감 ${Number(prev).toFixed(1)})</span>`;
+        return `<div class="stat-box">
+            <div class="stat-label">BTC RSI · ${entry ? entry.label : ''}</div>
+            <div class="stat-value" style="color:${color}">${valText}${prevText}</div>
+            <div>${badge}</div>
+        </div>`;
+    }
+
+    function pctText(v, signed) {
+        if (v === null || v === undefined) return '<span class="empty-val">—</span>';
+        const n = Number(v);
+        if (!signed) return n.toFixed(2) + '%';
+        const cls = n > 0 ? 'pnl-pos' : (n < 0 ? 'pnl-neg' : '');
+        return `<span class="${cls}">${n > 0 ? '+' : ''}${n.toFixed(2)}%</span>`;
+    }
+
+    async function loadMarketIndicators() {
+        const body = document.getElementById('marketIndicatorsBody');
+        const updatedEl = document.getElementById('marketIndicatorsUpdatedAt');
+        try {
+            const res = await fetch("{{ url_for('get_market_indicators_api') }}");
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+            const btc = json.btc || {};
+            const rsi = btc.rsi || {};
+            const dom = json.dominance || {};
+            const btcErr = json.btc_error && !json.btc
+                ? `<div class="stat-box"><div class="stat-label">BTC</div><div class="text-danger" style="font-size:0.78rem">조회 실패: ${json.btc_error}</div></div>` : '';
+            const priceBox = json.btc ? `<div class="stat-box">
+                <div class="stat-label">BTC 현재가 (전일 대비)</div>
+                <div class="stat-value">${fmtKrw(btc.price)}</div>
+                <div style="font-size:0.8rem">${pctText(btc.change_rate_24h, true)}</div>
+            </div>` : '';
+            const rsiBoxes = json.btc ? ['minute240', 'day', 'week'].map(k => rsiBox(rsi[k])).join('') : '';
+            const domBox = json.dominance ? `<div class="stat-box">
+                <div class="stat-label">BTC 도미넌스 (시총 점유율)</div>
+                <div class="stat-value">${pctText(dom.btc_dominance)}</div>
+                <div class="text-muted" style="font-size:0.72rem">ETH ${pctText(dom.eth_dominance)} · 전체 시총 24h ${pctText(dom.total_market_cap_change_24h, true)}</div>
+            </div>` : `<div class="stat-box">
+                <div class="stat-label">BTC 도미넌스 (시총 점유율)</div>
+                <div class="text-danger" style="font-size:0.78rem">조회 실패${json.dominance_error ? ': ' + json.dominance_error : ''}</div>
+            </div>`;
+            body.innerHTML = btcErr + priceBox + rsiBoxes + domBox;
+
+            const stale = [];
+            if (json.btc_stale) stale.push('BTC');
+            if (json.dominance_stale) stale.push('도미넌스');
+            updatedEl.textContent = (json.btc_fetched_at ? `기준 ${json.btc_fetched_at}` : '')
+                + (stale.length ? ` · ${stale.join('/')} 최신 조회 실패로 이전 값 표시 중` : '');
+        } catch (e) {
+            body.innerHTML = `<div class="stat-box"><div class="text-danger" style="font-size:0.8rem">시장 지표 조회 실패: ${e.message}</div></div>`;
+        }
+    }
+
     loadSharedSettings();
     loadLiveSummary();
+    loadMarketIndicators();
+    setInterval(loadMarketIndicators, 60000);
 </script>
 </body>
 </html>

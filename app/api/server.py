@@ -77,6 +77,7 @@ from app.core.stock_monitor import (
 from app.core.upbit_market_analysis import run_coin_screening
 from app.core.upbit_ranking import get_top_movers
 from app.core.trade_performance import build_performance
+from app.core.market_indicators import get_market_indicators
 from app.core.auto_trader import get_dashboard_summary, run_trade_cycle, force_buy, force_sell, get_live_dashboard_summary
 from app.core.brokers.base import TradeCycleBusyError
 from app.core.brokers.upbit_live_broker import UpbitLiveBroker
@@ -801,6 +802,16 @@ def get_auto_trade_summary_api():
     try:
         data = get_dashboard_summary()
         return jsonify({'status': 'success', **data})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/auto-trade/market-indicators', methods=['GET'])
+def get_market_indicators_api():
+    """자동매매 화면 상단 "시장 지표" 카드 — BTC RSI(4시간봉/일봉/주봉)와 BTC 도미넌스(CoinGecko).
+    표시 전용이라 매매 판단에는 쓰지 않는다. 소스별로 따로 실패할 수 있어 항상 200으로 내려주고
+    btc_error/dominance_error에 사유를 담는다(app/core/market_indicators.py 참고)."""
+    try:
+        return jsonify({'status': 'success', **get_market_indicators()})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
