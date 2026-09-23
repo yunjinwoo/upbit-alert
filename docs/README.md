@@ -19,6 +19,7 @@
 | [auto-trade-tight-stop.md](auto-trade-tight-stop.md) | ✅ 구현 완료 · 기본 꺼짐 | 짧은 손절 · 긴 수익 — 손실을 끊는 폭과 수익을 지키는 폭을 분리(전환 전 평단 대비 짧은 손절 → 전환 후 고점 대비 긴 트레일링, 물타기 없음) |
 | [auto-trade-downside-watch.md](auto-trade-downside-watch.md) | ✅ Phase 1 머지됨 (PR #62, 2026-09-03) · Phase 2 미정 | 하락위험 코인 관심목록 — 매수 파이프라인의 거울상, 표시 전용 |
 | [auto-trade-performance.md](auto-trade-performance.md) | ✅ 머지됨 (PR #71, 2026-09-18) | 매매 성과 화면 — 매수→매도를 한 사이클로 묶어 승률·누적 손익·진입 신호별 기여도 조회 (읽기 전용) |
+| [auto-trade-market-indicators.md](auto-trade-market-indicators.md) | ✅ 구현 완료 (2026-09-23) · 주봉 RSI 조건 기본 꺼짐 | 정밀 매수조건 "주봉 RSI ≥ 65" + 자동매매 화면 시장 지표 카드(BTC RSI 4시간봉/일봉/주봉 · BTC 도미넌스, 표시 전용) |
 
 | [backtest.md](backtest.md) | ✅ 구현 완료 (2026-09-21) | 백테스트 — 당일 상승률/거래대금 상위 종목에 기존 진입·청산 로직을 과거 캔들로 돌려 성과 비교 (수집은 서버 전용) |
 

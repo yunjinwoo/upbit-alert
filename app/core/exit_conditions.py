@@ -13,12 +13,16 @@ from typing import Optional
 import pandas as pd
 
 
-def compute_rsi(df: Optional[pd.DataFrame], period: int = 14) -> Optional[float]:
+def compute_rsi(df: Optional[pd.DataFrame], period: int = 14,
+                include_current: bool = False) -> Optional[float]:
     """OHLCV DataFrame의 마지막 확정 캔들(idx_now = len(df) - 2, 마지막 행은 진행 중인 캔들로 봄)
-    기준 RSI(period) 값. 데이터가 부족하면(워밍업 안 됨) None을 반환한다."""
+    기준 RSI(period) 값. 데이터가 부족하면(워밍업 안 됨) None을 반환한다.
+
+    include_current=True면 진행 중인 마지막 행까지 포함해 계산한다(차트에 지금 찍혀 있는 값) —
+    주봉처럼 확정 캔들이 최대 일주일 전 값이라 "지금 RSI"와 크게 어긋나는 긴 봉에서 쓴다."""
     if df is None or len(df) < period * 2 + 1:
         return None
-    idx_now = len(df) - 2
+    idx_now = len(df) - 1 if include_current else len(df) - 2
     closes = df['close'].iloc[:idx_now + 1]
     delta = closes.diff()
     gain = delta.clip(lower=0)

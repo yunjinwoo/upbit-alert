@@ -969,7 +969,7 @@ def init_db():
         except Exception:
             pass
 
-    # 정밀 매수조건 3종 기본 행 시딩(브로커별로 최초 1회, 이미 있으면 건드리지 않음) — 전부 기본
+    # 정밀 매수조건 기본 행 시딩(브로커별로 최초 1회, 이미 있으면 건드리지 않음) — 전부 기본
     # 비활성화(enabled=0)로 시작해서, 사용자가 대시보드에서 켜기 전까진 기존 동작(스크리닝 필터만)이
     # 그대로 유지된다. m5_ma_support는 토스는 5분봉 API가 없어 1분봉을 리샘플링해 계산한다
     # (app/core/toss_client.py의 get_candles_resampled 참고).
@@ -978,8 +978,13 @@ def init_db():
         ('m5_ma_support', '5분봉이 N선에 지지받고 반등(저가 근접 후 종가 위 마감)', '{"ma_period": 20, "touch_tolerance_pct": 0.3}'),
         ('m1_bb_breakout_volume', '1분봉이 볼린저밴드 상단을 거래량 동반 돌파', '{"bb_period": 20, "bb_mult": 2.0, "vol_lookback": 20, "vol_ratio_threshold": 2.0}'),
     ]
+    # 주봉 RSI는 업비트만 시딩한다 — 토스 캔들 API는 1d/1m만 있어 주봉을 받을 수 없다.
+    upbit_only_conditions = [
+        ('weekly_rsi_above', '주봉 RSI가 기준값 이상(이번 주 진행 중 봉 포함)', '{"rsi_period": 14, "threshold": 65}'),
+    ]
     for broker in ('upbit', 'toss'):
-        for condition_key, label, params in default_conditions:
+        seeds = default_conditions + (upbit_only_conditions if broker == 'upbit' else [])
+        for condition_key, label, params in seeds:
             try:
                 cursor.execute('''
                     INSERT OR IGNORE INTO trade_condition_settings (broker, condition_key, label, enabled, logic_group, params)
