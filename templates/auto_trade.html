@@ -754,10 +754,32 @@
         }
         const observeNote = observe
             ? `<div style="font-size:0.64rem; color:#94a3b8">참고(관찰 모드)</div>` : '';
+        const perCondition = conditionItemsHtml(row.condition_detail);
         const at = row.condition_checked_at
             ? `<div style="font-size:0.64rem; color:#94a3b8">${row.condition_checked_at}</div>`
             : '';
-        return `${badge}${observeNote}${at}`;
+        return `${badge}${perCondition}${observeNote}${at}`;
+    }
+
+    // 조건별 결과 라벨 — 합친 결과(통과/미충족) 아래에 조건마다 한 줄씩. 어떤 조건 때문에 미충족인지
+    // 툴팁을 열지 않아도 보이게 한다. 값이 있는 조건(주봉 RSI)은 값도 같이 적는다.
+    const CONDITION_SHORT_LABELS = {
+        weekly_rsi_above: '주봉RSI',
+        daily_above_ma: '일봉 이평',
+        m5_ma_support: '5분 지지',
+        m1_bb_breakout_volume: '1분 볼밴',
+    };
+
+    function conditionItemsHtml(detail) {
+        if (!detail) return '';
+        const items = Object.entries(detail).map(([k, v]) => {
+            const name = CONDITION_SHORT_LABELS[k] || CONDITION_LABELS[k] || k;
+            const value = (v.rsi !== null && v.rsi !== undefined) ? ` ${Number(v.rsi).toFixed(1)}` : '';
+            const cls = v.passed ? 'signal-badge-good' : 'signal-badge-mild';
+            const title = escapeAttr(`${CONDITION_LABELS[k] || k}: ${v.message || ''}`);
+            return `<span class="signal-badge ${cls}" style="font-size:0.62rem" title="${title}">${name}${value} ${v.passed ? '✓' : '✗'}</span>`;
+        });
+        return items.length ? `<div style="margin-top:2px">${items.join('<br>')}</div>` : '';
     }
 
     function conditionDetailText(detail) {

@@ -36,6 +36,7 @@ def check_weekly_rsi_above(df: Optional[pd.DataFrame], params: dict) -> dict:
     return {
         'passed': passed,
         'message': f'주봉 RSI {rsi_now:.1f}{prev_text} vs 기준 {threshold:g} ({"이상" if passed else "미만"})',
+        'rsi': round(rsi_now, 1),  # 실거래 표 조건별 라벨에 값을 바로 보여주기 위함
     }
 
 
