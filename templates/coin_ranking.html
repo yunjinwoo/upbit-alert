@@ -56,6 +56,24 @@
         .rank-table td:nth-last-child(2) { text-align: center; }
         .watch-check { cursor: pointer; width: 15px; height: 15px; vertical-align: middle; }
         .watch-check:disabled { cursor: wait; opacity: 0.5; }
+
+        /* 최근 15일 이력 — 종목(행) × 날짜(열). 숫자 = 그날 마감(23시) 순위, "장중" = 장중엔 들었다가 마감엔 빠짐 */
+        .hist-tabs { display: inline-flex; gap: 4px; margin-left: 10px; vertical-align: middle; }
+        .hist-tab { border: 1px solid #cbd5e1; background: #fff; color: #475569; border-radius: 7px;
+                    padding: 1px 10px; font-size: 0.74rem; cursor: pointer; }
+        .hist-tab.active { background: #1a1a2e; border-color: #1a1a2e; color: #fff; }
+        table.hist-table { border-collapse: collapse; font-size: 0.78rem; width: 100%; }
+        .hist-table th { background: #1a1a2e; color: #fff; padding: 6px 7px; font-weight: 600; white-space: nowrap; text-align: center; }
+        .hist-table td { padding: 4px 7px; border-bottom: 1px solid #f1f5f9; text-align: center; white-space: nowrap; }
+        .hist-table th:first-child, .hist-table td:first-child { text-align: left; position: sticky; left: 0; }
+        .hist-table td:first-child { background: #fff; }
+        .hist-table tr:hover td { background: #f8fafc; }
+        .hist-rank { display: inline-block; min-width: 22px; border-radius: 5px; font-weight: 700; padding: 1px 4px; }
+        .hist-rank.r1 { background: #1e3a8a; color: #fff; }
+        .hist-rank.r2 { background: #93c5fd; color: #1e3a8a; }
+        .hist-rank.r3 { background: #dbeafe; color: #1e40af; }
+        .hist-intraday { color: #94a3b8; font-size: 0.68rem; }
+        .hist-now { color: #b91c1c; font-size: 0.66rem; font-weight: 700; margin-left: 4px; }
     </style>
 </head>
 <body>
@@ -129,6 +147,28 @@
         &nbsp;|&nbsp; <strong>초록색 줄</strong>은 코인 스크리닝의 진입 후보(돌파·200선근접+구름위·모멘텀 컨플루언스)와 겹치는 종목이고, 뱃지는 켜진 신호입니다.
         &nbsp;|&nbsp; <strong>매매대상</strong> 체크는 자동매매 화면의 "🎯 매매 대상 코인"(1단계 관심 등록)과 같은 값이라 어느 쪽에서 켜도 똑같이 반영됩니다. 다만 실거래 표(2단계)에는 스크리닝 후보와 겹칠 때만 올라오므로, 초록색 줄에 체크하는 게 바로 효과가 있습니다.
         &nbsp;|&nbsp; 순위만 보고 넣으면 이미 오른 뒤에 따라 사는 셈이 됩니다 — 진입 근거는 스크리닝 신호로 보고, 순위는 그중 돈과 관심이 몰린 쪽을 고르는 용도로 쓰세요.
+    </div>
+
+    <div class="card-panel mt-3">
+        <div class="panel-title">
+            🗓 최근 15일 상위 10 이력
+            <span class="hist-tabs">
+                <button class="hist-tab active" data-kind="gainers" onclick="loadHistory('gainers')">상승률</button>
+                <button class="hist-tab" data-kind="trade_value" onclick="loadHistory('trade_value')">거래대금</button>
+            </span>
+            <span class="panel-count" id="histInfo"></span>
+        </div>
+        <div class="rank-wrap">
+            <table class="hist-table">
+                <thead id="histHead"></thead>
+                <tbody id="histBody"><tr class="loading-row"><td>로딩 중...</td></tr></tbody>
+            </table>
+        </div>
+        <div class="mt-2 text-muted" style="font-size:0.72rem">
+            * 매시 55분에 상위 20위까지 저장하고 15일이 지나면 지웁니다. 숫자는 그날 <strong>마감 순위</strong>(23시 55분 스냅샷, 오늘은 가장 최근 스냅샷)이고,
+            <span class="hist-intraday">장중</span>은 장중엔 10위 안에 들었다가 마감 때는 빠진 날입니다(칸에 마우스를 올리면 몇 시간·최고 몇 위였는지 나옵니다).
+            &nbsp;|&nbsp; <strong>마감/장중</strong>은 15일 중 마감에 10위 안이었던 날 수 / 장중 한 번이라도 들었던 날 수, <span class="hist-now">NOW</span>는 가장 최근 스냅샷에도 10위 안인 종목입니다.
+        </div>
     </div>
 </div>
 
@@ -244,7 +284,52 @@
         }
     }
 
+    function histCell(cell) {
+        if (!cell) return '';
+        const tip = `장중 ${cell.hours_in}/${cell.hours_total}시간 10위 안 · 최고 ${cell.best_rank}위`
+            + (cell.close_rank ? ` · 마감 ${cell.close_rank}위` + (cell.close_change_rate != null ? ` (${cell.close_change_rate > 0 ? '+' : ''}${cell.close_change_rate}%)` : '') : ' · 마감엔 빠짐');
+        if (!cell.close_rank) return `<span class="hist-intraday" title="${tip}">장중</span>`;
+        const cls = cell.close_rank <= 3 ? 'r1' : (cell.close_rank <= 6 ? 'r2' : 'r3');
+        return `<span class="hist-rank ${cls}" title="${tip}">${cell.close_rank}</span>`;
+    }
+
+    async function loadHistory(kind) {
+        document.querySelectorAll('.hist-tab').forEach(b => b.classList.toggle('active', b.dataset.kind === kind));
+        const head = document.getElementById('histHead');
+        const body = document.getElementById('histBody');
+        try {
+            const res = await fetch(`api/coin-ranking/history?kind=${kind}&top=10`);
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message || '조회 실패');
+
+            const today = json.latest && json.latest.date;
+            head.innerHTML = '<tr><th>종목</th><th title="마감에 10위 안이었던 날 / 장중 한 번이라도 든 날">마감/장중</th><th>최고</th>'
+                + json.dates.map(d => `<th title="스냅샷 ${d.snapshots}개">${d.date.slice(5)}`
+                    + (d.date === today ? `<br><span style="font-weight:400;font-size:0.66rem">${d.close_hour}시까지</span>` : '')
+                    + '</th>').join('') + '</tr>';
+
+            if (!json.coins.length) {
+                body.innerHTML = `<tr class="loading-row"><td colspan="${3 + json.dates.length}">아직 쌓인 이력이 없습니다 — coin-ranking-bot이 매시 55분에 저장을 시작합니다.</td></tr>`;
+                document.getElementById('histInfo').textContent = '';
+                return;
+            }
+            body.innerHTML = json.coins.map(c => `
+                <tr>
+                    <td><span class="coin-name">${c.name}</span>${c.now_in ? '<span class="hist-now">NOW</span>' : ''}</td>
+                    <td>${c.days_close_in} / ${c.days_in}</td>
+                    <td>${c.best_rank}위</td>
+                    ${json.dates.map(d => `<td>${histCell(c.days[d.date])}</td>`).join('')}
+                </tr>`).join('');
+            document.getElementById('histInfo').textContent =
+                `${json.dates.length}일 · 10위 안에 든 적 있는 종목 ${json.coins.length}개`;
+        } catch (e) {
+            head.innerHTML = '';
+            body.innerHTML = `<tr class="loading-row"><td>이력을 불러오지 못했습니다: ${e.message}</td></tr>`;
+        }
+    }
+
     load();
+    loadHistory('gainers');
 </script>
 </body>
 </html>

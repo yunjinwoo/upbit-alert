@@ -202,3 +202,11 @@ class Config:
     MARKET_REGIME_BREADTH_DOWN = 40.0        # 이 값 이하면 -1
     MARKET_REGIME_CRASH_PCT = 5.0            # BTC가 전일 대비 이 % 이상 빠지면 점수와 무관하게 곧바로 나쁨
     MARKET_REGIME_MIN_ITEMS = 3              # 네 항목 중 값이 있는 게 이보다 적으면 이번 판정은 건너뜀
+
+    # ── 코인 당일 순위 이력 — app/core/upbit_ranking.py · docs/coin-ranking-history.md
+    # 매시 RANKING_HISTORY_MINUTE분에 상승률/거래대금 상위 RANKING_HISTORY_TOP개씩 저장하고,
+    # RANKING_HISTORY_KEEP_DAYS일보다 오래된 날짜는 지운다. 23시 스냅샷이 그날의 "마감 순위"가 된다
+    # (업비트 등락률·거래대금은 KST 0시에 초기화되므로 0시 직전 값이 하루치 결과에 가장 가깝다).
+    RANKING_HISTORY_KEEP_DAYS = 15
+    RANKING_HISTORY_TOP = 20       # 저장은 20위까지 — 10위 경계를 들락날락하는 종목도 보이도록
+    RANKING_HISTORY_MINUTE = 55    # 매시 몇 분 이후에 그 시간 스냅샷을 찍을지

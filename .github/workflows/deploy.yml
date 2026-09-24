@@ -59,7 +59,7 @@ jobs:
             # 그대로 몇 주씩 떠 있었다(2026-09-19 배포 로그: upbit-live-trade-bot 27일,
             # toss-live-trade-bot 17일, toss-analysis-bot 28일 uptime). 이름마다 따로 삭제해서,
             # 없는 이름 하나가 나머지 재시작을 막지 못하게 한다.
-            for proc in upbit-bot upbit-api stock-bot coin-analysis-bot trade-bot condition-check-bot toss-analysis-bot toss-trade-bot toss-condition-check-bot upbit-live-trade-bot toss-live-trade-bot market-regime-bot; do
+            for proc in upbit-bot upbit-api stock-bot coin-analysis-bot trade-bot condition-check-bot toss-analysis-bot toss-trade-bot toss-condition-check-bot upbit-live-trade-bot toss-live-trade-bot market-regime-bot coin-ranking-bot; do
               pm2 delete "$proc" || true
             done
 
@@ -82,6 +82,9 @@ jobs:
             # market-regime-bot: 시장 판단(좋음/애매/나쁨)을 30분마다 매기고, 판단이 바뀌면 슬랙으로 알린다
             # (app/core/market_regime.py). 표시·알림 전용이라 매매에는 관여하지 않는다.
             pm2 start main.py --name market-regime-bot --interpreter ./venv/bin/python3 -- market_regime
+            # coin-ranking-bot: 코인 당일 상승률/거래대금 상위를 매시 55분에 저장하고 15일치만 남긴다
+            # (app/core/upbit_ranking.py). /coin-ranking 화면의 "최근 15일 이력" 표가 이 데이터를 읽는다.
+            pm2 start main.py --name coin-ranking-bot --interpreter ./venv/bin/python3 -- coin_ranking
 
             # 토스증권(국내주식) — 업비트 쪽과 격리된 프로세스(별개 기능).
             # toss-analysis-bot: 진입 후보(stock_screening_daily)를 채움 — 모의매매는 안 쓰지만 실거래

@@ -8,6 +8,7 @@ from app.core.upbit_market_analysis import run_coin_screening_loop
 from app.core.auto_trader import run_auto_trade_loop, run_live_trade_loop
 from app.core.entry_condition_checker import run_condition_check_loop
 from app.core.market_regime import run_market_regime_loop
+from app.core.upbit_ranking import run_ranking_history_loop
 from app.core.toss_market_analysis import run_stock_screening_loop
 from app.core.toss_auto_trader import (
     run_auto_trade_loop as run_toss_trade_loop,
@@ -45,11 +46,11 @@ if __name__ == "__main__":
     parser.add_argument("mode", nargs="?",
                         choices=["all", "api", "upbit", "stock", "coin_analysis", "trade", "condition_check",
                                  "toss_analysis", "toss_trade", "toss_condition_check", "live_balance",
-                                 "live_trade", "toss_live_trade", "market_regime"],
+                                 "live_trade", "toss_live_trade", "market_regime", "coin_ranking"],
                         default="all",
                         help="Mode to run: all (default), api, upbit, stock, coin_analysis, trade, condition_check, "
                              "toss_analysis, toss_trade, toss_condition_check, live_balance, live_trade, toss_live_trade, "
-                             "or market_regime")
+                             "market_regime, or coin_ranking")
     # trade/condition_check(업비트)와 toss_trade/toss_analysis/toss_condition_check(토스)는 의도적으로
     # all/start_all()에 포함하지 않음 — 알림/모니터링 프로세스와 장애를 격리하기 위해 각각
     # `python main.py trade` 등으로 독립 실행할 것.
@@ -94,3 +95,6 @@ if __name__ == "__main__":
     elif args.mode == "market_regime":
         # 시장 판단(좋음/애매/나쁨) — 판정·기록·판단 변경 시 슬랙 알림만 한다(매매에는 관여하지 않음)
         run_market_regime_loop()
+    elif args.mode == "coin_ranking":
+        # 코인 당일 순위 이력 — 매시 상승률/거래대금 상위를 저장하고 15일치만 남긴다(조회 전용, 매매 무관)
+        run_ranking_history_loop()

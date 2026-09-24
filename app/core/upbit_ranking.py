@@ -14,15 +14,21 @@
 겹치는지, 이미 관심 등록(watchlist)돼 있는지를 같이 실어 보낸다 — 진입 근거는 스크리닝 신호가
 대고, 순위는 그중 어디에 돈과 관심이 몰렸는지 고르는 필터로만 쓰라는 뜻이다.
 """
+import time
 from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Callable, Optional
 
 import requests
 
+from app.config import Config
 from app.utils.db_manager import (
     ENTRY_SIGNALS,
     get_coin_screening_candidates,
     get_watchlist_tickers,
+    save_coin_ranking_snapshot,
+    has_coin_ranking_snapshot,
+    delete_coin_ranking_before,
+    get_coin_ranking_history,
 )
 from app.utils.logger import get_logger
 
@@ -121,6 +127,119 @@ def get_top_movers(limit: int = DEFAULT_LIMIT) -> Dict[str, Any]:
         'top_trade_value': top_trade_value,
         'screening_count': overlay['count'],
         'screening_updated_at': overlay['updated_at'],
+    }
+
+
+
+# ── 순위 이력(최근 15일) ────────────────────────────────────────────────────────
+# 위의 get_top_movers()는 "지금" 한 번 보고 끝이라 어제 누가 상위였는지는 남지 않는다. 그래서
+# coin-ranking-bot이 매시 RANKING_HISTORY_MINUTE분에 상위 RANKING_HISTORY_TOP개를 저장하고, 화면은
+# 종목 × 날짜 표로 "며칠 들어왔는지 / 그날 마감 몇 위였는지 / 장중에만 잠깐 들어왔다 나갔는지"를 보여준다.
+# 상위 목록은 종목이 계속 들고 나므로 "날짜별 목록"이 아니라 "종목별 등장 기록"으로 묶어야 비교가 된다.
+
+HISTORY_KINDS = {
+    'gainers': ('change_rate', '당일 상승률'),
+    'trade_value': ('trade_value', '당일 거래대금'),
+}
+
+
+def capture_ranking_snapshot(now: datetime = None, tickers_fn: Callable = None, force: bool = False) -> Optional[int]:
+    """이번 시(時) 스냅샷을 아직 안 찍었고 RANKING_HISTORY_MINUTE분이 지났으면 찍는다. 저장한 행 수, 건너뛰면 None.
+
+    스냅샷을 찍은 뒤엔 보관 기간(RANKING_HISTORY_KEEP_DAYS)보다 오래된 날짜를 지운다.
+    """
+    now = now or datetime.now(KST)
+    date, hour = now.strftime('%Y-%m-%d'), now.hour
+    if not force and (now.minute < Config.RANKING_HISTORY_MINUTE or has_coin_ranking_snapshot(date, hour)):
+        return None
+
+    tickers = (tickers_fn or fetch_krw_tickers)()
+    rows = [_to_row(t) for t in tickers if str(t.get('market', '')).startswith('KRW-')]
+    top = Config.RANKING_HISTORY_TOP
+    ranked = {kind: sorted(rows, key=lambda r: r[field], reverse=True)[:top]
+              for kind, (field, _) in HISTORY_KINDS.items()}
+    saved = save_coin_ranking_snapshot(date, hour, now.strftime('%Y-%m-%d %H:%M:%S'), ranked)
+
+    keep_from = (now - timedelta(days=Config.RANKING_HISTORY_KEEP_DAYS - 1)).strftime('%Y-%m-%d')
+    purged = delete_coin_ranking_before(keep_from)
+    logger.info(f"코인 순위 이력 저장 — {date} {hour:02d}시 {saved}행" + (f", 오래된 {purged}행 삭제" if purged else ''))
+    return saved
+
+
+def run_ranking_history_loop(poll_sec: int = 60):
+    """1분마다 깨어나 이번 시 스냅샷이 필요한지만 확인한다(대부분은 DB 조회 1번으로 끝)."""
+    logger.info(f"코인 순위 이력 루프 시작 — 매시 {Config.RANKING_HISTORY_MINUTE}분, "
+                f"상위 {Config.RANKING_HISTORY_TOP}개, {Config.RANKING_HISTORY_KEEP_DAYS}일 보관")
+    while True:
+        try:
+            capture_ranking_snapshot()
+        except Exception as e:
+            logger.error(f"코인 순위 이력 저장 오류: {e}")
+        time.sleep(poll_sec)
+
+
+def get_ranking_history(kind: str = 'gainers', top: int = 10, days: int = None, now: datetime = None) -> Dict[str, Any]:
+    """최근 days일 동안 kind 상위 top 안에 한 번이라도 든 종목을 종목별로 묶어 돌려준다.
+
+    날짜별 셀:
+      - close_rank : 그날 마지막 스냅샷(보통 23시 = 마감 직전) 순위. top 밖이면 None
+      - best_rank  : 그날 장중 최고 순위(top 안일 때만)
+      - hours_in   : 그날 top 안에 있던 스냅샷 수(= 시간 수) / hours_total: 그날 찍힌 스냅샷 수
+    오늘은 아직 안 끝났으므로 close_rank가 "지금까지 마지막 스냅샷" 기준이다(close_hour로 구분).
+    """
+    if kind not in HISTORY_KINDS:
+        raise ValueError(f"알 수 없는 순위 종류: {kind}")
+    days = days or Config.RANKING_HISTORY_KEEP_DAYS
+    now = now or datetime.now(KST)
+    since = (now - timedelta(days=days - 1)).strftime('%Y-%m-%d')
+    snaps = get_coin_ranking_history(kind, since)
+
+    by_date: Dict[str, Dict[int, List[Dict[str, Any]]]] = {}
+    for r in snaps:
+        by_date.setdefault(r['date'], {}).setdefault(r['hour'], []).append(r)
+    dates = sorted(by_date, reverse=True)  # 최신 날짜가 왼쪽
+
+    coins: Dict[str, Dict[str, Any]] = {}
+    date_meta = []
+    for d in dates:
+        hours = by_date[d]
+        close_hour = max(hours)
+        date_meta.append({'date': d, 'close_hour': close_hour, 'snapshots': len(hours)})
+        for hour, rows in hours.items():
+            for r in rows:
+                if r['rank'] > top:
+                    continue
+                c = coins.setdefault(r['ticker'], {'ticker': r['ticker'], 'name': r['ticker'].replace('KRW-', ''),
+                                                   'days': {}})
+                cell = c['days'].setdefault(d, {'close_rank': None, 'best_rank': None, 'hours_in': 0,
+                                                'hours_total': len(hours), 'close_change_rate': None})
+                cell['hours_in'] += 1
+                cell['best_rank'] = r['rank'] if cell['best_rank'] is None else min(cell['best_rank'], r['rank'])
+                if hour == close_hour:
+                    cell['close_rank'] = r['rank']
+                    cell['close_change_rate'] = r['change_rate']
+
+    latest = dates[0] if dates else None
+    latest_hour = date_meta[0]['close_hour'] if date_meta else None
+    result = []
+    for c in coins.values():
+        cells = c['days']
+        c['days_in'] = len(cells)                                    # 장중 한 번이라도 top 안
+        c['days_close_in'] = sum(1 for v in cells.values() if v['close_rank'] is not None)  # 마감에도 top 안
+        c['best_rank'] = min(v['best_rank'] for v in cells.values())
+        c['last_seen'] = max(cells)
+        c['now_in'] = latest is not None and (cells.get(latest) or {}).get('close_rank') is not None
+        result.append(c)
+    result.sort(key=lambda c: (-c['days_in'], -c['days_close_in'], c['best_rank'], c['ticker']))
+
+    return {
+        'kind': kind,
+        'kind_label': HISTORY_KINDS[kind][1],
+        'top': top,
+        'days': days,
+        'dates': date_meta,
+        'latest': {'date': latest, 'hour': latest_hour} if latest else None,
+        'coins': result,
     }
 
 
