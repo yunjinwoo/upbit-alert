@@ -810,6 +810,8 @@ def init_db():
         # 매매 사이클을 재구성한다 — trade_order_log는 HOLD/SKIP까지 매 사이클 쌓여 커지므로,
         # 그 대부분을 건너뛰고 체결만 꺼내오도록 인덱스를 둔다(get_trade_fill_rows 참고).
         'CREATE INDEX IF NOT EXISTS idx_trade_order_log_fills ON trade_order_log(broker, mode, decision, id)',
+        # 매매일지(stock-history)가 종목 하나의 체결·보유 기록을 꺼내 간다(get_trade_log_for_ticker 참고).
+        'CREATE INDEX IF NOT EXISTS idx_trade_order_log_ticker ON trade_order_log(broker, mode, ticker, id)',
 
         # 정밀 매수조건 관찰 모드(기본 꺼짐) — 켜면 조건은 검사하되 매수는 막지 않는다.
         'ALTER TABLE trade_strategy_settings ADD COLUMN conditions_observe_only INTEGER NOT NULL DEFAULT 0',
@@ -5005,6 +5007,36 @@ def get_trade_fill_rows(broker: str, mode: str) -> list:
     rows = cursor.fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def get_trade_log_for_ticker(broker: str, mode: str, ticker: str) -> list:
+    """종목 하나의 체결 행(BUY/DCA_BUY/SELL)과 보유 중 판단 행(HOLD)을 시간순으로 조회 — 매매일지
+    연동(app/core/trade_journal.py)용. HOLD 행의 pnl_pct(평가손익)로 보유 중 최고/최저 수익률을 낸다.
+    기간으로 자르지 않는 이유는 get_trade_fill_rows와 같다(기간 밖에서 연 포지션의 진입을 잃지 않게)."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT id, ticker, decision, reason, price, qty, amount_krw, pnl_krw, pnl_pct, created_at
+        FROM trade_order_log
+        WHERE broker = ? AND mode = ? AND ticker = ? AND decision IN ('BUY', 'DCA_BUY', 'SELL', 'HOLD')
+        ORDER BY id ASC
+    ''', (broker, mode, ticker))
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
+def get_market_regime_changes() -> list:
+    """확정 국면 변경 이력 전체(오래된 순) — 특정 시각의 국면을 찾는 용도."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    _ensure_market_regime_tables(cursor)
+    cursor.execute('SELECT changed_at, from_regime, to_regime FROM market_regime_history ORDER BY changed_at ASC, id ASC')
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return rows
 
 
 # ── 시장 판단(좋음/애매/나쁨) — app/core/market_regime.py
