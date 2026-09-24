@@ -22,6 +22,7 @@
 | [auto-trade-market-indicators.md](auto-trade-market-indicators.md) | ✅ 구현 완료 (2026-09-23) · 주봉 RSI 조건 기본 꺼짐 | 정밀 매수조건 "주봉 RSI ≥ 65" + 자동매매 화면 시장 지표 카드(BTC RSI 4시간봉/일봉/주봉 · BTC 도미넌스, 표시 전용) |
 | [market-regime.md](market-regime.md) | ✅ 구현 완료 (2026-09-24) · 표시·알림 전용 | 시장 판단(좋음/애매/나쁨) — BTC 20일선·RSI·상승 종목 비율 점수제, 시장 지표 카드 표시 + 판단이 바뀌면 슬랙 알림 + 전략 묶음(좋음/애매/나쁨) 버튼으로 청산 값 한 번에 적용(사람이 직접 고름) |
 
+| [coin-ranking-history.md](coin-ranking-history.md) | ✅ 구현 완료 (2026-09-24) · 조회 전용 | 코인 당일 순위 이력 — 상승률/거래대금 상위를 매시 저장해 15일 보관, 종목 × 날짜 표로 마감 순위·장중 등장 표시 |
 | [backtest.md](backtest.md) | ✅ 구현 완료 (2026-09-21) | 백테스트 — 당일 상승률/거래대금 상위 종목에 기존 진입·청산 로직을 과거 캔들로 돌려 성과 비교 (수집은 서버 전용) |
 
 관련 게이지 기능(종목당 투입원금 상한 표시)은 `auto-trade-recovery-dca.md`의 1단계로 이미 머지됨(PR #59).

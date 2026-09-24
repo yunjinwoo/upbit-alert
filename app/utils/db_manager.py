@@ -5096,3 +5096,84 @@ def get_market_regime_history(limit: int = 10) -> list:
     rows = [dict(r) for r in cursor.fetchall()]
     conn.close()
     return rows
+
+
+# ── 코인 당일 순위 이력 — app/core/upbit_ranking.py
+# coin-ranking-bot(별도 프로세스)이 매시 스냅샷을 쓰고 대시보드(API 프로세스)가 읽는다. 시장 판단 테이블과
+# 같은 이유로 조회/저장 함수마다 IF NOT EXISTS를 건다.
+#   kind: 'gainers'(당일 상승률) / 'trade_value'(당일 거래대금)
+#   date: KST 거래일(업비트 등락률·거래대금이 초기화되는 0시 기준), hour: 스냅샷을 찍은 시(0~23)
+
+def _ensure_coin_ranking_history_table(cursor) -> None:
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS coin_ranking_history (
+            date TEXT NOT NULL,
+            hour INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            rank INTEGER NOT NULL,
+            ticker TEXT NOT NULL,
+            price REAL,
+            change_rate REAL,
+            trade_value REAL,
+            captured_at TEXT NOT NULL,
+            PRIMARY KEY (date, hour, kind, ticker)
+        )
+    ''')
+
+
+def save_coin_ranking_snapshot(date: str, hour: int, captured_at: str, ranked: dict) -> int:
+    """한 시각의 순위 스냅샷을 저장한다. ranked = {kind: [row, ...]}(이미 순위순). 같은 (date, hour)는 덮어쓴다."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    _ensure_coin_ranking_history_table(cursor)
+    cursor.execute('DELETE FROM coin_ranking_history WHERE date = ? AND hour = ?', (date, hour))
+    data = [
+        (date, hour, kind, i, r['ticker'], r.get('price'), r.get('change_rate'), r.get('trade_value'), captured_at)
+        for kind, rows in ranked.items()
+        for i, r in enumerate(rows, 1)
+    ]
+    cursor.executemany('''
+        INSERT INTO coin_ranking_history (date, hour, kind, rank, ticker, price, change_rate, trade_value, captured_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', data)
+    conn.commit()
+    conn.close()
+    return len(data)
+
+
+def has_coin_ranking_snapshot(date: str, hour: int) -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    _ensure_coin_ranking_history_table(cursor)
+    cursor.execute('SELECT 1 FROM coin_ranking_history WHERE date = ? AND hour = ? LIMIT 1', (date, hour))
+    found = cursor.fetchone() is not None
+    conn.close()
+    return found
+
+
+def delete_coin_ranking_before(date: str) -> int:
+    """date(YYYY-MM-DD)보다 이전 날짜의 스냅샷을 지운다."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    _ensure_coin_ranking_history_table(cursor)
+    cursor.execute('DELETE FROM coin_ranking_history WHERE date < ?', (date,))
+    n = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return n
+
+
+def get_coin_ranking_history(kind: str, since_date: str) -> list:
+    """since_date 이후 kind 순위 스냅샷 전체(날짜·시·순위 순)."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    _ensure_coin_ranking_history_table(cursor)
+    cursor.execute('''
+        SELECT date, hour, rank, ticker, price, change_rate, trade_value, captured_at
+        FROM coin_ranking_history WHERE kind = ? AND date >= ?
+        ORDER BY date, hour, rank
+    ''', (kind, since_date))
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return rows

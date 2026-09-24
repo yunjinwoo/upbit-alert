@@ -75,7 +75,7 @@ from app.core.stock_monitor import (
     SECTOR_NAMES,
 )
 from app.core.upbit_market_analysis import run_coin_screening
-from app.core.upbit_ranking import get_top_movers
+from app.core.upbit_ranking import get_top_movers, get_ranking_history
 from app.core.trade_performance import build_performance
 from app.core.market_indicators import get_market_indicators
 from app.core.market_regime import get_market_regime_snapshot
@@ -659,6 +659,18 @@ def get_coin_ranking_api():
         limit = request.args.get('limit', default=10, type=int)
         limit = max(1, min(limit, 50))  # 과도한 요청 방지
         return jsonify({"status": "success", **get_top_movers(limit=limit)})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/coin-ranking/history', methods=['GET'])
+def get_coin_ranking_history_api():
+    """최근 15일 순위 이력 — 상위 top 안에 든 적 있는 종목별로 날짜마다 마감 순위/장중 등장 시간을 묶어 반환."""
+    try:
+        kind = request.args.get('kind', default='gainers')
+        top = max(1, min(request.args.get("top", default=10, type=int), Config.RANKING_HISTORY_TOP))  # 저장한 순위까지만
+        return jsonify({"status": "success", **get_ranking_history(kind=kind, top=top)})
+    except ValueError as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
