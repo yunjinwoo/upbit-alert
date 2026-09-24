@@ -59,7 +59,7 @@ jobs:
             # 그대로 몇 주씩 떠 있었다(2026-09-19 배포 로그: upbit-live-trade-bot 27일,
             # toss-live-trade-bot 17일, toss-analysis-bot 28일 uptime). 이름마다 따로 삭제해서,
             # 없는 이름 하나가 나머지 재시작을 막지 못하게 한다.
-            for proc in upbit-bot upbit-api stock-bot coin-analysis-bot trade-bot condition-check-bot toss-analysis-bot toss-trade-bot toss-condition-check-bot upbit-live-trade-bot toss-live-trade-bot; do
+            for proc in upbit-bot upbit-api stock-bot coin-analysis-bot trade-bot condition-check-bot toss-analysis-bot toss-trade-bot toss-condition-check-bot upbit-live-trade-bot toss-live-trade-bot market-regime-bot; do
               pm2 delete "$proc" || true
             done
 
@@ -79,6 +79,9 @@ jobs:
             # 매매 루프는 이 캐시만 읽으므로, 이 프로세스가 없으면 정밀검사를 켠 종목은 검사 결과가
             # 없어 매번 SKIP된다 — 정밀검사를 아무 종목에도 안 켰으면 조회 자체를 안 해 부하는 0이다.
             pm2 start main.py --name condition-check-bot --interpreter ./venv/bin/python3 -- condition_check
+            # market-regime-bot: 시장 판단(좋음/애매/나쁨)을 30분마다 매기고, 판단이 바뀌면 슬랙으로 알린다
+            # (app/core/market_regime.py). 표시·알림 전용이라 매매에는 관여하지 않는다.
+            pm2 start main.py --name market-regime-bot --interpreter ./venv/bin/python3 -- market_regime
 
             # 토스증권(국내주식) — 업비트 쪽과 격리된 프로세스(별개 기능).
             # toss-analysis-bot: 진입 후보(stock_screening_daily)를 채움 — 모의매매는 안 쓰지만 실거래

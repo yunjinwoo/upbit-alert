@@ -4959,3 +4959,94 @@ def get_trade_fill_rows(broker: str, mode: str) -> list:
     rows = cursor.fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# ── 시장 판단(좋음/애매/나쁨) — app/core/market_regime.py
+# 판정 루프(별도 프로세스)가 쓰고 대시보드(API 프로세스)가 읽는다. 두 테이블 다 판정 루프가 처음 돌 때
+# 만들어지므로 init_db()를 거치지 않는 프로세스에서도 동작하도록 조회/저장 함수마다 IF NOT EXISTS를 건다.
+#   market_regime_state   — 1행짜리 현재 상태(확정 국면, 연속 확인 대기 중인 국면, 마지막 판정 결과)
+#   market_regime_history — 확정 국면이 바뀔 때마다 1행(슬랙으로 보낸 알림과 같은 내용)
+
+def _ensure_market_regime_tables(cursor) -> None:
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS market_regime_state (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            confirmed TEXT,
+            confirmed_at TEXT,
+            pending TEXT,
+            pending_count INTEGER NOT NULL DEFAULT 0,
+            checked_at TEXT,
+            last_result TEXT
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS market_regime_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            changed_at TEXT NOT NULL,
+            from_regime TEXT,
+            to_regime TEXT NOT NULL,
+            score INTEGER,
+            detail TEXT
+        )
+    ''')
+
+
+def get_market_regime_state() -> dict:
+    """현재 시장 판단 상태. 아직 한 번도 판정하지 않았으면 None."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    _ensure_market_regime_tables(cursor)
+    cursor.execute('SELECT * FROM market_regime_state WHERE id = 1')
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None
+    state = dict(row)
+    state.pop('id', None)
+    state['last_result'] = json.loads(state['last_result']) if state['last_result'] else None
+    return state
+
+
+def save_market_regime_state(state: dict, change: dict = None) -> None:
+    """상태를 덮어쓰고, 확정 국면이 바뀌었으면(change) 이력도 한 줄 남긴다 — 한 트랜잭션으로."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    _ensure_market_regime_tables(cursor)
+    cursor.execute('''
+        INSERT INTO market_regime_state (id, confirmed, confirmed_at, pending, pending_count, checked_at, last_result)
+        VALUES (1, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            confirmed = excluded.confirmed, confirmed_at = excluded.confirmed_at,
+            pending = excluded.pending, pending_count = excluded.pending_count,
+            checked_at = excluded.checked_at, last_result = excluded.last_result
+    ''', (
+        state.get('confirmed'), state.get('confirmed_at'), state.get('pending'),
+        state.get('pending_count') or 0, state.get('checked_at'),
+        json.dumps(state.get('last_result'), ensure_ascii=False) if state.get('last_result') is not None else None,
+    ))
+    if change:
+        cursor.execute('''
+            INSERT INTO market_regime_history (changed_at, from_regime, to_regime, score, detail)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (
+            change['changed_at'], change.get('from_regime'), change['to_regime'], change.get('score'),
+            json.dumps(change.get('detail'), ensure_ascii=False) if change.get('detail') is not None else None,
+        ))
+    conn.commit()
+    conn.close()
+
+
+def get_market_regime_history(limit: int = 10) -> list:
+    """확정 국면 변경 이력(최신순)."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    _ensure_market_regime_tables(cursor)
+    cursor.execute('''
+        SELECT changed_at, from_regime, to_regime, score FROM market_regime_history
+        ORDER BY id DESC LIMIT ?
+    ''', (limit,))
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return rows

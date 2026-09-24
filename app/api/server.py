@@ -78,6 +78,7 @@ from app.core.upbit_market_analysis import run_coin_screening
 from app.core.upbit_ranking import get_top_movers
 from app.core.trade_performance import build_performance
 from app.core.market_indicators import get_market_indicators
+from app.core.market_regime import get_market_regime_snapshot
 from app.core.auto_trader import get_dashboard_summary, run_trade_cycle, force_buy, force_sell, get_live_dashboard_summary
 from app.core.brokers.base import TradeCycleBusyError
 from app.core.brokers.upbit_live_broker import UpbitLiveBroker
@@ -811,7 +812,15 @@ def get_market_indicators_api():
     표시 전용이라 매매 판단에는 쓰지 않는다. 소스별로 따로 실패할 수 있어 항상 200으로 내려주고
     btc_error/dominance_error에 사유를 담는다(app/core/market_indicators.py 참고)."""
     try:
-        return jsonify({'status': 'success', **get_market_indicators()})
+        data = get_market_indicators()
+        # 시장 판단(좋음/애매/나쁨)은 market-regime-bot이 저장한 값을 그대로 보여준다 — 슬랙 알림과
+        # 같은 판정이 보이도록 여기서 다시 계산하지 않는다. 판정 쪽 장애가 카드 전체를 깨지 않게 분리.
+        try:
+            data['regime'] = get_market_regime_snapshot()
+        except Exception as e:
+            data['regime'] = None
+            data['regime_error'] = str(e)
+        return jsonify({'status': 'success', **data})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 

@@ -137,6 +137,9 @@
             <div class="section-title mb-0">📈 시장 지표 (비트코인 RSI · 도미넌스)</div>
             <span id="marketIndicatorsUpdatedAt" class="text-muted" style="font-size:0.74rem"></span>
         </div>
+        <!-- 시장 판단(좋음/애매/나쁨) — market-regime-bot이 저장한 판정을 그대로 보여준다(app/core/market_regime.py).
+             판단이 바뀌면 같은 내용이 슬랙으로도 간다. 표시 전용이라 매매 설정은 바뀌지 않는다. -->
+        <div id="marketRegimeBox" class="stat-box mb-2" style="font-size:0.8rem"></div>
         <div id="marketIndicatorsBody" class="stat-grid mb-1">
             <div class="stat-box"><div class="stat-label">로딩 중...</div></div>
         </div>
@@ -145,6 +148,10 @@
             포함</b>해 계산합니다(괄호 안은 직전에 마감된 봉의 값). 65 이상은 노랑, 70 이상은 빨강, 30 이하는 파랑입니다.
             <br>* BTC 도미넌스는 전체 암호화폐 시가총액 중 비트코인 비중으로, 업비트에는 없는 값이라
             <b>CoinGecko</b>에서 가져옵니다(5분 캐시). <b>표시 전용</b>이며 자동매매 판단에는 쓰지 않습니다.
+            <br>* <b>시장 판단</b>은 네 항목(BTC 20일선 위/아래 · BTC 일봉 RSI · BTC 4시간봉 RSI 55↑/45↓ ·
+            원화마켓 상승 종목 비율 60%↑/40%↓)을 +1/0/-1로 매겨 합이 +2 이상이면 좋음, -2 이하면 나쁨,
+            그 사이는 애매입니다. BTC가 전일 대비 -5% 이상 빠지면 바로 나쁨. 30분마다 판정하고 같은 판정이
+            2번 연속 나와야 바뀐 것으로 보며, 바뀌면 슬랙으로 알립니다. <b>전략은 자동으로 바뀌지 않습니다.</b>
         </div>
     </div>
 
@@ -1475,6 +1482,46 @@
         return `<span class="${cls}">${n > 0 ? '+' : ''}${n.toFixed(2)}%</span>`;
     }
 
+    function renderMarketRegime(snap, err) {
+        const box = document.getElementById('marketRegimeBox');
+        if (!snap) {
+            box.innerHTML = `<span class="text-danger">시장 판단 조회 실패${err ? ': ' + err : ''}</span>`;
+            return;
+        }
+        const st = snap.state;
+        const regimes = snap.regimes || {};
+        const rText = k => regimes[k] ? `${regimes[k].emoji} ${regimes[k].label}` : '—';
+        if (!st || !st.confirmed) {
+            box.innerHTML = '<b>시장 판단</b> <span class="text-muted">— 아직 판정 기록이 없습니다. 서버에 '
+                + 'market-regime-bot 프로세스(<code>python main.py market_regime</code>)가 떠 있는지 확인하세요.</span>';
+            return;
+        }
+        const cur = regimes[st.confirmed] || {};
+        const res = st.last_result || {};
+        const score = (res.score === null || res.score === undefined) ? '' : ` (이번 점수 ${res.score > 0 ? '+' : ''}${res.score})`;
+        const items = (res.items || []).map(i => {
+            const p = i.point > 0 ? `<span class="pnl-pos">+1</span>` : (i.point < 0 ? `<span class="pnl-neg">-1</span>` : '0');
+            return `${i.label} ${i.text} ${p}`;
+        }).join(' · ');
+        const crash = res.crash ? ` · ⚠️ BTC 전일 대비 ${Number(res.change_rate_24h).toFixed(2)}% 급락` : '';
+        const pending = st.pending
+            ? `<div class="text-muted">${rText(st.pending)} 쪽으로 ${st.pending_count}/${snap.confirm_count}회 — 한 번 더 나오면 바뀝니다</div>` : '';
+        // 판정 주기의 3배 넘게 새 판정이 없으면 봇이 멈춘 것으로 본다
+        const checkedMs = st.checked_at ? new Date(st.checked_at.replace(' ', 'T')).getTime() : 0;
+        const stale = checkedMs && (Date.now() - checkedMs) > snap.check_interval_sec * 3000
+            ? ' <span class="text-danger">· 판정이 오래 멈춰 있습니다(market-regime-bot 확인)</span>' : '';
+        const hist = (snap.history || []).filter(h => h.from_regime).slice(0, 3)
+            .map(h => `${h.changed_at.slice(5, 16)} ${rText(h.from_regime)}→${rText(h.to_regime)}`).join(' · ');
+        box.innerHTML = `<div><b>시장 판단: ${rText(st.confirmed)}</b>${score}
+                <span class="text-muted"> — 참고 전략: ${cur.strategy || ''}</span></div>
+            <div style="margin-top:2px">${items}${crash}</div>
+            ${pending}
+            <div class="text-muted" style="font-size:0.72rem; margin-top:2px">
+                판정 ${st.checked_at || '—'} · ${rText(st.confirmed)} 확정 ${st.confirmed_at || '—'}${stale}
+                ${hist ? '<br>최근 변경: ' + hist : ''}
+            </div>`;
+    }
+
     async function loadMarketIndicators() {
         const body = document.getElementById('marketIndicatorsBody');
         const updatedEl = document.getElementById('marketIndicatorsUpdatedAt');
@@ -1502,6 +1549,7 @@
                 <div class="text-danger" style="font-size:0.78rem">조회 실패${json.dominance_error ? ': ' + json.dominance_error : ''}</div>
             </div>`;
             body.innerHTML = btcErr + priceBox + rsiBoxes + domBox;
+            renderMarketRegime(json.regime, json.regime_error);
 
             const stale = [];
             if (json.btc_stale) stale.push('BTC');

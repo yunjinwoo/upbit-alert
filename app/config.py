@@ -186,3 +186,17 @@ class Config:
     # 세율은 제도 변경이 잦으니 계좌 조건에 맞춰 확인하고 조정할 것.
     TRADE_FEE_RATE_TOSS_BUY = 0.00015
     TRADE_FEE_RATE_TOSS_SELL = 0.00015 + 0.0018
+
+    # ── 시장 판단(좋음/애매/나쁨) — app/core/market_regime.py · docs/market-regime.md
+    # 표시 + 슬랙 알림 전용. 매매 루프는 이 판단을 보지 않는다(전략은 사람이 직접 고른다).
+    # 네 항목(BTC 일봉 20일선 위/아래 · BTC 일봉 RSI · BTC 4시간봉 RSI · 원화마켓 상승 종목 비율)을
+    # 각각 +1/0/-1로 매겨 합이 +SCORE 이상이면 좋음, -SCORE 이하면 나쁨, 그 사이는 애매.
+    MARKET_REGIME_CHECK_INTERVAL_SEC = 1800  # 판정 주기(초)
+    MARKET_REGIME_CONFIRM_COUNT = 2          # 새 판정이 몇 번 연속 나와야 바뀐 걸로 볼지(깜빡임 방지)
+    MARKET_REGIME_SCORE_THRESHOLD = 2        # 좋음/나쁨 경계 점수(±)
+    MARKET_REGIME_RSI_UP = 55.0              # BTC RSI가 이 값 이상이면 +1
+    MARKET_REGIME_RSI_DOWN = 45.0            # 이 값 이하면 -1
+    MARKET_REGIME_BREADTH_UP = 60.0          # 원화마켓 상승 종목 비율(%)이 이 값 이상이면 +1
+    MARKET_REGIME_BREADTH_DOWN = 40.0        # 이 값 이하면 -1
+    MARKET_REGIME_CRASH_PCT = 5.0            # BTC가 전일 대비 이 % 이상 빠지면 점수와 무관하게 곧바로 나쁨
+    MARKET_REGIME_MIN_ITEMS = 3              # 네 항목 중 값이 있는 게 이보다 적으면 이번 판정은 건너뜀
