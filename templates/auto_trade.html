@@ -23,6 +23,14 @@
         }
         .btn-search:hover { background: #2d2d4e; color: #fff; }
         .btn-search:disabled { opacity: 0.6; cursor: not-allowed; }
+        /* 전략 묶음 버튼 — 설명 글씨가 두 줄이라 밝은 카드형으로(어두운 btn-search 위에선 회색 설명이 안 보였다) */
+        .preset-btn {
+            background: #fff; color: #1e293b; border: 1px solid #cbd5e1; border-radius: 8px;
+            padding: 6px 12px; font-size: 0.83rem; text-align: left; cursor: pointer;
+        }
+        .preset-btn:hover { background: #f1f5f9; border-color: #94a3b8; }
+        .preset-btn.active { border: 2px solid #16a34a; background: #f0fdf4; cursor: default; }
+        .preset-btn .preset-summary { font-size: 0.72rem; color: #64748b; }
 
         .dry-run-badge {
             display: inline-block; background: #fef3c7; color: #92400e; font-size: 0.72rem;
@@ -1544,11 +1552,11 @@
         const box = document.getElementById('strategyPresetBox');
         box.innerHTML = Object.entries(_presets).map(([key, p]) => {
             const on = key === _activePreset;
-            return `<button class="btn-search" style="text-align:left; ${on ? 'outline:2px solid #16a34a;' : ''}"
+            return `<button type="button" class="preset-btn${on ? ' active' : ''}"
                     onclick="applyStrategyPreset('${key}')" ${on ? 'disabled' : ''}
                     title="누르면 아래 청산 값들이 이 묶음 값으로 바뀝니다">
                 <b>${p.emoji} ${p.label}</b> · ${p.name}${on ? ' ✓ 적용 중' : ''}
-                <div class="text-muted" style="font-size:0.72rem; font-weight:400">${p.summary}</div>
+                <div class="preset-summary">${p.summary}</div>
             </button>`;
         }).join('');
         document.getElementById('strategyPresetActive').textContent = '— 지금: ' + presetLabel(_activePreset);
