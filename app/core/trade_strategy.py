@@ -301,6 +301,40 @@ def _evaluate_exit_tight_stop(pos: dict, price: float, peak: float, cfg) -> Trad
     )
 
 
+class _CfgOverlay:
+    """기본 설정(cfg) 위에 일부 값만 덮어쓴 읽기 전용 설정 — 나머지 속성은 기본 설정에서 읽는다."""
+
+    def __init__(self, base, overrides: dict):
+        self._base = base
+        self._overrides = overrides
+
+    def __getattr__(self, name):
+        overrides = self.__dict__.get('_overrides') or {}
+        if name in overrides:
+            return overrides[name]
+        return getattr(self.__dict__['_base'], name)
+
+
+def position_cfg(cfg, pos: dict):
+    """포지션에 고정된 청산 규칙(exit_rule)이 있으면 그 값을 cfg 위에 덮어쓴 설정을, 없으면 cfg를 그대로 돌려준다.
+
+    exit_rule은 전략 묶음(app/core/strategy_presets.py)을 적용하는 순간 이미 보유 중이던 포지션에 찍히는
+    JSON({"TRADE_TIGHT_STOP_INITIAL_PCT": 5.0, ...})이다. 묶음을 바꿨다고 보유 종목이 새 손절선에 바로
+    걸려 한꺼번에 팔리지 않게, 산 시점의 청산 규칙을 끝까지 쓰게 하려는 것. 값이 깨졌으면 무시한다."""
+    rule = pos.get('exit_rule') if isinstance(pos, dict) else None
+    if not rule:
+        return cfg
+    if isinstance(rule, str):
+        try:
+            import json
+            rule = json.loads(rule)
+        except ValueError:
+            return cfg
+    if not isinstance(rule, dict) or not rule:
+        return cfg
+    return _CfgOverlay(cfg, rule)
+
+
 def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional[float]], cfg,
                     rsi_map: dict = None, now: datetime = None) -> List[TradeDecision]:
     """보유 포지션마다 익절/RSI 과매수 매도/트레일링 손절(연속 확인 포함)/물타기 여부를 판단한다.
@@ -330,8 +364,11 @@ def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional
     판정된다."""
     decisions = []
     rsi_map = rsi_map or {}
-    recovery_mode = getattr(cfg, 'TRADE_RECOVERY_DCA_ENABLED', False)
+    base_cfg = cfg
     for pos in positions:
+        # 전략 묶음을 바꾸기 전에 산 종목은 그때의 청산 규칙(exit_rule)을 그대로 쓴다 — position_cfg() 참고
+        cfg = position_cfg(base_cfg, pos)
+        recovery_mode = getattr(cfg, 'TRADE_RECOVERY_DCA_ENABLED', False)
         ticker = pos['ticker']
         qty = pos['qty']
         avg_price = pos['avg_buy_price']

@@ -29,7 +29,7 @@ from app.utils.logger import get_logger
 logger = get_logger()
 
 REGIMES = {
-    'good': {'label': '좋음', 'emoji': '🟢', 'strategy': '손절 짧게 · 수익 길게'},
+    'good': {'label': '좋음', 'emoji': '🟢', 'strategy': '손절 여유 · 수익 길게'},
     'neutral': {'label': '애매', 'emoji': '🟡', 'strategy': '당일 상승률 · 거래대금 위주'},
     'bad': {'label': '나쁨', 'emoji': '🔴', 'strategy': '빠른 손절 · 빠른 익절'},
 }
