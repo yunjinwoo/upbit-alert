@@ -538,6 +538,7 @@ def init_db():
             last_dca_at TEXT,
             last_partial_stop_at TEXT,
             recovery_partial_stop_count INTEGER NOT NULL DEFAULT 0,
+            exit_rule TEXT,
             UNIQUE(broker, mode, ticker)
         )
     ''')
@@ -790,6 +791,8 @@ def init_db():
         'ALTER TABLE paper_positions ADD COLUMN last_dca_at TEXT',
         'ALTER TABLE paper_positions ADD COLUMN last_partial_stop_at TEXT',
         'ALTER TABLE paper_positions ADD COLUMN recovery_partial_stop_count INTEGER NOT NULL DEFAULT 0',
+        # 전략 묶음을 바꾸기 전에 산 포지션의 청산 규칙 고정값(JSON) — app/core/strategy_presets.py
+        'ALTER TABLE paper_positions ADD COLUMN exit_rule TEXT',
         'ALTER TABLE trade_strategy_settings ADD COLUMN recovery_dca_enabled INTEGER NOT NULL DEFAULT 0',
         'ALTER TABLE trade_strategy_settings ADD COLUMN recovery_dca_trigger_pct REAL NOT NULL DEFAULT 20.0',
         'ALTER TABLE trade_strategy_settings ADD COLUMN recovery_dca_amount_krw REAL NOT NULL DEFAULT 50000',
@@ -4293,6 +4296,40 @@ def mark_recovery_partial_stop(broker: str, mode: str, ticker: str) -> None:
     ''', (timestamp, timestamp, broker, mode, ticker))
     conn.commit()
     conn.close()
+
+
+def lock_positions_exit_rule(broker: str, rule: dict) -> list:
+    """해당 브로커의 보유 포지션 중 아직 고정된 청산 규칙이 없는 것에 rule(JSON)을 찍는다. 찍은 티커 목록을 반환.
+
+    전략 묶음을 적용하기 직전에 부른다 — 이미 들고 있던 종목은 새 묶음이 아니라 산 시점의 청산 규칙으로
+    계속 판단하게 하려는 것(app/core/trade_strategy.position_cfg). 이미 규칙이 찍힌 포지션은 그대로 둔다
+    (그 종목을 샀을 때의 규칙이 이미 들어 있으므로). 포지션이 전량 매도돼 행이 지워지면 규칙도 같이 사라진다."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        'SELECT ticker FROM paper_positions WHERE broker = ? AND exit_rule IS NULL AND qty > 0', (broker,)
+    )
+    tickers = [r[0] for r in cursor.fetchall()]
+    cursor.execute(
+        'UPDATE paper_positions SET exit_rule = ? WHERE broker = ? AND exit_rule IS NULL AND qty > 0',
+        (json.dumps(rule), broker)
+    )
+    conn.commit()
+    conn.close()
+    return tickers
+
+
+def clear_positions_exit_rule(broker: str) -> list:
+    """해당 브로커 보유 포지션의 고정 청산 규칙을 모두 지운다(전체 설정을 따르게). 지운 티커 목록을 반환.
+    전략 묶음을 "보유 중인 종목에도 적용"으로 누를 때 쓴다."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('SELECT ticker FROM paper_positions WHERE broker = ? AND exit_rule IS NOT NULL', (broker,))
+    tickers = [r[0] for r in cursor.fetchall()]
+    cursor.execute('UPDATE paper_positions SET exit_rule = NULL WHERE broker = ?', (broker,))
+    conn.commit()
+    conn.close()
+    return tickers
 
 
 def delete_paper_position(broker: str, mode: str, ticker: str):

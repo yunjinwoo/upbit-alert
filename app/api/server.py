@@ -1245,15 +1245,20 @@ def get_strategy_presets_api():
 @app.route('/api/auto-trade/strategy-presets/apply', methods=['POST'])
 def apply_strategy_preset_api():
     """전략 묶음 적용 — body {preset: 'good'|'neutral'|'bad'}. 묶음의 청산 값들로 업비트 매매 설정을
-    덮어쓰고, 실거래 루프가 다음 사이클부터(보유 중인 종목 포함) 그 값으로 판단한다."""
+    덮어쓴다. 이미 보유 중인 종목은 적용 직전의 청산 값이 고정돼 그대로 판단하고(locked_tickers),
+    새 묶음은 그 뒤에 새로 사는 종목부터 적용된다. include_held=true면 보유 종목의 고정 규칙을 풀어
+    보유 종목도 곧바로 새 묶음을 따른다(released_tickers)."""
     body = request.get_json(silent=True) or {}
     key = body.get('preset')
     if key not in STRATEGY_PRESETS:
         return jsonify({'status': 'error', 'message': f'알 수 없는 전략 묶음: {key}'}), 400
     try:
-        settings = apply_preset(key)
-        logger.info(f"전략 묶음 적용: {key} → {STRATEGY_PRESETS[key]['values']}")
-        return jsonify({'status': 'success', 'active': match_preset(settings), 'settings': settings})
+        result = apply_preset(key, include_held=bool(body.get('include_held')))
+        settings = result['settings']
+        logger.info(f"전략 묶음 적용: {key} → {STRATEGY_PRESETS[key]['values']} "
+                    f"(이전 규칙 고정 {result['locked']}, 규칙 해제 {result['released']})")
+        return jsonify({'status': 'success', 'active': match_preset(settings), 'settings': settings,
+                        'locked_tickers': result['locked'], 'released_tickers': result['released']})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 

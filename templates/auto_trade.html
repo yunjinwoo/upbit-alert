@@ -190,10 +190,8 @@
                         <th style="text-align:center">실거래 승인</th>
                         <th style="text-align:center">정밀검사</th>
                         <th>종목</th>
-                        <th>현재가</th>
-                        <th>보유수량</th>
-                        <th>평단가</th>
-                        <th>평가금액</th>
+                        <th>현재가<div class="text-muted" style="font-size:0.72rem; font-weight:400">보유수량</div></th>
+                        <th>평단가<div class="text-muted" style="font-size:0.72rem; font-weight:400">평가금액</div></th>
                         <th>평가손익</th>
                         <th style="text-align:center">투입원금 / 상한</th>
                         <th style="text-align:center">상태</th>
@@ -202,7 +200,7 @@
                     </tr>
                 </thead>
                 <tbody id="liveCandidatesBody">
-                    <tr class="loading-row"><td colspan="12">로딩 중...</td></tr>
+                    <tr class="loading-row"><td colspan="10">로딩 중...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -223,6 +221,10 @@
         <div class="mb-3">
             <div class="settings-group-label mb-1">전략 묶음 <span id="strategyPresetActive" class="text-muted" style="font-weight:400"></span></div>
             <div id="strategyPresetBox" class="d-flex flex-wrap gap-2"></div>
+            <label class="text-muted mt-1" style="font-size:0.74rem; cursor:pointer">
+                <input type="checkbox" id="strategyPresetIncludeHeld" style="margin-right:4px">보유 중인 종목에도 바로 적용
+                (끄면 보유 종목은 🔒 산 시점 규칙을 유지하고, 새로 사는 종목부터 적용)
+            </label>
             <div id="strategyPresetMsg" class="text-muted mt-1" style="font-size:0.74rem"></div>
         </div>
         <div class="d-flex flex-wrap align-items-end">
@@ -692,13 +694,14 @@
     // (docs/auto-trade-tight-stop.md). 요약 응답에서 한 번 받아 보관한다.
     let LIVE_TIGHT_STOP = false;
 
-    function liveStatusBadge(row, dcaMaxCount) {
+    // tight/recovery: 이 행에 적용되는 청산 모드 — 산 시점 규칙이 고정된 종목은 전체 설정과 다를 수 있다
+    function liveStatusBadge(row, dcaMaxCount, tight = LIVE_TIGHT_STOP, recovery = LIVE_RECOVERY.enabled) {
         if (!row.held) {
             return row.approved
                 ? '<span class="decision-badge decision-SKIP">미보유(매수판단 대상)</span>'
                 : '<span class="empty-val">미승인</span>';
         }
-        if (LIVE_RECOVERY.enabled) {
+        if (recovery) {
             const n = row.recovery_dca_count || 0;
             const max = LIVE_RECOVERY.maxCount;
             if (row.next_status === 'recovery_capped') return `<span class="status-badge status-recovery_capped">🟠 상한 소진(${n}/${max}) — 반등 대기</span>`;
@@ -707,7 +710,7 @@
             if (row.next_action === 'DCA_BUY') return `<span class="status-badge status-recovery_dca_pending">🔵 다음 사이클 회복형 물타기 예정(${n + 1}/${max})</span>`;
             return `<span class="decision-badge decision-HOLD">정상 보유중(${n}/${max})</span>`;
         }
-        if (LIVE_TIGHT_STOP) {
+        if (tight) {
             // 이 모드는 물타기를 하지 않으므로 "물타기 n/m" 뱃지를 쓰지 않는다 — 지금 짧은 손절선을
             // 보고 있는지(전환 전), 고점을 따라가는 중인지(전환 후)만 보여준다.
             if (row.next_action === 'SELL') return '<span class="status-badge status-stop_pending">🔴 다음 사이클 매도 예정</span>';
@@ -812,13 +815,27 @@
         const held = !!row.held;
         const dcaCount = row.dca_count || 0;
         const dcaExhausted = dcaCount >= dcaMaxCount;
+        // 전략 묶음을 바꾸기 전에 산 종목은 산 시점의 청산 규칙(exit_rule)을 그대로 쓴다 — 물타기 칸과
+        // 상태 칸도 전체 설정이 아니라 그 종목의 규칙 기준으로 보여줘야 실제 판단과 맞는다.
+        let lockedRule = null;
+        if (held && row.exit_rule_locked) {
+            try { lockedRule = JSON.parse(row.exit_rule || '{}'); } catch (e) { lockedRule = {}; }
+        }
+        const rowTight = lockedRule ? !!lockedRule.TRADE_TIGHT_STOP_ENABLED : LIVE_TIGHT_STOP;
+        const rowRecovery = lockedRule ? !!lockedRule.TRADE_RECOVERY_DCA_ENABLED : LIVE_RECOVERY.enabled;
+        const lockedTag = lockedRule
+            ? `<div class="text-muted" style="font-size:0.72rem; margin-top:2px" title="전략 묶음을 바꾸기 전에 산 종목이라 산 시점의 청산 규칙으로 판단합니다: ${
+                lockedRule.TRADE_TIGHT_STOP_ENABLED
+                    ? `짧은 손절 -${lockedRule.TRADE_TIGHT_STOP_INITIAL_PCT}% / +${lockedRule.TRADE_TIGHT_STOP_ARM_PCT}% 전환 / 고점대비 -${lockedRule.TRADE_TIGHT_STOP_TRAIL_PCT}%`
+                    : '트레일링 손절 + 물타기'}, 익절 +${lockedRule.TRADE_TAKE_PROFIT_PCT}%">🔒 산 시점 규칙</div>`
+            : '';
         const dcaCheckbox = !held
             ? '<span class="empty-val">—</span>'
-            : LIVE_TIGHT_STOP
+            : rowTight
                 // 짧은 손절 · 긴 수익 모드는 물타기를 하지 않는다 — 체크 상태를 그대로 보여주면
                 // "체크했으니 물탄다"고 오해하므로 쓰지 않는다는 것만 알린다.
                 ? '<span class="text-muted" title="짧은 손절 · 긴 수익 모드에서는 물타기를 하지 않습니다">미사용</span>'
-                : LIVE_RECOVERY.enabled
+                : rowRecovery
                 // 회복형 모드에서는 물타기 여부가 이 체크박스가 아니라 회복형 파라미터(트리거/쿨다운/상한)로
                 // 결정된다 — 체크 상태를 그대로 보여주면 "껐으니 안 물탄다"고 오해하므로 횟수만 표시한다.
                 ? `<span title="회복형 분할 물타기 모드에서는 종목별 체크박스와 무관하게 회복형 파라미터로 판단합니다">회복형 ${row.recovery_dca_count || 0}/${LIVE_RECOVERY.maxCount}회</span>`
@@ -837,13 +854,13 @@
                 <td style="text-align:center">${checkboxHtml}</td>
                 <td style="text-align:center">${conditionCellHtml(ticker, row)}</td>
                 <td>${coinLink(ticker, ticker)}</td>
-                <td>${fmtKrw(row.current_price)}</td>
-                <td>${held ? fmtQty(row.qty) : '<span class="empty-val">—</span>'}</td>
-                <td>${held ? fmtKrw(row.avg_buy_price) : '<span class="empty-val">—</span>'}</td>
-                <td>${held ? fmtKrw(row.eval_amount) : '<span class="empty-val">—</span>'}</td>
+                <td>${fmtKrw(row.current_price)}
+                    <div class="text-muted" style="font-size:0.74rem">${held ? fmtQty(row.qty) : '<span class="empty-val">—</span>'}</div></td>
+                <td>${held ? fmtKrw(row.avg_buy_price) : '<span class="empty-val">—</span>'}
+                    <div class="text-muted" style="font-size:0.74rem">${held ? fmtKrw(row.eval_amount) : '<span class="empty-val">—</span>'}</div></td>
                 <td>${held && row.eval_amount != null ? pnlSpan(row.eval_amount - row.qty * row.avg_buy_price, row.pnl_pct) : '<span class="empty-val">—</span>'}</td>
                 <td style="text-align:center">${investGaugeHtml(row, perPositionCap)}</td>
-                <td style="text-align:center">${liveStatusBadge(row, dcaMaxCount)}</td>
+                <td style="text-align:center">${liveStatusBadge(row, dcaMaxCount, rowTight, rowRecovery)}${lockedTag}</td>
                 <td style="text-align:center">${dcaCheckbox}</td>
                 <td style="text-align:center; white-space:nowrap">${tradeButtons}</td>
             </tr>`;
@@ -891,12 +908,12 @@
 
             body.innerHTML = rows.length
                 ? rows.join('')
-                : '<tr class="loading-row"><td colspan="12">아래 "🎯 매매 대상 코인" 표에서 관심 등록을 먼저 체크하세요.</td></tr>';
+                : '<tr class="loading-row"><td colspan="10">아래 "🎯 매매 대상 코인" 표에서 관심 등록을 먼저 체크하세요.</td></tr>';
 
             renderAllCandidates(json.all_candidates || []);
             renderDownsideCandidates(json.downside_candidates || []);
         } catch (e) {
-            body.innerHTML = `<tr class="loading-row"><td colspan="12" class="text-danger">오류: ${e.message}</td></tr>`;
+            body.innerHTML = `<tr class="loading-row"><td colspan="10" class="text-danger">오류: ${e.message}</td></tr>`;
         }
     }
 
@@ -1533,9 +1550,14 @@
     async function applyStrategyPreset(key) {
         const p = _presets[key];
         if (!p) return;
+        const includeHeld = document.getElementById('strategyPresetIncludeHeld').checked;
         if (!confirm(`${p.emoji} ${p.label} 묶음(${p.name})을 적용할까요?\n\n${p.summary}\n`
-            + `짧은 손절 · 긴 수익 모드를 켜고 물타기 · 되돌림 익절 · 회복형 물타기는 끕니다.\n`
-            + `실거래 루프가 다음 사이클부터 보유 중인 종목에도 이 값으로 판단합니다.`)) return;
+            + `짧은 손절 · 긴 수익 모드를 켜고 물타기 · 되돌림 익절 · 회복형 물타기는 끕니다.\n\n`
+            + (includeHeld
+                ? `⚠️ 보유 중인 종목에도 바로 적용합니다. 새 손절선보다 이미 깊이 빠져 있는 종목은\n`
+                  + `다음 사이클에 곧바로 매도됩니다.`
+                : `이미 보유 중인 종목은 산 시점의 청산 규칙을 그대로 쓰고(🔒 산 시점 규칙),\n`
+                  + `이 묶음은 앞으로 새로 사는 종목부터 적용됩니다.`))) return;
         const msg = document.getElementById('strategyPresetMsg');
         msg.textContent = '적용 중...';
         msg.className = 'text-muted mt-1';
@@ -1543,7 +1565,7 @@
             const res = await fetch('api/auto-trade/strategy-presets/apply', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ preset: key }),
+                body: JSON.stringify({ preset: key, include_held: includeHeld }),
             });
             const json = await res.json();
             if (json.status !== 'success') throw new Error(json.message);
@@ -1552,7 +1574,13 @@
             populateSettingsInputs(json.settings || {});
             if (_lastRegime) renderMarketRegime(_lastRegime.snap, _lastRegime.err);
             loadLiveSummary();
-            msg.textContent = `${p.emoji} ${p.label} 묶음 적용됨 (${json.settings.updated_at || ''}) — 다음 사이클부터 반영`;
+            const locked = json.locked_tickers || [];
+            const released = json.released_tickers || [];
+            msg.textContent = `${p.emoji} ${p.label} 묶음 적용됨 (${json.settings.updated_at || ''}) — `
+                + (includeHeld ? '보유 종목 포함 다음 사이클부터 반영' : '새로 사는 종목부터 반영')
+                + (locked.length ? ` · 보유 중인 ${locked.length}종목(${locked.join(', ')})은 산 시점 규칙 유지` : '')
+                + (released.length ? ` · ${released.join(', ')}의 산 시점 규칙 해제` : '');
+            document.getElementById('strategyPresetIncludeHeld').checked = false;
             msg.className = 'engine-status-text engine-status-on mt-1';
         } catch (e) {
             msg.textContent = '적용 실패: ' + e.message;

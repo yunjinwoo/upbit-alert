@@ -587,6 +587,9 @@ def get_live_dashboard_summary() -> dict:
             'last_dca_at': tracked.get('last_dca_at') if tracked else None,
             'last_partial_stop_at': tracked.get('last_partial_stop_at') if tracked else None,
             'recovery_partial_stop_count': tracked.get('recovery_partial_stop_count') if tracked else 0,
+            # 전략 묶음을 바꾸기 전에 산 종목의 고정 청산 규칙 — 빠지면 미리보기가 새 묶음 기준으로 판단한다
+            'exit_rule': tracked.get('exit_rule') if tracked else None,
+            'exit_rule_locked': bool(tracked.get('exit_rule')) if tracked else False,
         }
 
     def _condition_fields(ticker):
