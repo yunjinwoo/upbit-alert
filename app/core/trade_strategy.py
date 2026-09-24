@@ -5,8 +5,10 @@
   - 진입: coin_screening_daily에서 걸러진 후보 중 미보유 종목을 고정 금액으로 매수
   - 청산(트레일링 손절 + 연속 확인 + 항상-먼저-물타기):
     1) 익절(평단 대비 +take_profit_pct)은 항상 우선 확인 — 무조건 즉시 매도
-    2) RSI 과매수 매도(rsi_exit_enabled 켜져 있을 때만): 15분봉 RSI가 rsi_exit_overbought 이상이면
-       손익/트레일링과 무관하게 즉시 매도 — 손절처럼 연속 확인을 기다리지 않는다(익절과 동급 우선순위).
+    2) RSI 과매수 매도(rsi_exit_enabled 켜져 있을 때만): 15분봉 RSI가 rsi_exit_overbought 이상이고
+       평단 대비 수익률이 rsi_exit_min_profit_pct 이상이면 즉시 매도 — 손절처럼 연속 확인을 기다리지
+       않는다(익절과 동급 우선순위). 수익률 조건이 없던 때는 손실 중에도 RSI만 보고 팔려서(2026-09-24
+       CVC -3.7%) 손절이 한 번 더 생기는 꼴이었다.
        RSI 값 자체는 app/core/exit_conditions.py가 계산하고 auto_trader.py가 미리 조회해 rsi_map으로
        넘긴다(evaluate_exits는 순수 함수로 유지하기 위해 여기서 직접 캔들을 조회하지 않음).
     3) 고점 대비 되돌림 익절(trailing_tp_enabled 켜져 있을 때만): 목표 수익률(1)에 못 닿았더라도
@@ -140,11 +142,9 @@ def _evaluate_exit_recovery(pos: dict, price: float, cfg, rsi_now: float = None,
     if recovery_tp > 0 and pnl_pct >= recovery_tp:
         return sell(f'recovery_take_profit({pnl_pct:.2f}% >= {recovery_tp:.2f}%)')
 
-    # ② RSI 과매수 매도 — 수익 구간에서만(위 docstring 참고)
-    if getattr(cfg, 'TRADE_RSI_EXIT_ENABLED', False) and pnl_pct >= 0:
-        rsi_overbought = getattr(cfg, 'TRADE_RSI_EXIT_OVERBOUGHT', None)
-        if rsi_now is not None and rsi_overbought is not None and rsi_now >= rsi_overbought:
-            return sell(f'rsi_exit(RSI {rsi_now:.1f}>={rsi_overbought:.1f}, 평단대비 {pnl_pct:.2f}%)')
+    # ② RSI 과매수 매도 — 수익 구간에서만(위 docstring 참고). 최소 수익률 설정이 있으면 그 이상에서만
+    if rsi_exit_hit(cfg, rsi_now, pnl_pct, floor_pct=0.0):
+        return sell(f'rsi_exit(RSI {rsi_now:.1f}>={cfg.TRADE_RSI_EXIT_OVERBOUGHT:.1f}, 평단대비 {pnl_pct:.2f}%)')
 
     # 물타기 여력 — 횟수와 누적 투입액 둘 다 남아 있어야 한다
     dca_count = pos.get('recovery_dca_count') or 0
@@ -315,6 +315,22 @@ class _CfgOverlay:
         return getattr(self.__dict__['_base'], name)
 
 
+def rsi_exit_hit(cfg, rsi_now, pnl_pct: float, floor_pct: float = None) -> bool:
+    """RSI 과매수 매도 조건 — RSI가 과매수 기준 이상이고 수익률이 최소 수익률 이상일 때만 True.
+    최소 수익률은 cfg.TRADE_RSI_EXIT_MIN_PROFIT_PCT, 값이 없으면 floor_pct(None이면 수익률 조건 없음)."""
+    if not getattr(cfg, 'TRADE_RSI_EXIT_ENABLED', False):
+        return False
+    overbought = getattr(cfg, 'TRADE_RSI_EXIT_OVERBOUGHT', None)
+    if rsi_now is None or overbought is None or rsi_now < overbought:
+        return False
+    min_profit = getattr(cfg, 'TRADE_RSI_EXIT_MIN_PROFIT_PCT', None)
+    if min_profit is None:
+        min_profit = floor_pct
+    if floor_pct is not None and min_profit is not None:
+        min_profit = max(min_profit, floor_pct)
+    return min_profit is None or pnl_pct >= min_profit
+
+
 def position_cfg(cfg, pos: dict):
     """포지션에 고정된 청산 규칙(exit_rule)이 있으면 그 값을 cfg 위에 덮어쓴 설정을, 없으면 cfg를 그대로 돌려준다.
 
@@ -412,16 +428,16 @@ def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional
             ))
             continue
 
-        # ② RSI 과매수 매도 — 켜져 있고 값이 있으면 손익/트레일링과 무관하게 즉시 매도(연속확인 없음)
-        if getattr(cfg, 'TRADE_RSI_EXIT_ENABLED', False):
-            rsi_now = rsi_map.get(ticker)
-            rsi_overbought = getattr(cfg, 'TRADE_RSI_EXIT_OVERBOUGHT', None)
-            if rsi_now is not None and rsi_overbought is not None and rsi_now >= rsi_overbought:
-                decisions.append(TradeDecision(
-                    ticker, 'SELL', reason=f'rsi_exit(RSI {rsi_now:.1f}>={rsi_overbought:.1f})',
-                    price=price, qty=qty, pnl_krw=pnl_krw, pnl_pct=pnl_pct,
-                ))
-                continue
+        # ② RSI 과매수 매도 — RSI가 과매수 기준 이상이고 수익률이 최소 수익률 이상이면 즉시 매도(연속확인 없음).
+        # 수익률이 모자라면 RSI는 무시하고 아래 손절/익절 흐름을 그대로 탄다
+        rsi_now = rsi_map.get(ticker)
+        if rsi_exit_hit(cfg, rsi_now, pnl_pct):
+            decisions.append(TradeDecision(
+                ticker, 'SELL',
+                reason=f'rsi_exit(RSI {rsi_now:.1f}>={cfg.TRADE_RSI_EXIT_OVERBOUGHT:.1f}, 평단대비 {pnl_pct:.2f}%)',
+                price=price, qty=qty, pnl_krw=pnl_krw, pnl_pct=pnl_pct,
+            ))
+            continue
 
         # ③ 짧은 손절 · 긴 수익 모드 — 아래 ④~⑦(되돌림 익절/트레일링 손절/물타기)를 전부 대신한다
         if tight_stop_enabled:

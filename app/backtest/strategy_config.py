@@ -24,6 +24,7 @@ _FIELDS = [
     ('TRADE_RSI_EXIT_ENABLED', 'rsi_exit_enabled'),
     ('TRADE_RSI_EXIT_PERIOD', 'rsi_exit_period'),
     ('TRADE_RSI_EXIT_OVERBOUGHT', 'rsi_exit_overbought'),
+    ('TRADE_RSI_EXIT_MIN_PROFIT_PCT', 'rsi_exit_min_profit_pct'),
     ('TRADE_TRAILING_TP_ENABLED', 'trailing_tp_enabled'),
     ('TRADE_TRAILING_TP_ARM_PCT', 'trailing_tp_arm_pct'),
     ('TRADE_TRAILING_TP_FLOOR_PCT', 'trailing_tp_floor_pct'),
@@ -74,7 +75,7 @@ def describe(cfg: SimpleNamespace) -> str:
         f"물타기 {cfg.TRADE_DCA_MAX_COUNT}회(-{cfg.TRADE_DCA_TRIGGER_PCT}%)",
     ]
     if cfg.TRADE_RSI_EXIT_ENABLED:
-        parts.append(f"RSI 매도 {cfg.TRADE_RSI_EXIT_OVERBOUGHT}")
+        parts.append(f"RSI 매도 {cfg.TRADE_RSI_EXIT_OVERBOUGHT}(+{cfg.TRADE_RSI_EXIT_MIN_PROFIT_PCT}% 이상)")
     if cfg.TRADE_TRAILING_TP_ENABLED:
         parts.append(f"되돌림 익절 {cfg.TRADE_TRAILING_TP_ARM_PCT}→{cfg.TRADE_TRAILING_TP_FLOOR_PCT}%")
     if cfg.TRADE_RECOVERY_DCA_ENABLED:

@@ -97,6 +97,7 @@ def _effective_strategy_config() -> SimpleNamespace:
         TRADE_RSI_EXIT_ENABLED=s['rsi_exit_enabled'],
         TRADE_RSI_EXIT_PERIOD=s['rsi_exit_period'],
         TRADE_RSI_EXIT_OVERBOUGHT=s['rsi_exit_overbought'],
+        TRADE_RSI_EXIT_MIN_PROFIT_PCT=s['rsi_exit_min_profit_pct'],
         TRADE_TRAILING_TP_ENABLED=s['trailing_tp_enabled'],
         TRADE_TRAILING_TP_ARM_PCT=s['trailing_tp_arm_pct'],
         TRADE_TRAILING_TP_FLOOR_PCT=s['trailing_tp_floor_pct'],

@@ -587,8 +587,8 @@ def init_db():
     # 매수를 막지는 않는다(진입 게이트 해제). 조건을 켜자마자 매수가 멈추는 게 부담스러울 때
     # 한동안 결과만 지켜보라고 둔 스위치다(app/core/auto_trader.py의 conditions_gate_active 참고).
     # rsi_exit_*: RSI 과매수 매도조건(기본 비활성화) — 켜면 15분봉 RSI(rsi_exit_period)가
-    # rsi_exit_overbought 이상일 때 손익/트레일링과 무관하게 즉시 매도한다(app/core/exit_conditions.py,
-    # app/core/trade_strategy.py의 evaluate_exits() 참고).
+    # rsi_exit_overbought 이상이고 평단 대비 수익률이 rsi_exit_min_profit_pct 이상일 때 즉시 매도한다
+    # (app/core/exit_conditions.py, app/core/trade_strategy.py의 evaluate_exits() 참고).
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS trade_strategy_settings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -607,6 +607,7 @@ def init_db():
             rsi_exit_enabled INTEGER NOT NULL DEFAULT 0,
             rsi_exit_period INTEGER NOT NULL DEFAULT 14,
             rsi_exit_overbought REAL NOT NULL DEFAULT 80.0,
+            rsi_exit_min_profit_pct REAL NOT NULL DEFAULT 1.0,
             trailing_tp_enabled INTEGER NOT NULL DEFAULT 0,
             trailing_tp_arm_pct REAL NOT NULL DEFAULT 3.0,
             trailing_tp_floor_pct REAL NOT NULL DEFAULT 2.0,
@@ -817,6 +818,8 @@ def init_db():
         'ALTER TABLE trade_strategy_settings ADD COLUMN tight_stop_initial_pct REAL NOT NULL DEFAULT 2.0',
         'ALTER TABLE trade_strategy_settings ADD COLUMN tight_stop_arm_pct REAL NOT NULL DEFAULT 5.0',
         'ALTER TABLE trade_strategy_settings ADD COLUMN tight_stop_trail_pct REAL NOT NULL DEFAULT 8.0',
+        # RSI 매도 최소 수익률 — 손실 구간에서 RSI로 팔리지 않게(기존 행도 1.0%로 채워짐)
+        'ALTER TABLE trade_strategy_settings ADD COLUMN rsi_exit_min_profit_pct REAL NOT NULL DEFAULT 1.0',
 
     ]
     for sql in migrations:
@@ -864,6 +867,7 @@ def init_db():
                 rsi_exit_enabled INTEGER NOT NULL DEFAULT 0,
                 rsi_exit_period INTEGER NOT NULL DEFAULT 14,
                 rsi_exit_overbought REAL NOT NULL DEFAULT 80.0,
+                rsi_exit_min_profit_pct REAL NOT NULL DEFAULT 1.0,
                 trailing_tp_enabled INTEGER NOT NULL DEFAULT 0,
                 trailing_tp_arm_pct REAL NOT NULL DEFAULT 3.0,
                 trailing_tp_floor_pct REAL NOT NULL DEFAULT 2.0,
@@ -4536,6 +4540,7 @@ def get_trade_strategy_settings(broker: str = 'upbit') -> dict:
             'rsi_exit_enabled': Config.TRADE_RSI_EXIT_ENABLED,
             'rsi_exit_period': Config.TRADE_RSI_EXIT_PERIOD,
             'rsi_exit_overbought': Config.TRADE_RSI_EXIT_OVERBOUGHT,
+            'rsi_exit_min_profit_pct': Config.TRADE_RSI_EXIT_MIN_PROFIT_PCT,
             'trailing_tp_enabled': Config.TRADE_TRAILING_TP_ENABLED,
             'trailing_tp_arm_pct': Config.TRADE_TRAILING_TP_ARM_PCT,
             'trailing_tp_floor_pct': Config.TRADE_TRAILING_TP_FLOOR_PCT,
@@ -4558,6 +4563,7 @@ def get_trade_strategy_settings(broker: str = 'upbit') -> dict:
         'rsi_exit_enabled': bool(row['rsi_exit_enabled']) if 'rsi_exit_enabled' in row.keys() else Config.TRADE_RSI_EXIT_ENABLED,
         'rsi_exit_period': row['rsi_exit_period'] if 'rsi_exit_period' in row.keys() else Config.TRADE_RSI_EXIT_PERIOD,
         'rsi_exit_overbought': row['rsi_exit_overbought'] if 'rsi_exit_overbought' in row.keys() else Config.TRADE_RSI_EXIT_OVERBOUGHT,
+        'rsi_exit_min_profit_pct': row['rsi_exit_min_profit_pct'] if 'rsi_exit_min_profit_pct' in row.keys() else Config.TRADE_RSI_EXIT_MIN_PROFIT_PCT,
         'trailing_tp_enabled': bool(row['trailing_tp_enabled']) if 'trailing_tp_enabled' in row.keys() else Config.TRADE_TRAILING_TP_ENABLED,
         'trailing_tp_arm_pct': row['trailing_tp_arm_pct'] if 'trailing_tp_arm_pct' in row.keys() else Config.TRADE_TRAILING_TP_ARM_PCT,
         'trailing_tp_floor_pct': row['trailing_tp_floor_pct'] if 'trailing_tp_floor_pct' in row.keys() else Config.TRADE_TRAILING_TP_FLOOR_PCT,
@@ -4580,7 +4586,8 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
                                  condition_check_interval_sec: int = None, conditions_observe_only: bool = None,
                                  per_position_cap_krw: float = None,
                                  rsi_exit_enabled: bool = None, rsi_exit_period: int = None,
-                                 rsi_exit_overbought: float = None, trailing_tp_enabled: bool = None,
+                                 rsi_exit_overbought: float = None, rsi_exit_min_profit_pct: float = None,
+                                 trailing_tp_enabled: bool = None,
                                  trailing_tp_arm_pct: float = None, trailing_tp_floor_pct: float = None,
                                  tight_stop_enabled: bool = None, tight_stop_initial_pct: float = None,
                                  tight_stop_arm_pct: float = None, tight_stop_trail_pct: float = None,
@@ -4630,6 +4637,7 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
         'rsi_exit_enabled': rsi_exit_enabled if rsi_exit_enabled is not None else current['rsi_exit_enabled'],
         'rsi_exit_period': rsi_exit_period if rsi_exit_period is not None else current['rsi_exit_period'],
         'rsi_exit_overbought': rsi_exit_overbought if rsi_exit_overbought is not None else current['rsi_exit_overbought'],
+        'rsi_exit_min_profit_pct': rsi_exit_min_profit_pct if rsi_exit_min_profit_pct is not None else current['rsi_exit_min_profit_pct'],
         'trailing_tp_enabled': trailing_tp_enabled if trailing_tp_enabled is not None else current['trailing_tp_enabled'],
         'trailing_tp_arm_pct': trailing_tp_arm_pct if trailing_tp_arm_pct is not None else current['trailing_tp_arm_pct'],
         'trailing_tp_floor_pct': trailing_tp_floor_pct if trailing_tp_floor_pct is not None else current['trailing_tp_floor_pct'],
@@ -4665,10 +4673,10 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
             (broker, max_position_krw, max_concurrent_positions, stop_loss_pct, take_profit_pct,
              loop_interval_sec, stop_loss_confirm_cycles, dca_trigger_pct, dca_max_count,
              condition_check_interval_sec, conditions_observe_only, per_position_cap_krw,
-             rsi_exit_enabled, rsi_exit_period, rsi_exit_overbought,
+             rsi_exit_enabled, rsi_exit_period, rsi_exit_overbought, rsi_exit_min_profit_pct,
              trailing_tp_enabled, trailing_tp_arm_pct, trailing_tp_floor_pct,
              {tight_stop_columns}, {recovery_columns}, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, {tight_stop_placeholders}, {recovery_placeholders}, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, {tight_stop_placeholders}, {recovery_placeholders}, ?)
         ON CONFLICT(broker) DO UPDATE SET
             max_position_krw=excluded.max_position_krw,
             max_concurrent_positions=excluded.max_concurrent_positions,
@@ -4683,6 +4691,7 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
             rsi_exit_enabled=excluded.rsi_exit_enabled,
             rsi_exit_period=excluded.rsi_exit_period,
             rsi_exit_overbought=excluded.rsi_exit_overbought,
+            rsi_exit_min_profit_pct=excluded.rsi_exit_min_profit_pct,
             trailing_tp_enabled=excluded.trailing_tp_enabled,
             trailing_tp_arm_pct=excluded.trailing_tp_arm_pct,
             trailing_tp_floor_pct=excluded.trailing_tp_floor_pct,
@@ -4695,7 +4704,7 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
           merged['dca_trigger_pct'], merged['dca_max_count'], merged['condition_check_interval_sec'],
           int(bool(merged['conditions_observe_only'])), merged['per_position_cap_krw'],
           int(bool(merged['rsi_exit_enabled'])), merged['rsi_exit_period'],
-          merged['rsi_exit_overbought'], int(bool(merged['trailing_tp_enabled'])), merged['trailing_tp_arm_pct'],
+          merged['rsi_exit_overbought'], merged['rsi_exit_min_profit_pct'], int(bool(merged['trailing_tp_enabled'])), merged['trailing_tp_arm_pct'],
           merged['trailing_tp_floor_pct'], *tight_stop_values, *recovery_values, timestamp))
     conn.commit()
     conn.close()
