@@ -190,10 +190,8 @@
                         <th style="text-align:center">실거래 승인</th>
                         <th style="text-align:center">정밀검사</th>
                         <th>종목</th>
-                        <th>현재가</th>
-                        <th>보유수량</th>
-                        <th>평단가</th>
-                        <th>평가금액</th>
+                        <th>현재가<div class="text-muted" style="font-size:0.72rem; font-weight:400">보유수량</div></th>
+                        <th>평단가<div class="text-muted" style="font-size:0.72rem; font-weight:400">평가금액</div></th>
                         <th>평가손익</th>
                         <th style="text-align:center">투입원금 / 상한</th>
                         <th style="text-align:center">상태</th>
@@ -202,7 +200,7 @@
                     </tr>
                 </thead>
                 <tbody id="liveCandidatesBody">
-                    <tr class="loading-row"><td colspan="12">로딩 중...</td></tr>
+                    <tr class="loading-row"><td colspan="10">로딩 중...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -837,10 +835,10 @@
                 <td style="text-align:center">${checkboxHtml}</td>
                 <td style="text-align:center">${conditionCellHtml(ticker, row)}</td>
                 <td>${coinLink(ticker, ticker)}</td>
-                <td>${fmtKrw(row.current_price)}</td>
-                <td>${held ? fmtQty(row.qty) : '<span class="empty-val">—</span>'}</td>
-                <td>${held ? fmtKrw(row.avg_buy_price) : '<span class="empty-val">—</span>'}</td>
-                <td>${held ? fmtKrw(row.eval_amount) : '<span class="empty-val">—</span>'}</td>
+                <td>${fmtKrw(row.current_price)}
+                    <div class="text-muted" style="font-size:0.74rem">${held ? fmtQty(row.qty) : '<span class="empty-val">—</span>'}</div></td>
+                <td>${held ? fmtKrw(row.avg_buy_price) : '<span class="empty-val">—</span>'}
+                    <div class="text-muted" style="font-size:0.74rem">${held ? fmtKrw(row.eval_amount) : '<span class="empty-val">—</span>'}</div></td>
                 <td>${held && row.eval_amount != null ? pnlSpan(row.eval_amount - row.qty * row.avg_buy_price, row.pnl_pct) : '<span class="empty-val">—</span>'}</td>
                 <td style="text-align:center">${investGaugeHtml(row, perPositionCap)}</td>
                 <td style="text-align:center">${liveStatusBadge(row, dcaMaxCount)}</td>
@@ -891,12 +889,12 @@
 
             body.innerHTML = rows.length
                 ? rows.join('')
-                : '<tr class="loading-row"><td colspan="12">아래 "🎯 매매 대상 코인" 표에서 관심 등록을 먼저 체크하세요.</td></tr>';
+                : '<tr class="loading-row"><td colspan="10">아래 "🎯 매매 대상 코인" 표에서 관심 등록을 먼저 체크하세요.</td></tr>';
 
             renderAllCandidates(json.all_candidates || []);
             renderDownsideCandidates(json.downside_candidates || []);
         } catch (e) {
-            body.innerHTML = `<tr class="loading-row"><td colspan="12" class="text-danger">오류: ${e.message}</td></tr>`;
+            body.innerHTML = `<tr class="loading-row"><td colspan="10" class="text-danger">오류: ${e.message}</td></tr>`;
         }
     }
 
