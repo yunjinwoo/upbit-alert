@@ -24,6 +24,7 @@ BTC_TICKER = 'KRW-BTC'
 RSI_PERIOD = 14
 # (interval, 라벨) — pyupbit get_ohlcv interval 이름 그대로
 RSI_TIMEFRAMES = [('minute240', '4시간봉'), ('day', '일봉'), ('week', '주봉')]
+MA_DAY_PERIOD = 20  # BTC 일봉 이동평균 기간 — 시장 판단의 추세 항목
 CANDLE_COUNT = 200  # 업비트 1회 조회 최대치 — EWM 평활 워밍업을 길게 줘서 차트 값에 가깝게
 
 COINGECKO_GLOBAL_URL = 'https://api.coingecko.com/api/v3/global'
@@ -41,7 +42,7 @@ _cache = {
 def calc_btc_indicators(get_candles_fn: Callable[[str, str, int], Optional[pd.DataFrame]]) -> dict:
     """KRW-BTC 현재가/24시간 등락률과 시간대별 RSI를 계산한다. get_candles_fn(ticker, interval, count)
     으로 캔들 조회를 주입받는다(테스트에서는 가짜 캔들을 넣는다)."""
-    result = {'price': None, 'change_rate_24h': None, 'rsi': {}}
+    result = {'price': None, 'change_rate_24h': None, 'ma20_day': None, 'rsi': {}}
     for interval, label in RSI_TIMEFRAMES:
         entry = {'label': label, 'value': None, 'prev_closed': None}
         try:
@@ -60,6 +61,10 @@ def calc_btc_indicators(get_candles_fn: Callable[[str, str, int], Optional[pd.Da
                 result['price'] = close_now
                 if close_prev:
                     result['change_rate_24h'] = round((close_now - close_prev) / close_prev * 100, 2)
+            if interval == 'day' and len(df) >= MA_DAY_PERIOD:
+                # 시장 판단(app/core/market_regime.py)의 "BTC 추세" 항목 — 현재가와 같은 기준이 되도록
+                # 진행 중인 오늘 봉까지 넣은 20일 평균
+                result['ma20_day'] = round(float(df['close'].iloc[-MA_DAY_PERIOD:].mean()), 2)
         result['rsi'][interval] = entry
     if result['price'] is None and all(e['value'] is None for e in result['rsi'].values()):
         # 전부 실패했으면 빈 값을 캐시하지 않도록 예외로 올린다(_cached가 예전 값으로 대체).
