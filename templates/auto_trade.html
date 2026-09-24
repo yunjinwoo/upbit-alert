@@ -151,7 +151,8 @@
             <br>* <b>시장 판단</b>은 네 항목(BTC 20일선 위/아래 · BTC 일봉 RSI · BTC 4시간봉 RSI 55↑/45↓ ·
             원화마켓 상승 종목 비율 60%↑/40%↓)을 +1/0/-1로 매겨 합이 +2 이상이면 좋음, -2 이하면 나쁨,
             그 사이는 애매입니다. BTC가 전일 대비 -5% 이상 빠지면 바로 나쁨. 30분마다 판정하고 같은 판정이
-            2번 연속 나와야 바뀐 것으로 보며, 바뀌면 슬랙으로 알립니다. <b>전략은 자동으로 바뀌지 않습니다.</b>
+            2번 연속 나와야 바뀐 것으로 보며, 바뀌면 슬랙으로 알립니다. <b>전략은 자동으로 바뀌지 않습니다</b> —
+            판단에 맞는 묶음을 쓰려면 "묶음 적용" 버튼이나 아래 ⚙️ 매매 기준 설정의 전략 묶음을 누르세요.
         </div>
     </div>
 
@@ -217,6 +218,13 @@
 
     <div class="card-panel mb-3">
         <div class="section-title mb-2">⚙️ 매매 기준 설정</div>
+        <!-- 전략 묶음(좋음/애매/나쁨) — 누르면 청산 값들이 묶음 값으로 한 번에 바뀐다(app/core/strategy_presets.py).
+             시장 판단이 바뀌어도 자동으로 적용되지 않는다. 금액·종목 수·RSI 매도·정밀조건은 건드리지 않는다. -->
+        <div class="mb-3">
+            <div class="settings-group-label mb-1">전략 묶음 <span id="strategyPresetActive" class="text-muted" style="font-weight:400"></span></div>
+            <div id="strategyPresetBox" class="d-flex flex-wrap gap-2"></div>
+            <div id="strategyPresetMsg" class="text-muted mt-1" style="font-size:0.74rem"></div>
+        </div>
         <div class="d-flex flex-wrap align-items-end">
             <div class="settings-group">
                 <div class="settings-group-label">포지션 · 루프</div>
@@ -1048,7 +1056,9 @@
         const el = document.getElementById('liveExitModeSummary');
         if (!el) return;
         if (json.tight_stop_enabled) {
-            el.innerHTML = `✂️ <b>청산: 짧은 손절 · 긴 수익</b> — 수익 전환 전에는 평단대비 `
+            const presetKey = json.strategy_preset;
+            el.innerHTML = (presetKey && _presets[presetKey] ? `🧩 <b>전략 묶음: ${presetLabel(presetKey)}</b> · ` : '')
+                + `✂️ <b>청산: 짧은 손절 · 긴 수익</b> — 수익 전환 전에는 평단대비 `
                 + `<b>-${json.tight_stop_initial_pct}%</b>에서 즉시 손절, 고점 수익률이 `
                 + `<b>+${json.tight_stop_arm_pct}%</b>를 넘으면 고점대비 <b>-${json.tight_stop_trail_pct}%</b>까지 `
                 + `버팁니다(본전 아래로는 내려가지 않음). 이 모드에서는 물타기와 되돌림 익절을 쓰지 않습니다.`;
@@ -1448,6 +1458,7 @@
             if (json.status !== 'success') throw new Error(json.message);
             msg.textContent = `저장됨 (${json.settings.updated_at || ''})`;
             msg.className = 'engine-status-text engine-status-on';
+            loadStrategyPresets();  // 손으로 값을 바꿨으면 "직접 설정"으로 바뀌는 걸 바로 보여준다
         } catch (e) {
             msg.textContent = '저장 실패: ' + e.message;
             msg.className = 'text-danger';
@@ -1482,7 +1493,75 @@
         return `<span class="${cls}">${n > 0 ? '+' : ''}${n.toFixed(2)}%</span>`;
     }
 
+    // ── 전략 묶음(좋음/애매/나쁨). 적용 중인 묶음은 서버가 현재 설정값과 비교해서 알려준다.
+    let _presets = {}, _activePreset = null, _presetsLoaded = false, _lastRegime = null;
+
+    async function loadStrategyPresets() {
+        try {
+            const res = await fetch('api/auto-trade/strategy-presets');
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+            _presets = json.presets || {};
+            _activePreset = json.active;
+            _presetsLoaded = true;
+            renderStrategyPresets();
+            if (_lastRegime) renderMarketRegime(_lastRegime.snap, _lastRegime.err);
+        } catch (e) {
+            document.getElementById('strategyPresetMsg').innerHTML = `<span class="text-danger">전략 묶음 조회 실패: ${e.message}</span>`;
+        }
+    }
+
+    function presetLabel(key) {
+        const p = _presets[key];
+        return p ? `${p.emoji} ${p.label}(${p.name})` : '직접 설정(묶음과 다름)';
+    }
+
+    function renderStrategyPresets() {
+        const box = document.getElementById('strategyPresetBox');
+        box.innerHTML = Object.entries(_presets).map(([key, p]) => {
+            const on = key === _activePreset;
+            return `<button class="btn-search" style="text-align:left; ${on ? 'outline:2px solid #16a34a;' : ''}"
+                    onclick="applyStrategyPreset('${key}')" ${on ? 'disabled' : ''}
+                    title="누르면 아래 청산 값들이 이 묶음 값으로 바뀝니다">
+                <b>${p.emoji} ${p.label}</b> · ${p.name}${on ? ' ✓ 적용 중' : ''}
+                <div class="text-muted" style="font-size:0.72rem; font-weight:400">${p.summary}</div>
+            </button>`;
+        }).join('');
+        document.getElementById('strategyPresetActive').textContent = '— 지금: ' + presetLabel(_activePreset);
+    }
+
+    async function applyStrategyPreset(key) {
+        const p = _presets[key];
+        if (!p) return;
+        if (!confirm(`${p.emoji} ${p.label} 묶음(${p.name})을 적용할까요?\n\n${p.summary}\n`
+            + `짧은 손절 · 긴 수익 모드를 켜고 물타기 · 되돌림 익절 · 회복형 물타기는 끕니다.\n`
+            + `실거래 루프가 다음 사이클부터 보유 중인 종목에도 이 값으로 판단합니다.`)) return;
+        const msg = document.getElementById('strategyPresetMsg');
+        msg.textContent = '적용 중...';
+        msg.className = 'text-muted mt-1';
+        try {
+            const res = await fetch('api/auto-trade/strategy-presets/apply', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ preset: key }),
+            });
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+            _activePreset = json.active;
+            renderStrategyPresets();
+            populateSettingsInputs(json.settings || {});
+            if (_lastRegime) renderMarketRegime(_lastRegime.snap, _lastRegime.err);
+            loadLiveSummary();
+            msg.textContent = `${p.emoji} ${p.label} 묶음 적용됨 (${json.settings.updated_at || ''}) — 다음 사이클부터 반영`;
+            msg.className = 'engine-status-text engine-status-on mt-1';
+        } catch (e) {
+            msg.textContent = '적용 실패: ' + e.message;
+            msg.className = 'text-danger mt-1';
+        }
+    }
+
     function renderMarketRegime(snap, err) {
+        _lastRegime = { snap, err };
         const box = document.getElementById('marketRegimeBox');
         if (!snap) {
             box.innerHTML = `<span class="text-danger">시장 판단 조회 실패${err ? ': ' + err : ''}</span>`;
@@ -1510,12 +1589,23 @@
         const checkedMs = st.checked_at ? new Date(st.checked_at.replace(' ', 'T')).getTime() : 0;
         const stale = checkedMs && (Date.now() - checkedMs) > snap.check_interval_sec * 3000
             ? ' <span class="text-danger">· 판정이 오래 멈춰 있습니다(market-regime-bot 확인)</span>' : '';
+        // 판단과 지금 적용 중인 전략 묶음 비교 — 다르면 판단에 맞는 묶음을 바로 적용할 수 있게 버튼을 둔다
+        let presetLine = '';
+        if (_presetsLoaded) {
+            const same = _activePreset === st.confirmed;
+            presetLine = `<div style="margin-top:2px">적용 중인 전략 묶음: <b>${presetLabel(_activePreset)}</b>`
+                + (same ? ' <span class="pnl-pos">— 판단과 같음</span>'
+                    : (_presets[st.confirmed] ? ` <button class="btn-search" style="padding:1px 8px; font-size:0.74rem"
+                        onclick="applyStrategyPreset('${st.confirmed}')">${rText(st.confirmed)} 묶음 적용</button>` : ''))
+                + '</div>';
+        }
         const hist = (snap.history || []).filter(h => h.from_regime).slice(0, 3)
             .map(h => `${h.changed_at.slice(5, 16)} ${rText(h.from_regime)}→${rText(h.to_regime)}`).join(' · ');
         box.innerHTML = `<div><b>시장 판단: ${rText(st.confirmed)}</b>${score}
                 <span class="text-muted"> — 참고 전략: ${cur.strategy || ''}</span></div>
             <div style="margin-top:2px">${items}${crash}</div>
             ${pending}
+            ${presetLine}
             <div class="text-muted" style="font-size:0.72rem; margin-top:2px">
                 판정 ${st.checked_at || '—'} · ${rText(st.confirmed)} 확정 ${st.confirmed_at || '—'}${stale}
                 ${hist ? '<br>최근 변경: ' + hist : ''}
@@ -1562,6 +1652,7 @@
     }
 
     loadSharedSettings();
+    loadStrategyPresets();
     loadLiveSummary();
     loadMarketIndicators();
     setInterval(loadMarketIndicators, 60000);

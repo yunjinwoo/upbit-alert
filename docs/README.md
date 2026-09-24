@@ -20,7 +20,7 @@
 | [auto-trade-downside-watch.md](auto-trade-downside-watch.md) | ✅ Phase 1 머지됨 (PR #62, 2026-09-03) · Phase 2 미정 | 하락위험 코인 관심목록 — 매수 파이프라인의 거울상, 표시 전용 |
 | [auto-trade-performance.md](auto-trade-performance.md) | ✅ 머지됨 (PR #71, 2026-09-18) | 매매 성과 화면 — 매수→매도를 한 사이클로 묶어 승률·누적 손익·진입 신호별 기여도 조회 (읽기 전용) |
 | [auto-trade-market-indicators.md](auto-trade-market-indicators.md) | ✅ 구현 완료 (2026-09-23) · 주봉 RSI 조건 기본 꺼짐 | 정밀 매수조건 "주봉 RSI ≥ 65" + 자동매매 화면 시장 지표 카드(BTC RSI 4시간봉/일봉/주봉 · BTC 도미넌스, 표시 전용) |
-| [market-regime.md](market-regime.md) | ✅ 구현 완료 (2026-09-24) · 표시·알림 전용 | 시장 판단(좋음/애매/나쁨) — BTC 20일선·RSI·상승 종목 비율 점수제, 시장 지표 카드 표시 + 판단이 바뀌면 슬랙 알림. 전략은 사람이 직접 고름 |
+| [market-regime.md](market-regime.md) | ✅ 구현 완료 (2026-09-24) · 표시·알림 전용 | 시장 판단(좋음/애매/나쁨) — BTC 20일선·RSI·상승 종목 비율 점수제, 시장 지표 카드 표시 + 판단이 바뀌면 슬랙 알림 + 전략 묶음(좋음/애매/나쁨) 버튼으로 청산 값 한 번에 적용(사람이 직접 고름) |
 
 | [backtest.md](backtest.md) | ✅ 구현 완료 (2026-09-21) | 백테스트 — 당일 상승률/거래대금 상위 종목에 기존 진입·청산 로직을 과거 캔들로 돌려 성과 비교 (수집은 서버 전용) |
 

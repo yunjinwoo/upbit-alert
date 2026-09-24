@@ -21,6 +21,7 @@ from app.core.brokers.base import TradeCycleBusyError
 from app.core.brokers.paper_broker import PaperBroker
 from app.core.brokers.upbit_live_broker import UpbitLiveBroker
 from app.core.brokers.upbit_account import get_real_krw_balance
+from app.core.strategy_presets import match_preset
 from app.core.trade_strategy import evaluate_entries, evaluate_exits, invested_gauge_fields
 from app.core.exit_conditions import compute_rsi
 from app.utils.db_manager import (
@@ -701,6 +702,8 @@ def get_live_dashboard_summary() -> dict:
         'recovery_dca_max_count': strategy_cfg.TRADE_RECOVERY_DCA_MAX_COUNT,
         # 짧은 손절 · 긴 수익 모드가 켜져 있으면 물타기를 아예 하지 않으므로 표의 "물타기 n/m" 칸과
         # 상태 뱃지가 달라진다(docs/auto-trade-tight-stop.md) — 화면이 구분할 수 있게 같이 내려준다.
+        # 지금 설정이 어느 전략 묶음(좋음/애매/나쁨)과 같은지 — 표 위 청산 요약 줄에 같이 보여준다
+        'strategy_preset': match_preset(strategy_settings),
         'tight_stop_enabled': bool(getattr(strategy_cfg, 'TRADE_TIGHT_STOP_ENABLED', False)),
         'tight_stop_initial_pct': getattr(strategy_cfg, 'TRADE_TIGHT_STOP_INITIAL_PCT', None),
         'tight_stop_arm_pct': getattr(strategy_cfg, 'TRADE_TIGHT_STOP_ARM_PCT', None),

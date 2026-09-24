@@ -144,8 +144,9 @@ def advance_state(state: Optional[dict], result: dict, now: datetime, confirm_co
     return state, None
 
 
-def format_change_message(change: dict) -> str:
-    """확정 국면이 바뀌었을 때 슬랙으로 보낼 문구."""
+def format_change_message(change: dict, active_preset: str = None, preset_known: bool = False) -> str:
+    """확정 국면이 바뀌었을 때 슬랙으로 보낼 문구. preset_known이면 지금 매매 설정에 적용 중인 전략 묶음
+    (active_preset, 묶음과 다르면 None)을 같이 적는다 — 판단과 적용 중인 묶음이 다르면 바꿀지 고르라는 뜻."""
     detail = change.get('detail') or {}
     to_r = REGIMES[change['to_regime']]
     if change.get('from_regime'):
@@ -160,6 +161,13 @@ def format_change_message(change: dict) -> str:
         lines.append(f"• {item['label']}: {item['text']} ({item['point']:+d})" if item['point'] else
                      f"• {item['label']}: {item['text']} (0)")
     lines.append(f"참고 전략: {to_r['strategy']} (자동 적용 안 함)")
+    if preset_known:
+        from app.core.strategy_presets import preset_text
+        if active_preset == change['to_regime']:
+            lines.append(f"지금 적용 중인 전략 묶음: {preset_text(active_preset)} — 판단과 같음")
+        else:
+            lines.append(f"지금 적용 중인 전략 묶음: {preset_text(active_preset)} — 바꾸려면 자동매매 화면 "
+                         f"⚙️ 매매 기준 설정에서 {to_r['emoji']} {to_r['label']} 묶음을 적용하세요")
     return '\n'.join(lines)
 
 
@@ -197,6 +205,17 @@ def collect_inputs(get_candles_fn: Callable = None, up_ratio_fn: Callable = None
     return inputs
 
 
+def _active_preset() -> tuple:
+    """(적용 중인 묶음 key 또는 None, 조회 성공 여부). 조회에 실패해도 알림은 보내야 해서 예외를 삼킨다."""
+    try:
+        from app.core.strategy_presets import match_preset
+        from app.utils.db_manager import get_trade_strategy_settings
+        return match_preset(get_trade_strategy_settings()), True
+    except Exception as e:
+        logger.error(f"시장 판단: 적용 중인 전략 묶음 조회 실패: {e}")
+        return None, False
+
+
 def run_market_regime_check(inputs: dict = None, now: datetime = None, notify: Callable = None) -> dict:
     """1회 판정 → 상태 저장 → 확정 국면이 바뀌었으면 슬랙 알림. 새 상태와 변경 내역을 돌려준다."""
     from app.utils.db_manager import get_market_regime_state, save_market_regime_state
@@ -220,7 +239,7 @@ def run_market_regime_check(inputs: dict = None, now: datetime = None, notify: C
         )
     if change:
         try:
-            notify(format_change_message(change))
+            notify(format_change_message(change, *_active_preset()))
         except Exception as e:
             logger.error(f"시장 판단 슬랙 알림 실패: {e}")
     return {'state': state, 'change': change}
