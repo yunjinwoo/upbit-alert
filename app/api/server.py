@@ -1260,7 +1260,7 @@ def apply_strategy_preset_api():
     try:
         result = apply_preset(key, include_held=bool(body.get('include_held')))
         settings = result['settings']
-        logger.info(f"전략 묶음 적용: {key} → {STRATEGY_PRESETS[key]['values']} "
+        app.logger.info(f"전략 묶음 적용: {key} → {STRATEGY_PRESETS[key]['values']} "
                     f"(이전 규칙 고정 {result['locked']}, 규칙 해제 {result['released']})")
         return jsonify({'status': 'success', 'active': match_preset(settings), 'settings': settings,
                         'locked_tickers': result['locked'], 'released_tickers': result['released']})
