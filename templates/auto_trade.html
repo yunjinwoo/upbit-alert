@@ -190,8 +190,8 @@
                         <th style="text-align:center">실거래 승인</th>
                         <th style="text-align:center">정밀검사</th>
                         <th>종목</th>
-                        <th>현재가<div class="text-muted" style="font-size:0.72rem; font-weight:400">보유수량</div></th>
-                        <th>평단가<div class="text-muted" style="font-size:0.72rem; font-weight:400">평가금액</div></th>
+                        <th>현재가<div style="font-size:0.72rem; font-weight:400; color:#cbd5e1">보유수량</div></th>
+                        <th>평단가<div style="font-size:0.72rem; font-weight:400; color:#cbd5e1">평가금액</div></th>
                         <th>평가손익</th>
                         <th style="text-align:center">투입원금 / 상한</th>
                         <th style="text-align:center">상태</th>
@@ -290,6 +290,10 @@
                 <div>
                     <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">과매수 기준(이상)</label>
                     <input type="number" id="setRsiExitOverbought" class="form-control form-control-sm" style="width:100px" min="1" max="100" step="0.5">
+                </div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">최소 수익률(%, 이상일 때만)</label>
+                    <input type="number" id="setRsiExitMinProfit" class="form-control form-control-sm" style="width:100px" min="0" step="0.5">
                 </div>
             </div>
             <div class="settings-group">
@@ -394,9 +398,10 @@
             <br>* <b>1종목당 투입원금 상한(가드레일)</b>: 한 종목에 묶인 원금(평단×수량)이 이 금액을 넘는지
             "🔴 실거래" 표의 <b>투입원금 / 상한</b> 게이지로 보여줍니다. <b>현재는 표시만 하고 자동으로 매수를
             막거나 매도하지는 않습니다</b>(1단계). 80% 이상이면 노랑, 초과하면 빨강으로 표시됩니다.
-            <br>* <b>RSI 매도(15분봉)</b>: 켜면 보유 종목의 15분봉 RSI가 "과매수 기준" 이상일 때
-            손익률·트레일링 손절과 무관하게 <b>즉시 매도</b>합니다(손절처럼 연속확인을 기다리지 않고
-            익절과 같은 우선순위로 즉시 체결). 기본은 꺼짐이고, RSI 기간은 보통 14를 씁니다.
+            <br>* <b>RSI 매도(15분봉)</b>: 켜면 보유 종목의 15분봉 RSI가 "과매수 기준" 이상이고 평단 대비 수익률이
+            <b>최소 수익률</b> 이상일 때 <b>즉시 매도</b>합니다(손절처럼 연속확인을 기다리지 않고 익절과 같은 우선순위로
+            즉시 체결). 수익률이 모자라면 RSI가 높아도 팔지 않고 손절·익절 규칙을 그대로 따릅니다(0이면 본전 이상).
+            기본은 꺼짐이고, RSI 기간은 보통 14를 씁니다.
             <br>* <b>되돌림 익절</b>: 목표 수익률(익절 기준)에 못 닿더라도, 수익률이 <b>발동 기준</b> 이상
             올라간 적이 있는 종목이 <b>매도 기준</b> 이하로 되돌아오면 그 사이클에 바로 팔아 이익을
             확정합니다(예: 발동 3% / 매도 2% → 3%를 찍었다가 2%로 내려오면 매도). 고점 수익률은 트레일링
@@ -1392,7 +1397,7 @@
         }
     }
 
-    const SETTINGS_INPUT_IDS = ['setMaxPosition', 'setMaxPositions', 'setStopLoss', 'setTakeProfit', 'setLoopInterval', 'setStopConfirm', 'setDcaTrigger', 'setDcaMaxCount', 'setPerPositionCap', 'setRsiExitEnabled', 'setRsiExitPeriod', 'setRsiExitOverbought', 'setTrailingTpEnabled', 'setTrailingTpArm', 'setTrailingTpFloor', 'setTightStopEnabled', 'setTightStopInitial', 'setTightStopArm', 'setTightStopTrail', 'setRecoveryEnabled', 'setRecoveryTrigger', 'setRecoveryAmount', 'setRecoveryCooldown', 'setRecoveryTakeProfit', 'setRecoveryMaxCount', 'setRecoveryMaxInvested', 'setRecoveryTimeStopDays', 'setRecoveryPartialPct', 'setRecoveryPartialRatio', 'setRecoveryPartialCooldown'];
+    const SETTINGS_INPUT_IDS = ['setMaxPosition', 'setMaxPositions', 'setStopLoss', 'setTakeProfit', 'setLoopInterval', 'setStopConfirm', 'setDcaTrigger', 'setDcaMaxCount', 'setPerPositionCap', 'setRsiExitEnabled', 'setRsiExitPeriod', 'setRsiExitOverbought', 'setRsiExitMinProfit', 'setTrailingTpEnabled', 'setTrailingTpArm', 'setTrailingTpFloor', 'setTightStopEnabled', 'setTightStopInitial', 'setTightStopArm', 'setTightStopTrail', 'setRecoveryEnabled', 'setRecoveryTrigger', 'setRecoveryAmount', 'setRecoveryCooldown', 'setRecoveryTakeProfit', 'setRecoveryMaxCount', 'setRecoveryMaxInvested', 'setRecoveryTimeStopDays', 'setRecoveryPartialPct', 'setRecoveryPartialRatio', 'setRecoveryPartialCooldown'];
 
     function populateSettingsInputs(settings) {
         // 사용자가 입력창 하나를 타이핑 중인 동안엔 이번 새로고침으로 값을 덮어쓰지 않음
@@ -1409,6 +1414,7 @@
         document.getElementById('setRsiExitEnabled').checked = !!settings.rsi_exit_enabled;
         document.getElementById('setRsiExitPeriod').value = settings.rsi_exit_period ?? '';
         document.getElementById('setRsiExitOverbought').value = settings.rsi_exit_overbought ?? '';
+        document.getElementById('setRsiExitMinProfit').value = settings.rsi_exit_min_profit_pct ?? '';
         document.getElementById('setTrailingTpEnabled').checked = !!settings.trailing_tp_enabled;
         document.getElementById('setTrailingTpArm').value = settings.trailing_tp_arm_pct ?? '';
         document.getElementById('setTrailingTpFloor').value = settings.trailing_tp_floor_pct ?? '';
@@ -1443,6 +1449,7 @@
             rsi_exit_enabled: document.getElementById('setRsiExitEnabled').checked,
             rsi_exit_period: Number(document.getElementById('setRsiExitPeriod').value),
             rsi_exit_overbought: Number(document.getElementById('setRsiExitOverbought').value),
+            rsi_exit_min_profit_pct: Number(document.getElementById('setRsiExitMinProfit').value),
             trailing_tp_enabled: document.getElementById('setTrailingTpEnabled').checked,
             trailing_tp_arm_pct: Number(document.getElementById('setTrailingTpArm').value),
             trailing_tp_floor_pct: Number(document.getElementById('setTrailingTpFloor').value),

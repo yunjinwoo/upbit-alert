@@ -127,8 +127,10 @@ class Config:
                                             # 미설정 시 send_slack_msg가 조용히 스킵하므로 켜둬도 안전함.
     TRADE_RSI_EXIT_ENABLED = False          # RSI 과매수 매도조건 on/off (기본 비활성화 — 켜기 전까진 동작 안 바뀜)
     TRADE_RSI_EXIT_PERIOD = 14              # RSI 계산 기간
-    TRADE_RSI_EXIT_OVERBOUGHT = 80.0        # 이 값 이상이면 손익/트레일링과 무관하게 즉시 매도(15분봉 기준,
+    TRADE_RSI_EXIT_OVERBOUGHT = 80.0        # 이 값 이상이면 트레일링과 무관하게 즉시 매도(15분봉 기준,
                                             # app/core/exit_conditions.py)
+    TRADE_RSI_EXIT_MIN_PROFIT_PCT = 1.0     # RSI 매도는 평단 대비 수익률이 이 값(%) 이상일 때만 — RSI가 높아도
+                                            # 손실/본전 근처면 팔지 않는다(2026-09-24 CVC가 -3.7%에서 RSI 매도된 뒤 추가)
 
     # 고점 대비 되돌림 익절(트레일링 익절) — 목표 수익률(TRADE_TAKE_PROFIT_PCT)에 못 닿아도, 수익률이
     # ARM_PCT 이상 올라갔다가 FLOOR_PCT 이하로 되돌아오면 이익을 확정한다. "3~4%까지 갔다가 2%가 되면

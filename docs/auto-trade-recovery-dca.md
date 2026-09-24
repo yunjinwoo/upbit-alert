@@ -105,7 +105,7 @@ pnl_pct = (price - avg_buy_price) / avg_buy_price * 100
    (기존 익절 기준이 더 높아서 먼저 확인 — 더 크게 먹을 수 있으면 그쪽으로 나간다)
 
 2) RSI 과매수 매도 (rsi_exit_enabled 켜져 있을 때만)
-   pnl_pct >= 0 이고 RSI >= rsi_exit_overbought  → SELL 전량 (reason: rsi_exit)
+   pnl_pct >= max(0, rsi_exit_min_profit_pct) 이고 RSI >= rsi_exit_overbought  → SELL 전량 (reason: rsi_exit)
    손실 구간에서는 일부러 동작하지 않는다 — RSI로 팔면 결국 "큰 손절"이라 이 모드의 전제가 깨진다.
 
    ── 여기서 물타기 여력을 계산한다 ──
@@ -242,8 +242,9 @@ pnl_pct = (price - avg_buy_price) / avg_buy_price * 100
 
 ### 부수적으로 정한 것
 
-- **RSI 과매수 매도는 이 모드에서 수익 구간(`pnl_pct >= 0`)에서만 동작한다.** 기존 모드에서는 손익과
-  무관하게 즉시 매도지만, 손실 구간에서 RSI로 팔면 결국 큰 손절이 되어 이 모드의 전제가 깨진다.
+- **RSI 과매수 매도는 이 모드에서 수익 구간(`pnl_pct >= 0`)에서만 동작한다.** 손실 구간에서 RSI로 팔면
+  결국 큰 손절이 되어 이 모드의 전제가 깨진다. 기존 모드도 2026-09-24부터 최소 수익률
+  (`rsi_exit_min_profit_pct`, 기본 +1%) 이상에서만 판다(그 전엔 손익과 무관하게 즉시 매도).
   (RSI 매도 자체는 기본 꺼짐이라 켜둔 경우에만 해당)
 - **회복형 물타기 횟수는 기존 `dca_count`와 분리해서 센다.** 트리거(-20% vs 트레일링 손절 직후)와
   금액(소액 vs 매수금액 전액)이 다른 별개 동작이라, 겸용하면 모드를 껐다 켤 때 서로의 남은 횟수를
