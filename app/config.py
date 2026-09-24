@@ -74,6 +74,9 @@ class Config:
 
     # 데이터 동기화 설정
     SYNC_ALLOWED_IPS = [ip.strip() for ip in os.getenv("SYNC_ALLOWED_IPS", "127.0.0.1").split(",") if ip.strip()]
+    # 매매일지(stock-history, 같은 서버) 연동 API(/api/journal/*) — 같은 서버(127.0.0.1)에서 온 요청만 받는다.
+    # 값을 넣으면 X-Journal-Token 헤더도 같아야 한다(비워두면 루프백 확인만).
+    JOURNAL_API_TOKEN = os.getenv("JOURNAL_API_TOKEN", "")
     SYNC_TOKEN_TTL = 600  # 세션 유효시간(초) — 10분
     SYNC_SERVER_URL = os.getenv("SYNC_SERVER_URL", "http://49.247.202.50/upbit")  # 동기화 관리 페이지 기본값과 동일
     SYNC_AUTO_LIMIT = 7  # 자동 동기화 시 전송할 최근 날짜 수
