@@ -1024,6 +1024,8 @@ def force_buy_live_api():
 def force_sell_live_api():
     """실거래 강제 매도 — 손절/익절 조건과 무관하게 지정한 종목의 보유 수량 전량을 지금 즉시
     시장가로 실매도합니다. 실거래 실행 스위치가 꺼져 있으면 UpbitLiveBroker가 차단합니다.
+    매도가 체결되면 그 종목의 실거래 승인(approved)도 끈다 — 손으로 판 종목을 봇이 다음 사이클에
+    다시 사지 않게 하기 위함(2026-09-26 요청). 다시 매매하려면 "🔴 실거래" 표에서 승인을 켜면 된다.
     body: {ticker: str}"""
     if not Config.UPBIT_ACCESS_KEY or not Config.UPBIT_SECRET_KEY:
         return jsonify({'status': 'error', 'message': '.env에 UPBIT_ACCESS_KEY/UPBIT_SECRET_KEY가 설정되어 있지 않습니다.'}), 400
@@ -1038,7 +1040,11 @@ def force_sell_live_api():
         return jsonify({'status': 'error', 'message': '이미 업비트 실거래 사이클이 실행 중입니다. 잠시 후 다시 시도하세요.'}), 409
     try:
         result = force_sell(ticker, broker=UpbitLiveBroker())
-        return jsonify({'status': 'success', **result})
+        approval_off = False
+        if result.get('success'):
+            set_candidate_approval('upbit', 'live', ticker, False)
+            approval_off = True
+        return jsonify({'status': 'success', **result, 'approval_off': approval_off})
     except RuntimeError as e:
         return jsonify({'status': 'error', 'message': str(e)}), 400
     except Exception as e:
