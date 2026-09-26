@@ -1475,7 +1475,7 @@
         const endpoint = side === 'buy' ? 'api/auto-trade/live/force-buy' : 'api/auto-trade/live/force-sell';
         const confirmMsg = side === 'buy'
             ? `⚠️ 실거래입니다. ${ticker}를 조건 검사 없이 지금 즉시 매수(1종목당 매수금액만큼)할까요? (실거래 스위치가 켜져 있어야 체결됩니다)`
-            : `⚠️ 실거래입니다. ${ticker} 보유 수량 전량을 지금 즉시 매도할까요?`;
+            : `⚠️ 실거래입니다. ${ticker} 보유 수량 전량을 지금 즉시 매도할까요? (매도되면 이 종목의 실거래 승인도 꺼집니다)`;
         if (!confirm(confirmMsg)) return;
         btn.disabled = true;
         const msg = document.getElementById('liveRunNowMsg');
@@ -1491,7 +1491,8 @@
                 // 체결 확인이 지연되면 price/qty가 비어있을 수 있음(실거래 브로커 — 다음 사이클에 확정)
                 const qtyText = json.qty != null ? `${json.qty.toFixed(6)}개` : '(체결 확인 지연)';
                 const priceText = json.price != null ? ` @ ${Math.round(json.price).toLocaleString()}원` : '';
-                msg.textContent = `⚡ 실거래 ${label} 완료 — ${ticker} ${qtyText}${priceText}`;
+                const approvalText = json.approval_off ? ' · 실거래 승인 해제됨' : '';
+                msg.textContent = `⚡ 실거래 ${label} 완료 — ${ticker} ${qtyText}${priceText}${approvalText}`;
             } else {
                 msg.textContent = `${label} 안 됨 — ${json.message}`;
             }
