@@ -77,7 +77,7 @@ from app.core.stock_monitor import (
 from app.core.upbit_market_analysis import run_coin_screening
 from app.core.upbit_ranking import get_top_movers, get_ranking_history
 from app.core.trade_performance import build_performance
-from app.core.trade_journal import build_journal_fills
+from app.core.trade_journal import build_journal_fills, load_live_holdings
 from app.core.market_indicators import get_market_indicators
 from app.core.market_regime import get_market_regime_snapshot
 from app.core.strategy_presets import STRATEGY_PRESETS, apply_preset, match_preset
@@ -841,6 +841,19 @@ def get_journal_fills_api():
                                     date_from=request.args.get('from') or None,
                                     date_to=request.args.get('to') or None)
         return jsonify({'status': 'success', 'symbol': symbol.upper(), 'mode': mode, 'fills': fills})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/journal/holdings', methods=['GET'])
+def get_journal_holdings_api():
+    """매매일지(stock-history) 연동 — 지금 봇이 들고 있는 코인 현황(실계좌 조회만, 주문 없음).
+    종목마다 수량·평단·현재가·평가손익에 진입 사유·진입 시장·보유 중 최고/최저·적용 중인 청산 규칙을 붙인다.
+    응답 필드는 app/core/trade_journal.py(build_journal_holdings) 참고. 인증은 _check_journal_request."""
+    if not Config.UPBIT_ACCESS_KEY or not Config.UPBIT_SECRET_KEY:
+        return jsonify({'status': 'error', 'message': '.env에 UPBIT_ACCESS_KEY/UPBIT_SECRET_KEY가 설정되어 있지 않습니다.'}), 400
+    try:
+        return jsonify({'status': 'success', **load_live_holdings()})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 

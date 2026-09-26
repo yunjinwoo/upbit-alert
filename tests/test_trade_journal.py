@@ -2,6 +2,7 @@
 
 실행: python tests/test_trade_journal.py
 """
+import json
 import os
 import sys
 import tempfile
@@ -9,7 +10,7 @@ import tempfile
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from app.utils import db_manager
-from app.core.trade_journal import build_journal_fills, reason_label
+from app.core.trade_journal import build_journal_fills, build_journal_holdings, exit_rule_payload, reason_label
 
 FAILED = []
 
@@ -84,6 +85,56 @@ check('기간 필터(체결일)', [f['id'] for f in f3] == [4, 6, 8], [f['id'] f
 f4 = build_journal_fills('EGLD', rows=rows, regime_changes=changes, date_from='2026-09-24')
 check('기간 밖 매수가 있어도 최고/최저 유지', f4[0]['peak_pnl_pct'] == 22.0)
 
+
+# ── 보유 현황(build_journal_holdings)
+settings = {'tight_stop_enabled': True, 'tight_stop_initial_pct': 3.0, 'tight_stop_arm_pct': 4.0,
+            'tight_stop_trail_pct': 4.0, 'take_profit_pct': 6.0, 'trailing_tp_enabled': False,
+            'recovery_dca_enabled': False, 'stop_loss_pct': 5.0}
+r = exit_rule_payload(settings)
+check('현재 묶음 = 애매', r['preset']['key'] == 'neutral' and not r['locked'], r)
+check('청산 규칙 문구', r['text'] == '손절 -3%, +4% 넘으면 고점 대비 -4%까지 보유, 익절 +6%', r['text'])
+good_rule = {'TRADE_TIGHT_STOP_ENABLED': True, 'TRADE_TIGHT_STOP_INITIAL_PCT': 8.0, 'TRADE_TIGHT_STOP_ARM_PCT': 5.0,
+             'TRADE_TIGHT_STOP_TRAIL_PCT': 10.0, 'TRADE_TAKE_PROFIT_PCT': 30.0, 'TRADE_TRAILING_TP_ENABLED': False,
+             'TRADE_RECOVERY_DCA_ENABLED': False}
+r = exit_rule_payload(settings, json.dumps(good_rule))
+check('고정 규칙(JSON 문자열)은 산 시점 묶음', r['preset']['key'] == 'good' and r['locked'], r)
+r = exit_rule_payload({**settings, 'tight_stop_enabled': False, 'trailing_tp_enabled': True})
+check('묶음과 다르면 직접 설정', r['preset'] is None and r['text'] == '손절 고점 대비 -5%, 되돌림 익절, 익절 +6%', r)
+check('깨진 고정 규칙은 무시', exit_rule_payload(settings, '{bad')['locked'] is False)
+
+log = {
+    'KRW-EGLD': [
+        row(1, 'BUY', '2026-09-20 10:00:00', 'breakout_4h', 7000, 4),
+        row(2, 'SELL', '2026-09-20 12:00:00', 'take_profit(6%)', 7420, 4, pnl_pct=6.0),   # 지난 포지션
+        row(3, 'HOLD', '2026-09-20 13:00:00', 'x', pnl_pct=50.0),                          # 포지션 없을 때 — 무시
+        row(4, 'BUY', '2026-09-22 09:00:00', 'near_ma200+above_cloud+정밀조건충족', 7000, 4),
+        row(5, 'HOLD', '2026-09-22 10:00:00', 'w', pnl_pct=5.5),
+        row(6, 'DCA_BUY', '2026-09-23 09:00:00', 'dca_buy(1/2회)', 6000, 2),
+        row(7, 'HOLD', '2026-09-23 10:00:00', 'w', pnl_pct=-2.0),
+    ],
+    'KRW-XRP': [],  # 앱 기록 이전부터 들고 있던 포지션
+}
+positions = [
+    {'ticker': 'KRW-XRP', 'qty': 10, 'avg_buy_price': 1000},
+    {'ticker': 'KRW-EGLD', 'qty': 6, 'avg_buy_price': 6666.67},
+]
+prices = {'KRW-EGLD': 7000.0, 'KRW-XRP': None}
+tracking = {'KRW-EGLD': {'exit_rule': json.dumps(good_rule), 'entry_at': '2026-09-22 09:00:05'},
+            'KRW-XRP': {'exit_rule': None, 'entry_at': '2026-09-01 00:00:00'}}
+hs = build_journal_holdings(positions, tracking, prices.get, settings, lambda t: log[t], regime_changes=changes)
+check('평가금액 큰 순(시세 없으면 원금)', [h['symbol'] for h in hs] == ['EGLD', 'XRP'], [h['symbol'] for h in hs])
+e = hs[0]
+check('손익', abs(e['pnl_pct'] - 5.0) < 0.01 and abs(e['pnl_krw'] - 2000) < 0.1, (e['pnl_pct'], e['pnl_krw']))
+check('진입 = 지금 포지션의 첫 매수', e['entry_at'] == '2026-09-22 09:00:00' and e['entry_reason_label'] == '200선 근접+구름 위 · 정밀조건', e)
+check('진입 시장', e['entry_regime']['key'] == 'good', e['entry_regime'])
+check('물타기 횟수', e['dca_count'] == 1)
+check('보유 중 최고/최저(지난 포지션 제외)', e['peak_pnl_pct'] == 5.5 and e['trough_pnl_pct'] == -2.0, (e['peak_pnl_pct'], e['trough_pnl_pct']))
+check('고정 청산 규칙', e['exit_rule']['locked'] and e['exit_rule']['preset']['key'] == 'good')
+x = hs[1]
+check('시세 없으면 손익 None', x['current_price'] is None and x['pnl_krw'] is None and x['pnl_pct'] is None, x)
+check('앱 이전 보유분: 사유 없음, 진입 시각은 추적 행', x['entry_reason'] is None and x['entry_at'] == '2026-09-01 00:00:00', x)
+check('앱 이전 보유분: 현재 설정 규칙', x['exit_rule']['preset']['key'] == 'neutral' and not x['exit_rule']['locked'])
+
 # ── DB + API
 with tempfile.TemporaryDirectory() as tmp:
     db_manager.DB_PATH = os.path.join(tmp, 'test.db')
@@ -108,6 +159,8 @@ with tempfile.TemporaryDirectory() as tmp:
     check('프록시를 거친 요청은 403', res.status_code == 403, res.status_code)
     res = client.get('/api/journal/fills', environ_base={'REMOTE_ADDR': '127.0.0.1'})
     check('symbol 없으면 400', res.status_code == 400)
+    res = client.get('/api/journal/holdings', environ_base={'REMOTE_ADDR': '8.8.8.8'})
+    check('보유현황도 외부 IP는 403', res.status_code == 403, res.status_code)
 
 print()
 print('ALL PASS' if not FAILED else f'FAILED: {FAILED}')
