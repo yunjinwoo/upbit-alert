@@ -181,6 +181,21 @@ class Config:
     # 뺀다. 손절한 코인이 여전히 스크리닝 후보·실거래 승인 상태라 5분 뒤 다시 사서 또 손절하는 반복을
     # 막기 위함(2026-09-26 추가). 0이면 꺼짐 — 켜기 전까진 기존 동작 그대로.
     TRADE_REENTRY_BLOCK_HOURS = 0.0
+    # ── 수렴 자동 매수(docs/auto-trade-convergence.md) — 승인 없이 봇이 직접 고른다: 24시간 거래대금이
+    # 기준 이상인 KRW 코인 중 5분봉 현재가·구름(상단/하단)·MA80·MA120이 한곳에 모인(최고·최저 차이가
+    # max_gap_pct 이내) "새 코인"을 하루 daily_limit개까지 산다. 산 뒤에는 일반 청산 규칙(손절/익절 등)을
+    # 탄다. 화면에서 저장하면 trade_convergence_settings 값이 우선. (2026-09-26 jin3 "바로 실거래"로 결정)
+    CONVERGENCE_ENABLED = True
+    CONVERGENCE_DAILY_LIMIT = 1                     # 하루(KST 0시 기준) 이 규칙으로 살 최대 종목 수
+    CONVERGENCE_AMOUNT_KRW = None                   # 1회 매수 금액 — None이면 "1종목당 매수 금액"과 같게
+    CONVERGENCE_MIN_TRADE_VALUE_24H = 40_000_000_000  # 24시간 거래대금 하한(원) — 400억
+    CONVERGENCE_MAX_GAP_PCT = 1.5                   # 현재가·구름·MA80·MA120 최고/최저 차이 한도(%)
+    CONVERGENCE_FRESH_DAYS = 7                      # "새 코인" — 지금 안 갖고 있고 이 기간 봇 매매 이력도 없음
+    CONVERGENCE_REQUIRE_ABOVE = True                # 현재가가 구름 위·MA120 위일 때만(아래로 깨지는 수렴 제외)
+    CONVERGENCE_REQUIRE_DAILY_TREND = True          # 일봉 현재가가 구름 위·기준선(26) 위일 때만(큰 추세가 위쪽인 코인만, jin3 요청)
+    CONVERGENCE_EXCLUDE_TICKERS = ['KRW-USDT', 'KRW-USDC', 'KRW-USDE', 'KRW-DAI']  # 스테이블코인은 늘 수렴해 보여서 제외
+    CONVERGENCE_MA_SHORT = 80
+    CONVERGENCE_MA_LONG = 120
     TRADE_MIN_ORDER_KRW = 5_000              # 거래소 최소 주문금액 — 부분 매도 금액이 이 밑이면 쪼개지 말고 전량 매도한다
                                              # (업비트 실주문 검증값과 동일: app/core/brokers/upbit_live_broker.py)
 

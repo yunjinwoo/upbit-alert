@@ -709,6 +709,26 @@ def init_db():
         )
     ''')
 
+    # 수렴 자동 매수(docs/auto-trade-convergence.md) — 브로커별 1행. 행이 없으면 Config.CONVERGENCE_* 기본값.
+    # amount_krw가 NULL이면 "1종목당 매수 금액"을 쓴다. last_scan은 매매 루프가 마지막으로 훑은 결과(JSON,
+    # 화면 표시용 — 웹 요청에서 캔들을 수십 개 다시 받지 않으려고 저장해 둔다).
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS trade_convergence_settings (
+            broker TEXT PRIMARY KEY,
+            enabled INTEGER,
+            daily_limit INTEGER,
+            amount_krw REAL,
+            min_trade_value_24h REAL,
+            max_gap_pct REAL,
+            fresh_days REAL,
+            require_above INTEGER,
+            require_daily_trend INTEGER,
+            last_scan TEXT,
+            last_scan_at TEXT,
+            updated_at TEXT
+        )
+    ''')
+
     # 기존 테이블 컬럼 마이그레이션
     migrations = [
         'ALTER TABLE stock_market_cap_daily ADD COLUMN market_weight TEXT DEFAULT "0"',
@@ -5335,5 +5355,117 @@ def get_coin_ranking_history(kind: str, since_date: str) -> list:
         ORDER BY date, hour, rank
     ''', (kind, since_date))
     rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
+CONVERGENCE_REASON_PREFIX = '수렴매수'
+CONVERGENCE_FIELDS = ('enabled', 'daily_limit', 'amount_krw', 'min_trade_value_24h', 'max_gap_pct',
+                      'fresh_days', 'require_above', 'require_daily_trend')
+
+
+def get_convergence_settings(broker: str = 'upbit') -> dict:
+    """수렴 자동 매수 설정 — 저장 안 한 항목은 Config.CONVERGENCE_* 기본값. last_scan은 리스트로 풀어 준다."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM trade_convergence_settings WHERE broker = ?', (broker,))
+    row = cursor.fetchone()
+    conn.close()
+    row = dict(row) if row else {}
+    defaults = {
+        'enabled': Config.CONVERGENCE_ENABLED,
+        'daily_limit': Config.CONVERGENCE_DAILY_LIMIT,
+        'amount_krw': Config.CONVERGENCE_AMOUNT_KRW,
+        'min_trade_value_24h': Config.CONVERGENCE_MIN_TRADE_VALUE_24H,
+        'max_gap_pct': Config.CONVERGENCE_MAX_GAP_PCT,
+        'fresh_days': Config.CONVERGENCE_FRESH_DAYS,
+        'require_above': Config.CONVERGENCE_REQUIRE_ABOVE,
+        'require_daily_trend': Config.CONVERGENCE_REQUIRE_DAILY_TREND,
+    }
+    settings = {}
+    for key, default in defaults.items():
+        value = row.get(key)
+        # amount_krw는 NULL 자체가 "1종목당 매수 금액 사용"이라는 값이다 — 행이 있으면 NULL도 그대로 쓴다.
+        settings[key] = value if (value is not None or (key == 'amount_krw' and row)) else default
+    settings['enabled'] = bool(settings['enabled'])
+    settings['require_above'] = bool(settings['require_above'])
+    settings['require_daily_trend'] = bool(settings['require_daily_trend'])
+    settings['daily_limit'] = int(settings['daily_limit'])
+    try:
+        settings['last_scan'] = json.loads(row['last_scan']) if row.get('last_scan') else []
+    except (TypeError, ValueError):
+        settings['last_scan'] = []
+    settings['last_scan_at'] = row.get('last_scan_at')
+    settings['updated_at'] = row.get('updated_at')
+    return settings
+
+
+def set_convergence_settings(broker: str = 'upbit', **fields) -> dict:
+    """수렴 자동 매수 설정 저장(부분 갱신 — 넘긴 항목만 바꾼다). amount_krw=None을 넘기면
+    "1종목당 매수 금액 사용"으로 되돌린다. 저장된 전체 설정을 반환."""
+    current = get_convergence_settings(broker)
+    merged = {k: current[k] for k in CONVERGENCE_FIELDS}
+    for key, value in fields.items():
+        if key not in CONVERGENCE_FIELDS:
+            raise ValueError(f'알 수 없는 설정: {key}')
+        merged[key] = value
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO trade_convergence_settings
+            (broker, enabled, daily_limit, amount_krw, min_trade_value_24h, max_gap_pct, fresh_days,
+             require_above, require_daily_trend, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(broker) DO UPDATE SET
+            enabled=excluded.enabled, daily_limit=excluded.daily_limit, amount_krw=excluded.amount_krw,
+            min_trade_value_24h=excluded.min_trade_value_24h, max_gap_pct=excluded.max_gap_pct,
+            fresh_days=excluded.fresh_days, require_above=excluded.require_above,
+            require_daily_trend=excluded.require_daily_trend, updated_at=excluded.updated_at
+    ''', (broker, int(bool(merged['enabled'])), int(merged['daily_limit']), merged['amount_krw'],
+          float(merged['min_trade_value_24h']), float(merged['max_gap_pct']), float(merged['fresh_days']),
+          int(bool(merged['require_above'])), int(bool(merged['require_daily_trend'])), timestamp))
+    conn.commit()
+    conn.close()
+    return get_convergence_settings(broker)
+
+
+def save_convergence_scan(rows: list, broker: str = 'upbit') -> None:
+    """매매 루프가 방금 훑은 수렴 검사 결과를 화면용으로 저장(설정 행이 없으면 기본값으로 만든다)."""
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO trade_convergence_settings (broker, last_scan, last_scan_at) VALUES (?, ?, ?)
+        ON CONFLICT(broker) DO UPDATE SET last_scan=excluded.last_scan, last_scan_at=excluded.last_scan_at
+    ''', (broker, json.dumps(rows, ensure_ascii=False), timestamp))
+    conn.commit()
+    conn.close()
+
+
+def get_convergence_buys_since(broker: str, mode: str, since: str) -> list:
+    """since 이후 수렴 자동 매수로 체결된 종목(체결 순). 하루 한도 판정용 — 실패 주문은 SKIP으로 남아 안 잡힌다."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT ticker FROM trade_order_log
+        WHERE broker = ? AND mode = ? AND decision = 'BUY' AND reason LIKE ? AND created_at >= ?
+        ORDER BY id
+    ''', (broker, mode, CONVERGENCE_REASON_PREFIX + '%', since))
+    rows = [r[0] for r in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
+def get_recently_traded_tickers(broker: str, mode: str, since: str) -> set:
+    """since 이후 봇이 실제로 사거나 판(BUY/DCA_BUY/SELL 체결) 종목 — 수렴 자동 매수의 "새 코인" 판정용."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT DISTINCT ticker FROM trade_order_log
+        WHERE broker = ? AND mode = ? AND decision IN ('BUY', 'DCA_BUY', 'SELL') AND created_at >= ?
+    ''', (broker, mode, since))
+    rows = {r[0] for r in cursor.fetchall()}
     conn.close()
     return rows

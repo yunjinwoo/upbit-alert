@@ -49,6 +49,7 @@ from app.utils.db_manager import (
     set_candidate_condition_watch,
     set_trade_condition_setting,
     set_accumulate_settings,
+    set_convergence_settings,
     get_trade_order_log,
     count_trade_order_log,
     get_trade_fill_rows,
@@ -1310,6 +1311,54 @@ def set_trade_strategy_settings_api():
         settings = set_trade_strategy_settings(**kwargs)
         return jsonify({'status': 'success', 'settings': settings})
     except (ValueError, TypeError) as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/auto-trade/convergence/settings', methods=['POST'])
+def set_convergence_settings_api():
+    """수렴 자동 매수 설정 저장(부분 갱신, docs/auto-trade-convergence.md). body: {enabled?, daily_limit?,
+    amount_krw?(빈 값/null이면 1종목당 매수 금액 사용), min_trade_value_24h_eok?(억 단위), max_gap_pct?,
+    fresh_days?, require_above?, require_daily_trend?}."""
+    body = request.get_json(silent=True) or {}
+    try:
+        kwargs = {}
+        for key in ('enabled', 'require_above', 'require_daily_trend'):
+            if key in body:
+                kwargs[key] = bool(body[key])
+        if 'daily_limit' in body:
+            v = int(body['daily_limit'])
+            if v < 0:
+                raise ValueError('하루 최대 종목 수는 0 이상이어야 합니다.')
+            kwargs['daily_limit'] = v
+        if 'amount_krw' in body:
+            v = body['amount_krw']
+            if v in (None, '', 0):
+                kwargs['amount_krw'] = None
+            else:
+                v = float(v)
+                if v < Config.TRADE_MIN_ORDER_KRW:
+                    raise ValueError(f'1회 매수 금액은 {Config.TRADE_MIN_ORDER_KRW:,}원 이상이어야 합니다(업비트 최소 주문금액).')
+                kwargs['amount_krw'] = v
+        if 'min_trade_value_24h_eok' in body:
+            v = float(body['min_trade_value_24h_eok'])
+            if v < 0:
+                raise ValueError('거래대금 기준은 0 이상이어야 합니다.')
+            kwargs['min_trade_value_24h'] = v * 1e8
+        if 'max_gap_pct' in body:
+            v = float(body['max_gap_pct'])
+            if v <= 0:
+                raise ValueError('이격 한도(%)는 0보다 커야 합니다.')
+            kwargs['max_gap_pct'] = v
+        if 'fresh_days' in body:
+            v = float(body['fresh_days'])
+            if v < 0:
+                raise ValueError('새 코인 기준 일수는 0 이상이어야 합니다.')
+            kwargs['fresh_days'] = v
+        saved = set_convergence_settings(**kwargs)
+        app.logger.info(f"수렴 자동 매수 설정 저장: { {k: saved[k] for k in kwargs} }")
+        return jsonify({'status': 'success', 'settings': saved})
+    except (TypeError, ValueError) as e:
         return jsonify({'status': 'error', 'message': str(e)}), 400
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
