@@ -22,7 +22,7 @@ from app.core.brokers.paper_broker import PaperBroker
 from app.core.brokers.upbit_live_broker import UpbitLiveBroker
 from app.core.brokers.upbit_account import get_real_krw_balance
 from app.core.strategy_presets import match_preset
-from app.core.trade_strategy import evaluate_entries, evaluate_exits, invested_gauge_fields
+from app.core.trade_strategy import evaluate_entries, evaluate_exits, evaluate_accumulation, invested_gauge_fields
 from app.core.exit_conditions import compute_rsi
 from app.utils.db_manager import (
     get_or_create_paper_account,
@@ -56,6 +56,10 @@ from app.utils.db_manager import (
     conditions_gate_active,
     try_acquire_trade_cycle_lock,
     release_trade_cycle_lock,
+    conditions_enabled,
+    get_accumulate_settings,
+    get_active_accumulate_tickers,
+    get_last_accumulate_buy_times,
 )
 
 logger = get_logger()
@@ -252,7 +256,8 @@ def _reconcile_live_positions(broker) -> None:
     real_positions = {p.ticker: p for p in broker.get_positions() if p.qty > 0}
     approved_tickers = get_approved_candidate_tickers(broker.broker_name, broker.mode)
     tracked_tickers = {row['ticker'] for row in get_paper_positions(broker.broker_name, broker.mode)}
-    in_scope = approved_tickers | tracked_tickers
+    # 모아가기 코인은 봇이 팔지 않으므로 추적 행을 만들거나 지우지 않는다(docs/auto-trade-accumulate.md).
+    in_scope = (approved_tickers | tracked_tickers) - get_active_accumulate_tickers(broker.broker_name)
 
     for ticker in in_scope:
         pos = real_positions.get(ticker)
@@ -306,8 +311,13 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
         if is_live:
             _reconcile_live_positions(broker)  # 실제 잔고 → paper_positions(mode='live') 트래킹 행 동기화
 
+        # 모아가기 코인(켜져 있을 때만)은 일반 매매에서 뺀다 — 자동 매도하지 않고, 일반 진입 후보도 아니며,
+        # 최대 보유 종목 수에도 세지 않는다. 매수는 아래 ③에서 따로 판단한다(docs/auto-trade-accumulate.md).
+        accumulate_settings = get_accumulate_settings(broker.broker_name)
+        accumulate_tickers = set(accumulate_settings['tickers']) if accumulate_settings['enabled'] else set()
+
         # ① 청산 판단 (손절/익절/RSI 과매수) — 먼저 처리해 현금을 회수한 뒤 진입 판단에 반영
-        positions = get_paper_positions(broker.broker_name, broker.mode)
+        positions = [p for p in get_paper_positions(broker.broker_name, broker.mode) if p['ticker'] not in accumulate_tickers]
         rsi_map = _build_rsi_map([p['ticker'] for p in positions], strategy_cfg)
         exit_decisions = evaluate_exits(positions, broker.get_current_price, strategy_cfg, rsi_map=rsi_map)
         exit_results = [_execute(decision, broker) for decision in exit_decisions]
@@ -323,12 +333,12 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
         entry_decisions = []
         if not sold_this_cycle:
             # 청산 반영된 최신 잔고/포지션으로 재조회
-            positions = get_paper_positions(broker.broker_name, broker.mode)
+            positions = [p for p in get_paper_positions(broker.broker_name, broker.mode) if p['ticker'] not in accumulate_tickers]
             if is_live:
                 account = {'cash_balance': broker.get_cash_balance()}  # 가상 원장이 아니라 실제 KRW 잔고
             else:
                 account = get_or_create_paper_account(broker.broker_name, broker.mode, Config.TRADE_INITIAL_CASH_KRW)
-            candidates = get_coin_screening_candidates()
+            candidates = [c for c in get_coin_screening_candidates() if c['ticker'] not in accumulate_tickers]
 
             # 대시보드에서 특정 종목만 체크(수동 승인)했다면 그 종목만 진입 대상으로 좁힌다.
             # 모의매매는 아무것도 체크 안 했으면(빈 집합) 기존처럼 전체 후보를 대상으로 하지만,
@@ -369,6 +379,20 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
             )
             for decision in entry_decisions:
                 _execute(decision, broker)
+
+            # ③ 모아가기 — 정밀조건을 통과한 등록 코인을 정해둔 금액만큼 산다(코인별 interval_hours에 1번).
+            if accumulate_tickers:
+                accumulate_decisions = evaluate_accumulation(
+                    accumulate_settings['tickers'], broker.get_cash_balance(),
+                    accumulate_settings['amount_krw'], accumulate_settings['interval_hours'],
+                    conditions_enabled=conditions_enabled(broker.broker_name),
+                    condition_status_map=condition_status_map,
+                    last_buy_at=get_last_accumulate_buy_times(broker.broker_name, broker.mode),
+                    get_price_fn=broker.get_current_price,
+                )
+                for decision in accumulate_decisions:
+                    _execute(decision, broker)
+                entry_decisions = entry_decisions + accumulate_decisions
 
             if is_live:
                 _reconcile_live_positions(broker)  # 방금 신규 매수/물타기 체결분을 트래킹 행에 반영
@@ -540,7 +564,11 @@ def get_live_dashboard_summary() -> dict:
     # extra_positions 후보로 본다 — _reconcile_live_positions()가 관리하는 범위와 동일한 기준
     # (watchlist와 무관 — 이미 산 건 관심 등록을 나중에 빼도 계속 손절/익절 관리됨).
     tracked_tickers = {row['ticker'] for row in get_paper_positions(broker.broker_name, broker.mode)}
-    in_scope_tickers = approved_tickers | tracked_tickers
+    # 모아가기 코인은 실거래 표가 아니라 "🪙 모아가기" 카드에만 보여준다(봇이 팔지 않는 종목이라
+    # 손절/익절 미리보기가 의미 없음) — run_trade_cycle이 일반 매매에서 빼는 범위와 같다.
+    accumulate_settings = get_accumulate_settings(broker.broker_name)
+    accumulate_tickers = set(accumulate_settings['tickers']) if accumulate_settings['enabled'] else set()
+    in_scope_tickers = (approved_tickers | tracked_tickers) - accumulate_tickers
 
     # 보유 중인 후보(watchlist 여부와 무관 — 두 표 모두 같은 시세를 재사용하도록 캐싱)의 현재가는
     # 종목당 네트워크 호출 1회로 유지한다.
@@ -633,7 +661,7 @@ def get_live_dashboard_summary() -> dict:
         since = (datetime.now() - timedelta(hours=reentry_block_hours)).strftime('%Y-%m-%d %H:%M:%S')
         reentry_last_sell = get_last_sell_times(broker.broker_name, broker.mode, since)
 
-    candidates = [c for c in all_candidates if c['ticker'] in watchlist_tickers]
+    candidates = [c for c in all_candidates if c['ticker'] in watchlist_tickers and c['ticker'] not in accumulate_tickers]
     for cand in candidates:
         ticker = cand['ticker']
         cand['approved'] = ticker in approved_tickers
@@ -710,8 +738,37 @@ def get_live_dashboard_summary() -> dict:
             cand['pnl_pct'] = None
     downside_candidates.sort(key=lambda c: c['signal_count'], reverse=True)  # 동수는 기존 거래대금 순 유지(안정 정렬)
 
+    # ── 모아가기 카드 — 등록 코인별 보유 현황 + 다음 사이클 판단 미리보기(evaluate_accumulation, 순수 함수).
+    # 꺼져 있어도 등록해둔 코인과 보유 현황은 보여준다(켜기 전에 확인할 수 있게).
+    last_accumulate_buy = get_last_accumulate_buy_times(broker.broker_name, broker.mode)
+    accumulate_preview = {d.ticker: d for d in evaluate_accumulation(
+        accumulate_settings['tickers'], cash_balance or 0,
+        accumulate_settings['amount_krw'], accumulate_settings['interval_hours'],
+        conditions_enabled=any(c['enabled'] for c in get_trade_condition_settings(broker.broker_name)),
+        condition_status_map=condition_status_map, last_buy_at=last_accumulate_buy,
+        get_price_fn=cached_price,
+    )}
+    accumulate_rows = []
+    for ticker in accumulate_settings['tickers']:
+        pos = real_positions.get(ticker)
+        price = cached_price(ticker)
+        preview = accumulate_preview.get(ticker)
+        accumulate_rows.append({
+            'ticker': ticker,
+            'qty': pos.qty if pos else None,
+            'avg_buy_price': pos.avg_buy_price if pos else None,
+            'current_price': price,
+            'eval_amount': price * pos.qty if pos and price else None,
+            'pnl_pct': (price - pos.avg_buy_price) / pos.avg_buy_price * 100 if pos and price and pos.avg_buy_price else None,
+            'last_buy_at': last_accumulate_buy.get(ticker),
+            'next_action': preview.action if preview else None,
+            'next_reason': preview.reason if preview else None,
+            **_condition_fields(ticker),
+        })
+
     engine_settings = get_trade_engine_settings(broker.broker_name, broker.mode)
     return {
+        'accumulate': {**accumulate_settings, 'rows': accumulate_rows},
         'engine_enabled': engine_settings['enabled'],
         'last_cycle_at': engine_settings['last_cycle_at'],
         'loop_interval_sec': get_trade_strategy_settings(broker.broker_name)['loop_interval_sec'],

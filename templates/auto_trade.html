@@ -222,6 +222,57 @@
         </div>
     </div>
 
+    <!-- 모아가기(docs/auto-trade-accumulate.md) — 등록 코인은 정밀 매수조건을 통과하면 정해둔 금액만큼 사고
+         자동으로 팔지 않는다. 설정과 현황을 이 카드 한 곳에 모았고, 등록 코인은 위 실거래 표에서 빠진다. -->
+    <div class="card-panel mb-3">
+        <div class="section-title mb-2">🪙 모아가기 <span id="accumulateStateText" class="text-muted" style="font-size:0.78rem; font-weight:400"></span></div>
+        <div class="d-flex flex-wrap align-items-end gap-3 mb-2">
+            <label class="form-label mb-0" style="font-size:0.8rem; color:#334155; cursor:pointer">
+                <input type="checkbox" id="accumulateEnabled" style="margin-right:4px"><b>켜기</b>
+            </label>
+            <div>
+                <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">모아갈 코인(쉼표로 구분)</label>
+                <input type="text" id="accumulateTickers" class="form-control form-control-sm" style="width:200px" placeholder="BTC, ETH">
+            </div>
+            <div>
+                <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">1회 매수 금액(원)</label>
+                <input type="number" id="accumulateAmount" class="form-control form-control-sm" style="width:130px" min="5000" step="1000">
+            </div>
+            <div>
+                <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">코인별 매수 간격(시간)</label>
+                <input type="number" id="accumulateInterval" class="form-control form-control-sm" style="width:110px" min="1" step="1">
+            </div>
+            <button class="btn-search" onclick="saveAccumulate()">저장</button>
+            <span id="accumulateSavedMsg" class="text-muted" style="font-size:0.76rem"></span>
+        </div>
+        <div class="table-wrap">
+            <table class="trade-table">
+                <thead>
+                    <tr>
+                        <th>종목</th>
+                        <th style="text-align:center">정밀검사</th>
+                        <th>현재가<div style="font-size:0.72rem; font-weight:400; color:#cbd5e1">보유수량</div></th>
+                        <th>평단가<div style="font-size:0.72rem; font-weight:400; color:#cbd5e1">평가금액</div></th>
+                        <th>평가손익</th>
+                        <th>마지막 모아가기 매수</th>
+                        <th>다음 사이클</th>
+                    </tr>
+                </thead>
+                <tbody id="accumulateBody">
+                    <tr class="loading-row"><td colspan="7">로딩 중...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="mt-2 text-muted" style="font-size:0.72rem">
+            * 켜두면 등록한 코인은 아래 "🔬 정밀 매수조건"에서 켠 조건을 <b>통과할 때마다</b> 1회 매수 금액만큼 삽니다.
+            조건이 계속 맞아도 코인별로 매수 간격에 <b>1번까지만</b> 삽니다. 스크리닝·실거래 승인·최대 동시보유 종목수와는 무관하고,
+            관찰 모드여도 삽니다(여기서는 조건이 매수 신호입니다). 켜진 정밀조건이 하나도 없으면 사지 않습니다.
+            <br>* 등록 코인은 <b>자동으로 팔지 않습니다</b>(손절·익절·RSI 매도·물타기 전부 제외) — 팔 때는 업비트에서 직접 파세요.
+            위 실거래 표에서도 빠집니다. 모아가기를 끄면 다시 일반 종목과 똑같이 취급합니다.
+            <br>* 실거래 실행 스위치가 켜져 있어야 사고, <code>condition-check-bot</code>이 떠 있어야 검사 결과가 생깁니다.
+        </div>
+    </div>
+
     <div class="card-panel mb-3">
         <div class="section-title mb-2">⚙️ 매매 기준 설정</div>
         <!-- 전략 묶음(좋음/애매/나쁨) — 누르면 청산 값들이 묶음 값으로 한 번에 바뀐다(app/core/strategy_presets.py).
@@ -906,6 +957,7 @@
             renderConditions(json.conditions || [], json.condition_check_interval_sec,
                              json.conditions_observe_only);
             renderConditionSummary([...(json.candidates || []), ...(json.extra_positions || [])]);
+            renderAccumulate(json.accumulate);
 
             const dcaMaxCount = json.dca_max_count ?? 1;  // ??만 사용 — 0(물타기 완전 비활성화)은 유효한
                                                             // 값이므로 ||로 1로 뭉개면 안 됨(0/0회를 1회 가능처럼 표시하는 버그)
@@ -1184,6 +1236,83 @@
                     ${paramInputs}
                 </div>`;
         }).join('');
+    }
+
+    // ── 모아가기. 입력칸은 처음 한 번(또는 저장 직후)만 채운다 — 새로고침할 때마다 덮어쓰면 입력 중인 값이 날아간다.
+    let _accumulateFormLoaded = false;
+
+    function renderAccumulate(acc) {
+        if (!acc) return;
+        if (!_accumulateFormLoaded) {
+            document.getElementById('accumulateEnabled').checked = !!acc.enabled;
+            document.getElementById('accumulateTickers').value = (acc.tickers || []).map(t => t.replace(/^KRW-/, '')).join(', ');
+            document.getElementById('accumulateAmount').value = acc.amount_krw ?? '';
+            document.getElementById('accumulateInterval').value = acc.interval_hours ?? '';
+            _accumulateFormLoaded = true;
+        }
+        const state = document.getElementById('accumulateStateText');
+        const names = (acc.tickers || []).map(t => t.replace(/^KRW-/, '')).join(', ') || '등록 코인 없음';
+        state.innerHTML = acc.enabled
+            ? `<span class="text-success">켜짐</span> · ${escapeAttr(names)} · ${fmtKrw(acc.amount_krw)} · ${acc.interval_hours}시간에 1번`
+            : '꺼짐';
+
+        const body = document.getElementById('accumulateBody');
+        const rows = acc.rows || [];
+        if (!rows.length) {
+            body.innerHTML = '<tr><td colspan="7" class="text-muted">등록한 코인이 없습니다.</td></tr>';
+            return;
+        }
+        const conditionsOn = _conditions.some(c => c.enabled);
+        body.innerHTML = rows.map(r => {
+            let cond;
+            if (!conditionsOn) cond = '<span class="text-muted">조건 꺼짐</span>';
+            else if (r.condition_passed === null || r.condition_passed === undefined) cond = '<span class="signal-badge signal-badge-mild">검사 없음</span>';
+            else if (r.condition_passed) cond = `<span class="signal-badge signal-badge-good" title="${escapeAttr(conditionDetailText(r.condition_detail))}">통과</span>`;
+            else cond = `<span class="signal-badge signal-badge-mild" title="${escapeAttr(conditionDetailText(r.condition_detail))}">미충족</span>`;
+            cond += conditionItemsHtml(r.condition_detail);
+            if (r.condition_checked_at) cond += `<div style="font-size:0.64rem; color:#94a3b8">${r.condition_checked_at}</div>`;
+            const pnlKrw = (r.eval_amount !== null && r.eval_amount !== undefined && r.avg_buy_price && r.qty)
+                ? r.eval_amount - r.avg_buy_price * r.qty : null;
+            let next;
+            if (!acc.enabled) next = '<span class="text-muted">꺼짐</span>';
+            else if (r.next_action === 'BUY') next = `<span class="decision-badge decision-BUY">${fmtKrw(acc.amount_krw)} 매수</span>`;
+            else next = `<span class="text-muted" style="font-size:0.74rem">${escapeAttr((r.next_reason || '').replace(/^모아가기: /, ''))}</span>`;
+            return `<tr>
+                <td><b>${escapeAttr(r.ticker)}</b></td>
+                <td style="text-align:center">${cond}</td>
+                <td>${fmtKrw(r.current_price)}<div style="font-size:0.72rem; color:#94a3b8">${fmtQty(r.qty)}</div></td>
+                <td>${fmtKrw(r.avg_buy_price)}<div style="font-size:0.72rem; color:#94a3b8">${fmtKrw(r.eval_amount)}</div></td>
+                <td>${pnlSpan(pnlKrw, r.pnl_pct)}</td>
+                <td>${r.last_buy_at ? escapeAttr(r.last_buy_at) : '<span class="empty-val">—</span>'}</td>
+                <td>${next}</td>
+            </tr>`;
+        }).join('');
+    }
+
+    async function saveAccumulate() {
+        const msg = document.getElementById('accumulateSavedMsg');
+        try {
+            const res = await fetch('api/auto-trade/accumulate/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    enabled: document.getElementById('accumulateEnabled').checked,
+                    tickers: document.getElementById('accumulateTickers').value,
+                    amount_krw: Number(document.getElementById('accumulateAmount').value),
+                    interval_hours: Number(document.getElementById('accumulateInterval').value),
+                }),
+            });
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+            msg.textContent = '저장됨 · 다음 사이클부터 적용';
+            msg.className = 'text-success';
+            _accumulateFormLoaded = false;
+            await loadLiveSummary();
+        } catch (e) {
+            msg.textContent = '저장 실패: ' + e.message;
+            msg.className = 'text-danger';
+        }
+        setTimeout(() => { msg.textContent = ''; }, 4000);
     }
 
     async function saveConditions() {

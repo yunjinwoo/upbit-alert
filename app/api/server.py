@@ -48,6 +48,7 @@ from app.utils.db_manager import (
     set_position_dca_enabled,
     set_candidate_condition_watch,
     set_trade_condition_setting,
+    set_accumulate_settings,
     get_trade_order_log,
     count_trade_order_log,
     get_trade_fill_rows,
@@ -1303,6 +1304,35 @@ def set_trade_strategy_settings_api():
         settings = set_trade_strategy_settings(**kwargs)
         return jsonify({'status': 'success', 'settings': settings})
     except (ValueError, TypeError) as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/auto-trade/accumulate/settings', methods=['POST'])
+def set_accumulate_settings_api():
+    """모아가기 설정 저장(부분 갱신, docs/auto-trade-accumulate.md). body: {enabled?, tickers?, amount_krw?,
+    interval_hours?}. tickers는 'BTC, ETH' 문자열이나 배열 — 'KRW-' 없이 써도 붙여서 저장한다."""
+    body = request.get_json(silent=True) or {}
+    try:
+        kwargs = {}
+        if 'enabled' in body:
+            kwargs['enabled'] = bool(body['enabled'])
+        if 'tickers' in body:
+            kwargs['tickers'] = body['tickers']
+        if 'amount_krw' in body:
+            v = float(body['amount_krw'])
+            if v < Config.TRADE_MIN_ORDER_KRW:
+                raise ValueError(f'1회 매수 금액은 {Config.TRADE_MIN_ORDER_KRW:,}원 이상이어야 합니다(업비트 최소 주문금액).')
+            kwargs['amount_krw'] = v
+        if 'interval_hours' in body:
+            v = float(body['interval_hours'])
+            if v <= 0:
+                raise ValueError('매수 간격(시간)은 0보다 커야 합니다.')
+            kwargs['interval_hours'] = v
+        saved = set_accumulate_settings(**kwargs)
+        app.logger.info(f"모아가기 설정 저장: {saved}")
+        return jsonify({'status': 'success', 'settings': saved})
+    except (TypeError, ValueError) as e:
         return jsonify({'status': 'error', 'message': str(e)}), 400
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500

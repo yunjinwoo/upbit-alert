@@ -695,6 +695,20 @@ def init_db():
         )
     ''')
 
+    # 모아가기(docs/auto-trade-accumulate.md) — 브로커별 1행. 등록한 코인은 정밀 매수조건을 통과하면
+    # amount_krw만큼 사고(interval_hours마다 최대 1번), 자동 매도(손절/익절/RSI/물타기)는 하지 않는다.
+    # tickers는 'KRW-BTC,KRW-ETH'처럼 쉼표로 이어 저장한다. 기본 꺼짐.
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS trade_accumulate_settings (
+            broker TEXT PRIMARY KEY,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            tickers TEXT NOT NULL DEFAULT '',
+            amount_krw REAL NOT NULL DEFAULT 10000,
+            interval_hours REAL NOT NULL DEFAULT 24,
+            updated_at TEXT
+        )
+    ''')
+
     # 기존 테이블 컬럼 마이그레이션
     migrations = [
         'ALTER TABLE stock_market_cap_daily ADD COLUMN market_weight TEXT DEFAULT "0"',
@@ -5004,6 +5018,95 @@ def get_last_sell_times(broker: str, mode: str, since: str) -> dict:
         WHERE broker = ? AND mode = ? AND decision = 'SELL' AND created_at >= ?
         GROUP BY ticker
     ''', (broker, mode, since))
+    rows = cursor.fetchall()
+    conn.close()
+    return {ticker: at for ticker, at in rows}
+
+
+ACCUMULATE_REASON_PREFIX = '모아가기'
+
+
+def _parse_accumulate_tickers(raw) -> list:
+    """'btc, KRW-ETH' 같은 입력을 ['KRW-BTC', 'KRW-ETH']로 정리(중복 제거, 입력 순서 유지)."""
+    if isinstance(raw, (list, tuple)):
+        parts = raw
+    else:
+        parts = str(raw or '').replace('\n', ',').split(',')
+    tickers = []
+    for part in parts:
+        t = str(part).strip().upper()
+        if not t:
+            continue
+        if '-' not in t:
+            t = f'KRW-{t}'
+        if t not in tickers:
+            tickers.append(t)
+    return tickers
+
+
+def get_accumulate_settings(broker: str = 'upbit') -> dict:
+    """모아가기 설정 조회 — 행이 없으면 기본값(꺼짐, 코인 없음, 1만원, 24시간)."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM trade_accumulate_settings WHERE broker = ?', (broker,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return {'enabled': False, 'tickers': [], 'amount_krw': 10000.0, 'interval_hours': 24.0, 'updated_at': None}
+    return {
+        'enabled': bool(row['enabled']),
+        'tickers': _parse_accumulate_tickers(row['tickers']),
+        'amount_krw': row['amount_krw'],
+        'interval_hours': row['interval_hours'],
+        'updated_at': row['updated_at'],
+    }
+
+
+def set_accumulate_settings(enabled: bool = None, tickers=None, amount_krw: float = None,
+                            interval_hours: float = None, broker: str = 'upbit') -> dict:
+    """모아가기 설정 저장(부분 갱신 — None인 필드는 기존값 유지). 저장된 값을 반환."""
+    current = get_accumulate_settings(broker)
+    merged = {
+        'enabled': bool(enabled) if enabled is not None else current['enabled'],
+        'tickers': _parse_accumulate_tickers(tickers) if tickers is not None else current['tickers'],
+        'amount_krw': float(amount_krw) if amount_krw is not None else current['amount_krw'],
+        'interval_hours': float(interval_hours) if interval_hours is not None else current['interval_hours'],
+    }
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO trade_accumulate_settings (broker, enabled, tickers, amount_krw, interval_hours, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(broker) DO UPDATE SET
+            enabled=excluded.enabled, tickers=excluded.tickers, amount_krw=excluded.amount_krw,
+            interval_hours=excluded.interval_hours, updated_at=excluded.updated_at
+    ''', (broker, int(merged['enabled']), ','.join(merged['tickers']), merged['amount_krw'],
+          merged['interval_hours'], timestamp))
+    conn.commit()
+    conn.close()
+    merged['updated_at'] = timestamp
+    return merged
+
+
+def get_active_accumulate_tickers(broker: str = 'upbit') -> set:
+    """모아가기가 켜져 있을 때만 등록 코인 집합, 꺼져 있으면 빈 집합 — 일반 매매(진입/청산)에서
+    빼야 할 종목을 고를 때 쓴다(꺼두면 등록해둔 코인도 원래대로 일반 매매 대상)."""
+    s = get_accumulate_settings(broker)
+    return set(s['tickers']) if s['enabled'] else set()
+
+
+def get_last_accumulate_buy_times(broker: str, mode: str) -> dict:
+    """모아가기로 체결된 종목별 마지막 매수 시각 {ticker: created_at}. 실패한 주문은 SKIP으로
+    기록되므로 decision='BUY'만 보면 실제 체결분만 잡힌다."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT ticker, MAX(created_at) FROM trade_order_log
+        WHERE broker = ? AND mode = ? AND decision = 'BUY' AND reason LIKE ?
+        GROUP BY ticker
+    ''', (broker, mode, ACCUMULATE_REASON_PREFIX + '%'))
     rows = cursor.fetchall()
     conn.close()
     return {ticker: at for ticker, at in rows}

@@ -607,3 +607,57 @@ def invested_gauge_fields(qty, avg_buy_price, per_position_cap_krw) -> dict:
         'cost_basis': cost_basis,
         'invested_ratio': (cost_basis / per_position_cap_krw) if per_position_cap_krw else None,
     }
+
+
+ACCUMULATE_STATUS_MAX_AGE_MIN = 15  # 정밀검사 결과가 이보다 오래됐으면(검사 루프가 멈춤) 모아가기 매수를 하지 않는다
+
+
+def evaluate_accumulation(tickers: List[str], cash_balance: float, amount_krw: float, interval_hours: float,
+                          conditions_enabled: bool, condition_status_map: dict, last_buy_at: dict,
+                          get_price_fn: Callable[[str], Optional[float]], now: datetime = None,
+                          max_status_age_min: float = ACCUMULATE_STATUS_MAX_AGE_MIN) -> List[TradeDecision]:
+    """모아가기(docs/auto-trade-accumulate.md) — 등록 코인마다 이번 사이클에 amount_krw만큼 살지 판단한다.
+
+    일반 진입(evaluate_entries)과 다른 점: 스크리닝 후보·실거래 승인·"이미 보유 중"·최대 보유 종목 수를
+    보지 않는다. 대신 정밀 매수조건 통과가 곧 매수 신호라서, 조건이 하나도 켜져 있지 않거나 검사 결과가
+    없거나 오래됐으면 사지 않는다(관찰 모드와도 무관 — 여기서는 조건이 게이트가 아니라 트리거다).
+    정밀검사는 1분마다 도므로 조건이 계속 맞는 동안 매번 사지 않도록 코인별로 interval_hours에 1번까지만 산다.
+
+    last_buy_at: {ticker: 마지막 모아가기 매수 시각}. now: 기준 시각(테스트용, 안 넘기면 지금)."""
+    decisions = []
+    condition_status_map = condition_status_map or {}
+    last_buy_at = last_buy_at or {}
+    now = now or datetime.now()
+
+    for ticker in tickers:
+        if not conditions_enabled:
+            decisions.append(TradeDecision(ticker, 'SKIP', reason='모아가기: 켜진 정밀조건 없음'))
+            continue
+        status = condition_status_map.get(ticker)
+        if not status:
+            decisions.append(TradeDecision(ticker, 'SKIP', reason='모아가기: 정밀조건 검사 결과 없음(검사 루프 확인 필요)'))
+            continue
+        age_hours = _hours_since(status.get('checked_at'), now)
+        if age_hours is None or age_hours * 60 > max_status_age_min:
+            decisions.append(TradeDecision(ticker, 'SKIP', reason='모아가기: 정밀조건 검사 결과가 오래됨(검사 루프 확인 필요)'))
+            continue
+        if not status.get('passed'):
+            decisions.append(TradeDecision(ticker, 'SKIP', reason='모아가기: 정밀조건 미충족'))
+            continue
+        if ticker in last_buy_at:
+            waited = _hours_since(last_buy_at[ticker], now)
+            if waited is not None and waited < interval_hours:
+                decisions.append(TradeDecision(
+                    ticker, 'SKIP', reason=f'모아가기: 매수 간격 대기({waited:.1f}/{interval_hours:g}시간)',
+                ))
+                continue
+        if cash_balance < amount_krw:
+            decisions.append(TradeDecision(ticker, 'SKIP', reason='모아가기: 현금 부족'))
+            continue
+        price = get_price_fn(ticker)
+        if not price:
+            decisions.append(TradeDecision(ticker, 'SKIP', reason='모아가기: 시세 조회 실패'))
+            continue
+        decisions.append(TradeDecision(ticker, 'BUY', reason='모아가기+정밀조건충족', price=price, amount_krw=amount_krw))
+        cash_balance -= amount_krw
+    return decisions
