@@ -66,6 +66,7 @@
 
 | 문서 | 요약 |
 |---|---|
+| [code-study-guide.md](code-study-guide.md) | 📖 **코드 공부 가이드** — 처음 읽는 사람용. 폴더 지도, 매매 사이클 한 바퀴, 최근 기능(재매수 대기·모아가기·강제매도 승인 해제·수렴 자동 매수)의 코드 위치, 추천 읽기 순서 |
 | [claude-usage-guide.md](claude-usage-guide.md) | 이 프로젝트에서 Claude로 작업·리뷰할 때의 원칙 (작업도 리뷰도 Claude인 워크플로우) |
 | [../upbit.md](../upbit.md) | 운영 가이드 — 서버 설치, PM2 프로세스 구성, Nginx, 배포, DB 테이블 |
 | [../code.md](../code.md) | 코드 구조 — 데이터 흐름, 핵심 모듈, 확장 가이드 |
