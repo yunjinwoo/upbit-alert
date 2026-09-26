@@ -43,6 +43,7 @@ _FIELDS = [
     ('TRADE_RECOVERY_PARTIAL_STOP_PCT', 'recovery_partial_stop_pct'),
     ('TRADE_RECOVERY_PARTIAL_STOP_RATIO', 'recovery_partial_stop_ratio'),
     ('TRADE_RECOVERY_PARTIAL_STOP_COOLDOWN_MIN', 'recovery_partial_stop_cooldown_min'),
+    ('TRADE_REENTRY_BLOCK_HOURS', 'reentry_block_hours'),
 ]
 
 
@@ -80,4 +81,6 @@ def describe(cfg: SimpleNamespace) -> str:
         parts.append(f"되돌림 익절 {cfg.TRADE_TRAILING_TP_ARM_PCT}→{cfg.TRADE_TRAILING_TP_FLOOR_PCT}%")
     if cfg.TRADE_RECOVERY_DCA_ENABLED:
         parts.append(f"회복형 물타기 {cfg.TRADE_RECOVERY_DCA_MAX_COUNT}회")
+    if getattr(cfg, 'TRADE_REENTRY_BLOCK_HOURS', 0):
+        parts.append(f"매도 후 {cfg.TRADE_REENTRY_BLOCK_HOURS:g}시간 재매수 금지")
     return ', '.join(parts)

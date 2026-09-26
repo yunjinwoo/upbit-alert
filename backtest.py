@@ -5,6 +5,7 @@
     python backtest.py run --selection gainers                    # 상승률 상위 10 + 현재 청산 로직
     python backtest.py run --compare                              # 선정 2종 × (현재 로직 / 기준선) 비교
     python backtest.py run --tight-stop --take-profit 30          # 짧은 손절 · 긴 수익 모드
+    python backtest.py run --reentry-block-hours 24               # 판 종목은 24시간 동안 다시 안 사기
 
 collect는 업비트 API에 닿아야 하므로 서버(49.247.202.50)에서 돌린다. run은 캐시만 읽으므로 어디서든
 돈다 — 한 번 모아두면 파라미터를 바꿔가며 몇 번이고 다시 돌릴 수 있다.
@@ -85,6 +86,7 @@ def _overrides(args) -> dict:
         'TRADE_TIGHT_STOP_ARM_PCT': args.tight_arm,
         'TRADE_TIGHT_STOP_TRAIL_PCT': args.tight_trail,
         'TRADE_RECOVERY_DCA_ENABLED': True if args.recovery else None,
+        'TRADE_REENTRY_BLOCK_HOURS': args.reentry_block_hours,
     }
 
 
@@ -191,6 +193,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument('--tight-trail', dest='tight_trail', type=float,
                        help='전환 후 허용 하락폭(%%, 고점 대비) 덮어쓰기')
     p_run.add_argument('--recovery', action='store_true', help='회복형 분할 물타기 모드로 돌리기')
+    p_run.add_argument('--reentry-block-hours', dest='reentry_block_hours', type=float,
+                       help='매도한 종목을 이 시간 동안 다시 사지 않는다(0=꺼짐). 예: --reentry-block-hours 24')
     p_run.add_argument('--json', help='상세 결과(주문 내역/자산 곡선)를 이 경로에 JSON으로 저장')
     p_run.set_defaults(func=cmd_run)
 

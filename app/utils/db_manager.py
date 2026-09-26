@@ -626,6 +626,7 @@ def init_db():
             recovery_partial_stop_pct REAL NOT NULL DEFAULT 30.0,
             recovery_partial_stop_ratio REAL NOT NULL DEFAULT 20.0,
             recovery_partial_stop_cooldown_min INTEGER NOT NULL DEFAULT 360,
+            reentry_block_hours REAL NOT NULL DEFAULT 0,
             updated_at TEXT,
             UNIQUE(broker)
         )
@@ -822,6 +823,8 @@ def init_db():
         'ALTER TABLE trade_strategy_settings ADD COLUMN tight_stop_trail_pct REAL NOT NULL DEFAULT 8.0',
         # RSI 매도 최소 수익률 — 손실 구간에서 RSI로 팔리지 않게(기존 행도 1.0%로 채워짐)
         'ALTER TABLE trade_strategy_settings ADD COLUMN rsi_exit_min_profit_pct REAL NOT NULL DEFAULT 1.0',
+        # 매도 후 재매수 대기(시간) — 0이면 꺼짐(기존 행도 0으로 채워져 동작 그대로)
+        'ALTER TABLE trade_strategy_settings ADD COLUMN reentry_block_hours REAL NOT NULL DEFAULT 0',
 
     ]
     for sql in migrations:
@@ -4546,6 +4549,7 @@ def get_trade_strategy_settings(broker: str = 'upbit') -> dict:
             'trailing_tp_enabled': Config.TRADE_TRAILING_TP_ENABLED,
             'trailing_tp_arm_pct': Config.TRADE_TRAILING_TP_ARM_PCT,
             'trailing_tp_floor_pct': Config.TRADE_TRAILING_TP_FLOOR_PCT,
+            'reentry_block_hours': Config.TRADE_REENTRY_BLOCK_HOURS,
             **_TIGHT_STOP_SETTING_DEFAULTS(),
             **_RECOVERY_SETTING_DEFAULTS(),
             'updated_at': None,
@@ -4569,6 +4573,7 @@ def get_trade_strategy_settings(broker: str = 'upbit') -> dict:
         'trailing_tp_enabled': bool(row['trailing_tp_enabled']) if 'trailing_tp_enabled' in row.keys() else Config.TRADE_TRAILING_TP_ENABLED,
         'trailing_tp_arm_pct': row['trailing_tp_arm_pct'] if 'trailing_tp_arm_pct' in row.keys() else Config.TRADE_TRAILING_TP_ARM_PCT,
         'trailing_tp_floor_pct': row['trailing_tp_floor_pct'] if 'trailing_tp_floor_pct' in row.keys() else Config.TRADE_TRAILING_TP_FLOOR_PCT,
+        'reentry_block_hours': row['reentry_block_hours'] if 'reentry_block_hours' in row.keys() else Config.TRADE_REENTRY_BLOCK_HOURS,
         **{
             key: (bool(row[key]) if key == 'tight_stop_enabled' else row[key]) if key in row.keys() else default
             for key, default in _TIGHT_STOP_SETTING_DEFAULTS().items()
@@ -4599,6 +4604,7 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
                                  recovery_max_invested_krw: float = None, recovery_time_stop_days: int = None,
                                  recovery_partial_stop_pct: float = None, recovery_partial_stop_ratio: float = None,
                                  recovery_partial_stop_cooldown_min: int = None,
+                                 reentry_block_hours: float = None,
                                  broker: str = 'upbit') -> dict:
     """매매 전략 파라미터 저장(upsert, 브로커별 1행, 부분 갱신 — None인 필드는 기존값 유지). 저장된 값을 반환.
 
@@ -4643,6 +4649,7 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
         'trailing_tp_enabled': trailing_tp_enabled if trailing_tp_enabled is not None else current['trailing_tp_enabled'],
         'trailing_tp_arm_pct': trailing_tp_arm_pct if trailing_tp_arm_pct is not None else current['trailing_tp_arm_pct'],
         'trailing_tp_floor_pct': trailing_tp_floor_pct if trailing_tp_floor_pct is not None else current['trailing_tp_floor_pct'],
+        'reentry_block_hours': reentry_block_hours if reentry_block_hours is not None else current['reentry_block_hours'],
     }
     for key in _TIGHT_STOP_SETTING_DEFAULTS():
         merged[key] = tight_stop_args[key] if tight_stop_args[key] is not None else current[key]
@@ -4676,9 +4683,9 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
              loop_interval_sec, stop_loss_confirm_cycles, dca_trigger_pct, dca_max_count,
              condition_check_interval_sec, conditions_observe_only, per_position_cap_krw,
              rsi_exit_enabled, rsi_exit_period, rsi_exit_overbought, rsi_exit_min_profit_pct,
-             trailing_tp_enabled, trailing_tp_arm_pct, trailing_tp_floor_pct,
+             trailing_tp_enabled, trailing_tp_arm_pct, trailing_tp_floor_pct, reentry_block_hours,
              {tight_stop_columns}, {recovery_columns}, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, {tight_stop_placeholders}, {recovery_placeholders}, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, {tight_stop_placeholders}, {recovery_placeholders}, ?)
         ON CONFLICT(broker) DO UPDATE SET
             max_position_krw=excluded.max_position_krw,
             max_concurrent_positions=excluded.max_concurrent_positions,
@@ -4697,6 +4704,7 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
             trailing_tp_enabled=excluded.trailing_tp_enabled,
             trailing_tp_arm_pct=excluded.trailing_tp_arm_pct,
             trailing_tp_floor_pct=excluded.trailing_tp_floor_pct,
+            reentry_block_hours=excluded.reentry_block_hours,
             per_position_cap_krw=excluded.per_position_cap_krw,
             {tight_stop_updates},
             {recovery_updates},
@@ -4707,7 +4715,8 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
           int(bool(merged['conditions_observe_only'])), merged['per_position_cap_krw'],
           int(bool(merged['rsi_exit_enabled'])), merged['rsi_exit_period'],
           merged['rsi_exit_overbought'], merged['rsi_exit_min_profit_pct'], int(bool(merged['trailing_tp_enabled'])), merged['trailing_tp_arm_pct'],
-          merged['trailing_tp_floor_pct'], *tight_stop_values, *recovery_values, timestamp))
+          merged['trailing_tp_floor_pct'], merged['reentry_block_hours'],
+          *tight_stop_values, *recovery_values, timestamp))
     conn.commit()
     conn.close()
     merged['updated_at'] = timestamp
@@ -4982,6 +4991,22 @@ def count_trade_order_log(broker: str = None, mode: str = None, ticker: str = No
     count = cursor.fetchone()[0]
     conn.close()
     return count
+
+
+def get_last_sell_times(broker: str, mode: str, since: str) -> dict:
+    """since('%Y-%m-%d %H:%M:%S') 이후 매도가 체결된 종목별 마지막 매도 시각 {ticker: created_at}.
+    매도 후 재매수 대기(trade_strategy_settings.reentry_block_hours) 판정용 — 실패한 매도는 SKIP으로
+    기록되므로 decision='SELL'만 보면 실제 체결분만 잡힌다(자동 청산·강제매도 모두 포함)."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT ticker, MAX(created_at) FROM trade_order_log
+        WHERE broker = ? AND mode = ? AND decision = 'SELL' AND created_at >= ?
+        GROUP BY ticker
+    ''', (broker, mode, since))
+    rows = cursor.fetchall()
+    conn.close()
+    return {ticker: at for ticker, at in rows}
 
 
 def get_trade_fill_rows(broker: str, mode: str) -> list:

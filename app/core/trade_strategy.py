@@ -504,9 +504,22 @@ def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional
     return decisions
 
 
+def _hours_since(at, now: datetime) -> Optional[float]:
+    """at(문자열 '%Y-%m-%d %H:%M:%S' 또는 datetime)부터 now까지 몇 시간 지났는지. 못 읽으면 None."""
+    if isinstance(at, str):
+        try:
+            at = datetime.strptime(at[:19], '%Y-%m-%d %H:%M:%S')
+        except ValueError:
+            return None
+    if not isinstance(at, datetime):
+        return None
+    return (now - at).total_seconds() / 3600
+
+
 def evaluate_entries(candidates: List[dict], positions: List[dict], cash_balance: float,
                       get_price_fn: Callable[[str], Optional[float]], cfg,
-                      conditions_active: bool = False, condition_status_map: dict = None) -> List[TradeDecision]:
+                      conditions_active: bool = False, condition_status_map: dict = None,
+                      last_sell_at: dict = None, now: datetime = None) -> List[TradeDecision]:
     """진입 후보(coin_screening_daily 필터 결과) 중 신규 매수 대상을 판단한다.
     한 사이클 안에서 여러 종목을 연속 매수할 수 있으므로, 판단 도중 보유 종목 수/가상 현금을
     누적 반영해가며 계산한다(실제 체결은 auto_trader.py가 순차 실행).
@@ -517,11 +530,17 @@ def evaluate_entries(candidates: List[dict], positions: List[dict], cash_balance
     조건을 하나도 안 켜면 False라 기존과 동일하게(추가 제약 없이) 판단한다.
     condition_status_map: entry_condition_checker.py가 캐시해둔 {ticker: {passed, detail, checked_at}}.
     조건이 켜져 있는데 아직 검사 결과가 없거나(검사 루프가 안 떠 있음) 통과 못 했으면 SKIP — DB 접근은
-    호출부(auto_trader.py)에서 이미 끝났고, 여기선 값만 읽는 순수 함수로 유지."""
+    호출부(auto_trader.py)에서 이미 끝났고, 여기선 값만 읽는 순수 함수로 유지.
+    last_sell_at: {ticker: 마지막 매도 체결 시각('%Y-%m-%d %H:%M:%S' 문자열 또는 datetime)}.
+    cfg.TRADE_REENTRY_BLOCK_HOURS가 0보다 크면 그 시간 안에 판 종목은 다시 사지 않는다(SKIP).
+    now: 대기 시간 계산 기준 시각 — 백테스트는 과거 시각을 넘겨야 한다(안 넘기면 지금)."""
     decisions = []
     held_tickers = {p['ticker'] for p in positions}
     open_count = len(positions)
     condition_status_map = condition_status_map or {}
+    reentry_block_hours = float(getattr(cfg, 'TRADE_REENTRY_BLOCK_HOURS', 0) or 0)
+    last_sell_at = last_sell_at or {}
+    now = now or datetime.now()
 
     for cand in candidates:
         ticker = cand['ticker']
@@ -529,6 +548,14 @@ def evaluate_entries(candidates: List[dict], positions: List[dict], cash_balance
         if ticker in held_tickers:
             decisions.append(TradeDecision(ticker, 'SKIP', reason='이미 보유 중'))
             continue
+        if reentry_block_hours > 0 and ticker in last_sell_at:
+            waited_hours = _hours_since(last_sell_at[ticker], now)
+            if waited_hours is not None and waited_hours < reentry_block_hours:
+                decisions.append(TradeDecision(
+                    ticker, 'SKIP',
+                    reason=f'매도 후 재매수 대기({waited_hours:.1f}/{reentry_block_hours:g}시간)',
+                ))
+                continue
         if open_count >= cfg.TRADE_MAX_CONCURRENT_POSITIONS:
             decisions.append(TradeDecision(ticker, 'SKIP', reason='최대 동시보유 종목 수 도달'))
             continue
