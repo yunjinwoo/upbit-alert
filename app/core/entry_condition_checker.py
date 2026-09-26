@@ -10,6 +10,7 @@ main.py의 start_all()에는 포함하지 않음). auto_trader.py의 evaluate_en
 검사 대상은 매매 루프가 진입 판단에서 보는 집합과 같아야 한다 — run_trade_cycle()은 승인(approved)
 ∩ 매매대상(watchlist)으로 좁힌 뒤 게이트를 적용하므로, 여기서도 같은 교집합만 검사한다. 조건을
 하나도 안 켜뒀으면 게이트 자체가 없으니 조회도 하지 않는다(부하 0).
+모아가기(docs/auto-trade-accumulate.md)가 켜져 있으면 등록 코인도 같이 검사한다.
 """
 import time
 
@@ -24,6 +25,7 @@ from app.utils.db_manager import (
     save_condition_status,
     save_job_run_log,
     get_trade_strategy_settings,
+    get_active_accumulate_tickers,
 )
 
 logger = get_logger()
@@ -55,8 +57,10 @@ def run_condition_check_cycle(trigger_type: str = None) -> dict:
         if not any(c['enabled'] for c in condition_settings):
             tickers = set()  # 켜진 조건이 없으면 게이트가 없는 것과 같아 캔들 조회를 아예 안 한다.
         else:
-            tickers = (get_approved_candidate_tickers(BROKER, MODE)
-                       & get_watchlist_tickers(BROKER, MODE))
+            # 모아가기 코인(켜져 있을 때)은 승인/매매대상과 무관하게 검사한다 — 검사 통과가 곧 매수 신호다.
+            tickers = ((get_approved_candidate_tickers(BROKER, MODE)
+                        & get_watchlist_tickers(BROKER, MODE))
+                       | get_active_accumulate_tickers(BROKER))
         for ticker in tickers:
             try:
                 result = evaluate_conditions(ticker, condition_settings, _get_candles)

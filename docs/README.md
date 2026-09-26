@@ -17,6 +17,7 @@
 | [auto-trade-toss-live.md](auto-trade-toss-live.md) | ✅ 운영 중 (2026-08-22~) | 토스증권 실거래 — 업비트 실거래와 동일 구조, 정수 주 단위·체결 폴링만 다름 |
 | [auto-trade-recovery-dca.md](auto-trade-recovery-dca.md) | ✅ 구현 완료 · 기본 꺼짐 | 회복형 분할 물타기 — 깊은 하락에서 소액 분할매수 → 소폭 반등 익절 반복 + 하드캡(투입 상한 · 소액 손절 · 시간 하드스톱) |
 | [auto-trade-tight-stop.md](auto-trade-tight-stop.md) | ✅ 구현 완료 · 기본 꺼짐 | 짧은 손절 · 긴 수익 — 손실을 끊는 폭과 수익을 지키는 폭을 분리(전환 전 평단 대비 짧은 손절 → 전환 후 고점 대비 긴 트레일링, 물타기 없음) |
+| [auto-trade-accumulate.md](auto-trade-accumulate.md) | ✅ 구현 완료 · 기본 꺼짐 | 모아가기 — 등록 코인(BTC/ETH 등)은 정밀 매수조건을 통과하면 정해둔 금액만큼 매수(코인별 간격에 1번), 자동 매도 없음 |
 | [auto-trade-downside-watch.md](auto-trade-downside-watch.md) | ✅ Phase 1 머지됨 (PR #62, 2026-09-03) · Phase 2 미정 | 하락위험 코인 관심목록 — 매수 파이프라인의 거울상, 표시 전용 |
 | [auto-trade-performance.md](auto-trade-performance.md) | ✅ 머지됨 (PR #71, 2026-09-18) | 매매 성과 화면 — 매수→매도를 한 사이클로 묶어 승률·누적 손익·진입 신호별 기여도 조회 (읽기 전용) |
 | [auto-trade-market-indicators.md](auto-trade-market-indicators.md) | ✅ 구현 완료 (2026-09-23) · 주봉 RSI 조건 기본 꺼짐 | 정밀 매수조건 "주봉 RSI ≥ 65" + 자동매매 화면 시장 지표 카드(BTC RSI 4시간봉/일봉/주봉 · BTC 도미넌스, 표시 전용) |
