@@ -139,6 +139,9 @@ def run_backtest(md: MarketData, cfg, params: BacktestParams) -> BacktestResult:
     """
     cash = float(params.initial_cash)
     positions: Dict[str, dict] = {}
+    # 종목별 마지막 매도 체결 시각 — 매도 후 재매수 대기(cfg.TRADE_REENTRY_BLOCK_HOURS) 판정용.
+    # 실매매가 trade_order_log의 마지막 SELL 시각을 넘기는 것과 같은 역할이다.
+    last_sell_at: Dict[str, datetime] = {}
     result = BacktestResult(params=params, market_count=len(md.markets))
     timestamps = md.timestamps
     result.candle_count = len(timestamps)
@@ -177,6 +180,8 @@ def run_backtest(md: MarketData, cfg, params: BacktestParams) -> BacktestResult:
         for decision in exit_decisions:
             cash, sold = _apply_exit(decision, positions, md, ts, cash, params, result)
             sold_this_cycle = sold_this_cycle or sold
+            if sold:
+                last_sell_at[decision.ticker] = now
 
         # ---- 진입 판단 -------------------------------------------------------
         # 매도가 나간 사이클에는 신규 진입을 건너뛴다 — 실거래 루프(auto_trader.run_trade_cycle)가
@@ -187,7 +192,8 @@ def run_backtest(md: MarketData, cfg, params: BacktestParams) -> BacktestResult:
 
         ranked = md.rank(ts, params.selection, params.top_n, params.min_trade_value_krw)
         candidates = [{'ticker': r['ticker'], 'entry_reason': entry_reason} for r in ranked]
-        entry_decisions = evaluate_entries(candidates, list(positions.values()), cash, price_fn, cfg)
+        entry_decisions = evaluate_entries(candidates, list(positions.values()), cash, price_fn, cfg,
+                                           last_sell_at=last_sell_at, now=now)
         for decision in entry_decisions:
             cash = _apply_entry(decision, positions, md, ts, cash, params, result)
 

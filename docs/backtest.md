@@ -82,6 +82,9 @@ python backtest.py run --take-profit 7 --stop-loss 3 --trailing-tp --min-trade-v
 
 # 짧은 손절 · 긴 수익 모드(docs/auto-trade-tight-stop.md) — 익절을 높게 둬야 수익이 안 잘린다
 python backtest.py run --selection gainers --tight-stop --take-profit 30
+
+# 매도 후 재매수 대기 — 판 종목은 24시간 동안 다시 사지 않는다(0=꺼짐, 실거래 설정의 "매도 후 재매수 대기")
+python backtest.py run --compare --reentry-block-hours 24
 ```
 
 `--from-db`를 주면 `app/config.py` 기본값 대신 대시보드에 저장된 설정으로 돌린다 —

@@ -177,6 +177,10 @@ class Config:
     TRADE_RECOVERY_PARTIAL_STOP_PCT = 30.0   # 물타기를 더 못 하게 된 뒤, 평단 대비 이 % 이상 하락하면 보유량 일부 매도(0=비활성)
     TRADE_RECOVERY_PARTIAL_STOP_RATIO = 20.0 # 위 조건에서 한 번에 덜어낼 보유 수량 비율(%)
     TRADE_RECOVERY_PARTIAL_STOP_COOLDOWN_MIN = 360  # 소액 손절 반복 최소 간격(분)
+    # ── 매도 후 재매수 대기 — 전량 매도(손절/익절/강제매도 모두)한 종목은 이 시간 동안 신규 매수 후보에서
+    # 뺀다. 손절한 코인이 여전히 스크리닝 후보·실거래 승인 상태라 5분 뒤 다시 사서 또 손절하는 반복을
+    # 막기 위함(2026-09-26 추가). 0이면 꺼짐 — 켜기 전까진 기존 동작 그대로.
+    TRADE_REENTRY_BLOCK_HOURS = 0.0
     TRADE_MIN_ORDER_KRW = 5_000              # 거래소 최소 주문금액 — 부분 매도 금액이 이 밑이면 쪼개지 말고 전량 매도한다
                                              # (업비트 실주문 검증값과 동일: app/core/brokers/upbit_live_broker.py)
 

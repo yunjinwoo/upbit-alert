@@ -9,7 +9,7 @@ python main.py trade 로 독립 프로세스 실행. main.py의 start_all()에�
 """
 import secrets
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pyupbit
@@ -42,6 +42,7 @@ from app.utils.db_manager import (
     get_trade_engine_settings,
     set_engine_last_cycle_at,
     get_approved_candidate_tickers,
+    get_last_sell_times,
     get_watchlist_tickers,
     get_trade_strategy_settings,
     update_position_tracking,
@@ -120,6 +121,7 @@ def _effective_strategy_config() -> SimpleNamespace:
         TRADE_RECOVERY_PARTIAL_STOP_RATIO=s['recovery_partial_stop_ratio'],
         TRADE_RECOVERY_PARTIAL_STOP_COOLDOWN_MIN=s['recovery_partial_stop_cooldown_min'],
         TRADE_MIN_ORDER_KRW=Config.TRADE_MIN_ORDER_KRW,
+        TRADE_REENTRY_BLOCK_HOURS=s['reentry_block_hours'],
     )
 
 
@@ -354,9 +356,16 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
             conditions_active = conditions_gate_active(broker.broker_name)
             condition_status_map = get_condition_status_map(broker.broker_name, broker.mode)
 
+            # 매도 후 재매수 대기(기본 꺼짐) — 대기 시간 안에 판 종목의 마지막 매도 시각만 넘긴다.
+            last_sell_at = {}
+            if strategy_cfg.TRADE_REENTRY_BLOCK_HOURS > 0:
+                since = (datetime.now() - timedelta(hours=strategy_cfg.TRADE_REENTRY_BLOCK_HOURS)).strftime('%Y-%m-%d %H:%M:%S')
+                last_sell_at = get_last_sell_times(broker.broker_name, broker.mode, since)
+
             entry_decisions = evaluate_entries(
                 candidates, positions, account['cash_balance'], broker.get_current_price, strategy_cfg,
                 conditions_active=conditions_active, condition_status_map=condition_status_map,
+                last_sell_at=last_sell_at,
             )
             for decision in entry_decisions:
                 _execute(decision, broker)
@@ -616,10 +625,23 @@ def get_live_dashboard_summary() -> dict:
     rsi_map = _build_rsi_map([p['ticker'] for p in preview_positions], strategy_cfg)
     preview_by_ticker = {d.ticker: d for d in evaluate_exits(preview_positions, cached_price, strategy_cfg, rsi_map=rsi_map)}
 
+    # 매도 후 재매수 대기(기본 꺼짐) — 미보유 행에 "몇 시간 더 기다리는지"를 보여주기 위함.
+    # 판정은 run_trade_cycle과 같은 기준(trade_order_log의 마지막 SELL 시각)이다.
+    reentry_block_hours = strategy_cfg.TRADE_REENTRY_BLOCK_HOURS or 0
+    reentry_last_sell = {}
+    if reentry_block_hours > 0:
+        since = (datetime.now() - timedelta(hours=reentry_block_hours)).strftime('%Y-%m-%d %H:%M:%S')
+        reentry_last_sell = get_last_sell_times(broker.broker_name, broker.mode, since)
+
     candidates = [c for c in all_candidates if c['ticker'] in watchlist_tickers]
     for cand in candidates:
         ticker = cand['ticker']
         cand['approved'] = ticker in approved_tickers
+        cand['reentry_wait_hours'] = None
+        if ticker in reentry_last_sell:
+            waited = (datetime.now() - datetime.strptime(reentry_last_sell[ticker][:19], '%Y-%m-%d %H:%M:%S')).total_seconds() / 3600
+            if waited < reentry_block_hours:
+                cand['reentry_wait_hours'] = round(reentry_block_hours - waited, 1)
         cand.update(_condition_fields(ticker))
         pos = real_positions.get(ticker)
         if pos:

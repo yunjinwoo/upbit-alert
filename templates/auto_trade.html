@@ -283,6 +283,10 @@
                     <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">1종목당 투입원금 상한(원)</label>
                     <input type="number" id="setPerPositionCap" class="form-control form-control-sm" style="width:150px" min="1" step="10000">
                 </div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b" title="판 종목은 이 시간 동안 다시 사지 않습니다. 0이면 꺼짐">매도 후 재매수 대기(시간, 0=꺼짐)</label>
+                    <input type="number" id="setReentryBlockHours" class="form-control form-control-sm" style="width:110px" min="0" step="1">
+                </div>
             </div>
             <div class="settings-group">
                 <div class="settings-group-label">RSI 매도 (15분봉)</div>
@@ -710,6 +714,9 @@
     // tight/recovery: 이 행에 적용되는 청산 모드 — 산 시점 규칙이 고정된 종목은 전체 설정과 다를 수 있다
     function liveStatusBadge(row, dcaMaxCount, tight = LIVE_TIGHT_STOP, recovery = LIVE_RECOVERY.enabled) {
         if (!row.held) {
+            if (row.approved && row.reentry_wait_hours != null) {
+                return `<span class="decision-badge decision-SKIP">⏳ 매도 후 재매수 대기(${row.reentry_wait_hours}시간 남음)</span>`;
+            }
             return row.approved
                 ? '<span class="decision-badge decision-SKIP">미보유(매수판단 대상)</span>'
                 : '<span class="empty-val">미승인</span>';
@@ -1405,7 +1412,7 @@
         }
     }
 
-    const SETTINGS_INPUT_IDS = ['setMaxPosition', 'setMaxPositions', 'setStopLoss', 'setTakeProfit', 'setLoopInterval', 'setStopConfirm', 'setDcaTrigger', 'setDcaMaxCount', 'setPerPositionCap', 'setRsiExitEnabled', 'setRsiExitPeriod', 'setRsiExitOverbought', 'setRsiExitMinProfit', 'setTrailingTpEnabled', 'setTrailingTpArm', 'setTrailingTpFloor', 'setTightStopEnabled', 'setTightStopInitial', 'setTightStopArm', 'setTightStopTrail', 'setRecoveryEnabled', 'setRecoveryTrigger', 'setRecoveryAmount', 'setRecoveryCooldown', 'setRecoveryTakeProfit', 'setRecoveryMaxCount', 'setRecoveryMaxInvested', 'setRecoveryTimeStopDays', 'setRecoveryPartialPct', 'setRecoveryPartialRatio', 'setRecoveryPartialCooldown'];
+    const SETTINGS_INPUT_IDS = ['setMaxPosition', 'setMaxPositions', 'setStopLoss', 'setTakeProfit', 'setLoopInterval', 'setStopConfirm', 'setDcaTrigger', 'setDcaMaxCount', 'setPerPositionCap', 'setReentryBlockHours', 'setRsiExitEnabled', 'setRsiExitPeriod', 'setRsiExitOverbought', 'setRsiExitMinProfit', 'setTrailingTpEnabled', 'setTrailingTpArm', 'setTrailingTpFloor', 'setTightStopEnabled', 'setTightStopInitial', 'setTightStopArm', 'setTightStopTrail', 'setRecoveryEnabled', 'setRecoveryTrigger', 'setRecoveryAmount', 'setRecoveryCooldown', 'setRecoveryTakeProfit', 'setRecoveryMaxCount', 'setRecoveryMaxInvested', 'setRecoveryTimeStopDays', 'setRecoveryPartialPct', 'setRecoveryPartialRatio', 'setRecoveryPartialCooldown'];
 
     function populateSettingsInputs(settings) {
         // 사용자가 입력창 하나를 타이핑 중인 동안엔 이번 새로고침으로 값을 덮어쓰지 않음
@@ -1419,6 +1426,7 @@
         document.getElementById('setDcaTrigger').value = settings.dca_trigger_pct ?? '';
         document.getElementById('setDcaMaxCount').value = settings.dca_max_count ?? '';
         document.getElementById('setPerPositionCap').value = settings.per_position_cap_krw ?? '';
+        document.getElementById('setReentryBlockHours').value = settings.reentry_block_hours ?? '';
         document.getElementById('setRsiExitEnabled').checked = !!settings.rsi_exit_enabled;
         document.getElementById('setRsiExitPeriod').value = settings.rsi_exit_period ?? '';
         document.getElementById('setRsiExitOverbought').value = settings.rsi_exit_overbought ?? '';
@@ -1454,6 +1462,7 @@
             dca_trigger_pct: Number(document.getElementById('setDcaTrigger').value),
             dca_max_count: Number(document.getElementById('setDcaMaxCount').value),
             per_position_cap_krw: Number(document.getElementById('setPerPositionCap').value),
+            reentry_block_hours: Number(document.getElementById('setReentryBlockHours').value),
             rsi_exit_enabled: document.getElementById('setRsiExitEnabled').checked,
             rsi_exit_period: Number(document.getElementById('setRsiExitPeriod').value),
             rsi_exit_overbought: Number(document.getElementById('setRsiExitOverbought').value),

@@ -1115,7 +1115,8 @@ def set_trade_strategy_settings_api():
     새 값을 적용하므로 재시작이 필요 없습니다. body는 아래 필드 중 바꿀 것만 보내면 됩니다(부분 갱신):
     {max_position_krw, max_concurrent_positions, stop_loss_pct, take_profit_pct, loop_interval_sec,
      stop_loss_confirm_cycles, dca_trigger_pct, dca_max_count, rsi_exit_enabled, rsi_exit_period,
-     rsi_exit_overbought, rsi_exit_min_profit_pct, trailing_tp_enabled, trailing_tp_arm_pct, trailing_tp_floor_pct}
+     rsi_exit_overbought, rsi_exit_min_profit_pct, trailing_tp_enabled, trailing_tp_arm_pct, trailing_tp_floor_pct,
+     reentry_block_hours}
 
     짧은 손절 · 긴 수익(docs/auto-trade-tight-stop.md) 파라미터도 같은 방식으로 부분 갱신한다:
     {tight_stop_enabled, tight_stop_initial_pct, tight_stop_arm_pct, tight_stop_trail_pct}
@@ -1194,6 +1195,11 @@ def set_trade_strategy_settings_api():
             if v < 0:
                 raise ValueError('RSI 매도 최소 수익률(%)은 0 이상이어야 합니다.')
             kwargs['rsi_exit_min_profit_pct'] = v
+        if 'reentry_block_hours' in body:
+            v = float(body['reentry_block_hours'])
+            if v < 0:
+                raise ValueError('매도 후 재매수 대기 시간은 0 이상이어야 합니다(0=꺼짐).')
+            kwargs['reentry_block_hours'] = v
 
         if 'trailing_tp_enabled' in body:
             kwargs['trailing_tp_enabled'] = bool(body['trailing_tp_enabled'])
