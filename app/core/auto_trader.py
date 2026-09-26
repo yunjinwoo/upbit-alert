@@ -60,7 +60,12 @@ from app.utils.db_manager import (
     get_accumulate_settings,
     get_active_accumulate_tickers,
     get_last_accumulate_buy_times,
+    get_convergence_settings,
+    get_convergence_buys_since,
+    get_recently_traded_tickers,
+    save_convergence_scan,
 )
+from app.core.convergence_buy import scan_market as scan_convergence_market, pick_buys as pick_convergence_buys
 
 logger = get_logger()
 
@@ -273,6 +278,74 @@ def _reconcile_live_positions(broker) -> None:
             delete_paper_position(broker.broker_name, broker.mode, ticker)
 
 
+def _track_new_live_position(broker, ticker: str, label: str) -> None:
+    """실거래 매수 직후 추적 행(paper_positions)을 바로 만든다 — 승인 종목이 아니면 다음 사이클의
+    _reconcile_live_positions()가 "관리 범위 밖"으로 보고 무시해서 손절/익절/물타기가 영원히 안 걸리므로
+    (강제매수·수렴 자동 매수처럼 승인 없이 사는 경로에 필수).
+
+    buy_market은 체결 확인(polling)이 max_wait_sec(업비트 8초) 안에 안 끝나도 주문 자체는 접수됐다고
+    보고 success=True를 반환한다 — 이 경우 거래소 잔고에도 아직 반영이 안 됐을 수 있으므로, 바로
+    한 번만 조회해서 못 찾으면 포기하지 않고 짧게 재시도한다."""
+    matched = None
+    for attempt in range(5):  # 최대 5회(1.5초 간격) = 최초 조회 포함 총 ~6초까지 재시도
+        for pos in broker.get_positions():
+            if pos.ticker == ticker:
+                matched = pos
+                break
+        if matched:
+            break
+        if attempt < 4:
+            time.sleep(1.5)
+    if matched:
+        upsert_paper_position(broker.broker_name, broker.mode, ticker, matched.qty, matched.avg_buy_price)
+    else:
+        # 재시도 끝에도 잔고에 안 잡힘 — 조용히 넘어가면 이 종목은 영원히 추적 대상 밖으로 남으므로,
+        # 최소한 운영자가 알아채고 수동 확인할 수 있도록 에러 로그와 Slack 알림을 남긴다.
+        message = f"[{label}] {ticker} 주문은 성공했지만 잔고 반영 확인 지연으로 추적 행을 못 만들었습니다 — 수동으로 확인 후 필요시 다시 강제매수하거나 관리자에게 문의하세요."
+        logger.error(message)
+        send_slack_msg(message)
+
+
+def _run_convergence_buy(broker, strategy_cfg, accumulate_tickers: set) -> list:
+    """④ 수렴 자동 매수(docs/auto-trade-convergence.md) — 오늘 한도가 남았을 때만 시장을 훑어 산다.
+    SKIP은 trade_order_log에 남기지 않는다(5분마다 수십 줄이 쌓이므로) — 대신 훑은 결과 전체를
+    save_convergence_scan()으로 저장해 화면 카드에서 보여준다."""
+    settings = get_convergence_settings(broker.broker_name)
+    if not settings['enabled']:
+        return []
+    today_start = datetime.now().strftime('%Y-%m-%d 00:00:00')
+    remaining = settings['daily_limit'] - len(get_convergence_buys_since(broker.broker_name, broker.mode, today_start))
+    if remaining <= 0:
+        return []
+    amount = settings['amount_krw'] or strategy_cfg.TRADE_MAX_POSITION_KRW
+    cash = broker.get_cash_balance()
+    if cash < amount:
+        return []
+
+    # "새 코인"이 아닌 것 — 실계좌 전체 잔고(봇과 무관하게 직접 산 코인 포함)·봇 추적 행·모아가기 코인·
+    # 최근 fresh_days일 안에 봇이 사고판 코인.
+    excluded = {}
+    since = (datetime.now() - timedelta(days=settings['fresh_days'])).strftime('%Y-%m-%d %H:%M:%S')
+    for t in get_recently_traded_tickers(broker.broker_name, broker.mode, since):
+        excluded[t] = f"최근 {settings['fresh_days']:g}일 안에 매매함"
+    for t in accumulate_tickers:
+        excluded[t] = '모아가기 코인'
+    for row in get_paper_positions(broker.broker_name, broker.mode):
+        excluded[row['ticker']] = '보유 중'
+    for pos in broker.get_positions():
+        if pos.qty > 0:
+            excluded[pos.ticker] = '보유 중'
+
+    rows = scan_convergence_market(settings, excluded)
+    save_convergence_scan(rows, broker.broker_name)
+    decisions = pick_convergence_buys(rows, remaining, amount, cash)
+    for decision in decisions:
+        result = _execute(decision, broker)
+        if result is not None and result.success and broker.mode == 'live':
+            _track_new_live_position(broker, decision.ticker, '수렴매수')
+    return decisions
+
+
 def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
     """1사이클: 보유 포지션 청산 판단 → 진입 후보 매수 판단 → 전부 실행/기록.
 
@@ -393,6 +466,13 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
                 for decision in accumulate_decisions:
                     _execute(decision, broker)
                 entry_decisions = entry_decisions + accumulate_decisions
+
+            # ④ 수렴 자동 매수 — 승인 없이 봇이 고른 새 코인을 하루 한도만큼 산다(docs/auto-trade-convergence.md).
+            # 시세 조회 실패 등으로 여기서 예외가 나도 이미 끝난 청산·일반 매수 결과는 살리고 사이클을 이어간다.
+            try:
+                entry_decisions = entry_decisions + _run_convergence_buy(broker, strategy_cfg, accumulate_tickers)
+            except Exception as e:
+                logger.error(f"[{broker.broker_name}/{broker.mode}] 수렴 자동 매수 단계 실패(이번 사이클은 건너뜀): {e}")
 
             if is_live:
                 _reconcile_live_positions(broker)  # 방금 신규 매수/물타기 체결분을 트래킹 행에 반영
@@ -534,6 +614,18 @@ def get_dashboard_summary() -> dict:
         'engine_enabled': engine_enabled, 'settings': strategy_settings,
         'conditions': condition_settings, 'screening_thresholds': screening_thresholds,
         'real_krw_balance': real_krw_balance,
+    }
+
+
+def _convergence_summary(broker, strategy_settings) -> dict:
+    """대시보드 "🎯 수렴 자동 매수" 카드용 — 설정 + 오늘 산 종목 + 매매 루프가 마지막으로 훑은 결과(DB 저장분).
+    웹 요청에서 캔들을 다시 받지 않는다."""
+    s = get_convergence_settings(broker.broker_name)
+    today_start = datetime.now().strftime('%Y-%m-%d 00:00:00')
+    return {
+        **s,
+        'effective_amount_krw': s['amount_krw'] or strategy_settings['max_position_krw'],
+        'bought_today': get_convergence_buys_since(broker.broker_name, broker.mode, today_start),
     }
 
 
@@ -769,6 +861,7 @@ def get_live_dashboard_summary() -> dict:
     engine_settings = get_trade_engine_settings(broker.broker_name, broker.mode)
     return {
         'accumulate': {**accumulate_settings, 'rows': accumulate_rows},
+        'convergence': _convergence_summary(broker, strategy_settings),
         'engine_enabled': engine_settings['enabled'],
         'last_cycle_at': engine_settings['last_cycle_at'],
         'loop_interval_sec': get_trade_strategy_settings(broker.broker_name)['loop_interval_sec'],
@@ -823,25 +916,7 @@ def force_buy(ticker: str, broker=None) -> dict:
     # 이 추적 행 생성이 사실상 유일한 진입점이라(다음 사이클 _reconcile_live_positions도 opt-in
     # 범위 밖이라 못 잡음), 여기서 놓치면 물타기/손절/익절이 영원히 안 걸리는 사고로 이어진다.
     if result.success and broker.mode == 'live':
-        matched = None
-        for attempt in range(5):  # 최대 5회(0,1,2,3초 간격) = 최초 조회 포함 총 ~6초까지 재시도
-            for pos in broker.get_positions():
-                if pos.ticker == ticker:
-                    matched = pos
-                    break
-            if matched:
-                break
-            if attempt < 4:
-                time.sleep(1.5)
-        if matched:
-            upsert_paper_position(broker.broker_name, broker.mode, ticker, matched.qty, matched.avg_buy_price)
-        else:
-            # 재시도 끝에도 잔고에 안 잡힘 — 체결 확인이 유난히 오래 걸리는 케이스. 조용히 넘어가면
-            # 이 종목은 영원히 추적 대상 밖으로 남으므로, 최소한 운영자가 알아채고 수동 확인/재시도할
-            # 수 있도록 에러 로그와 Slack 알림을 남긴다.
-            message = f"[강제매수] {ticker} 주문은 성공했지만 잔고 반영 확인 지연으로 추적 행을 못 만들었습니다 — 수동으로 확인 후 필요시 다시 강제매수하거나 관리자에게 문의하세요."
-            logger.error(message)
-            send_slack_msg(message)
+        _track_new_live_position(broker, ticker, '강제매수')
 
     # 이미 보유 중인 종목에 강제매수로 평단을 낮췄다면(물타기와 동일한 효과) 트레일링 손절 기준점도
     # 새 평단으로 리셋해야 한다 — 전략이 직접 수행하는 DCA_BUY는 실행 직후 mark_position_dca_used()로

@@ -222,6 +222,68 @@
         </div>
     </div>
 
+    <!-- 수렴 자동 매수(docs/auto-trade-convergence.md) — 승인 없이 봇이 고른 새 코인을 하루 한도만큼 산다.
+         설정·오늘 산 종목·마지막 검사 결과를 이 카드 한 곳에 모았다. -->
+    <div class="card-panel mb-3">
+        <div class="section-title mb-2">🎯 수렴 자동 매수 <span id="convergenceStateText" class="text-muted" style="font-size:0.78rem; font-weight:400"></span></div>
+        <div class="d-flex flex-wrap align-items-end gap-3 mb-2">
+            <label class="form-label mb-0" style="font-size:0.8rem; color:#334155; cursor:pointer">
+                <input type="checkbox" id="convergenceEnabled" style="margin-right:4px"><b>켜기</b>
+            </label>
+            <div>
+                <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">하루 최대 종목 수</label>
+                <input type="number" id="convergenceDailyLimit" class="form-control form-control-sm" style="width:90px" min="0" step="1">
+            </div>
+            <div>
+                <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">1회 매수 금액(원, 비우면 1종목당 금액)</label>
+                <input type="number" id="convergenceAmount" class="form-control form-control-sm" style="width:150px" min="5000" step="1000">
+            </div>
+            <div>
+                <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">24시간 거래대금(억 이상)</label>
+                <input type="number" id="convergenceMinValue" class="form-control form-control-sm" style="width:110px" min="0" step="10">
+            </div>
+            <div>
+                <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">이격 한도(%)</label>
+                <input type="number" id="convergenceMaxGap" class="form-control form-control-sm" style="width:90px" min="0.1" step="0.1">
+            </div>
+            <div>
+                <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">새 코인 기준(최근 N일 매매 없음)</label>
+                <input type="number" id="convergenceFreshDays" class="form-control form-control-sm" style="width:90px" min="0" step="1">
+            </div>
+            <label class="form-label mb-0" style="font-size:0.78rem; color:#334155; cursor:pointer">
+                <input type="checkbox" id="convergenceRequireAbove" style="margin-right:4px">5분봉 구름·120선 위
+            </label>
+            <label class="form-label mb-0" style="font-size:0.78rem; color:#334155; cursor:pointer">
+                <input type="checkbox" id="convergenceRequireDaily" style="margin-right:4px">일봉 구름·기준선 위
+            </label>
+            <button class="btn-search" onclick="saveConvergence()">저장</button>
+            <span id="convergenceSavedMsg" class="text-muted" style="font-size:0.76rem"></span>
+        </div>
+        <div id="convergenceScanInfo" class="text-muted mb-1" style="font-size:0.74rem"></div>
+        <div class="table-wrap">
+            <table class="trade-table">
+                <thead>
+                    <tr>
+                        <th>종목</th>
+                        <th>24h 거래대금</th>
+                        <th>5분봉 이격</th>
+                        <th>판정</th>
+                    </tr>
+                </thead>
+                <tbody id="convergenceBody">
+                    <tr class="loading-row"><td colspan="4">로딩 중...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="mt-2 text-muted" style="font-size:0.72rem">
+            * 켜두면 <b>실거래 승인 없이</b> 봇이 직접 고릅니다: 24시간 거래대금 기준 이상이고, 지금 안 갖고 있으며 최근 N일 봇 매매 이력이 없는 코인 중
+            5분봉 현재가·구름 상단/하단·80선·120선의 최고값과 최저값 차이가 이격 한도 이내인 코인을 <b>하루(0시 기준) 최대 종목 수까지</b> 삽니다.
+            여러 개가 맞으면 이격이 작은 순입니다. 스테이블코인(USDT 등)은 뺍니다.
+            <br>* 산 코인은 일반 종목처럼 위 매매 기준(손절·익절·RSI 등)으로 자동 매도됩니다. 실거래 실행 스위치가 켜져 있어야 삽니다.
+            <br>* 검사 결과는 매매 사이클마다(오늘 한도가 남았을 때만) 갱신됩니다.
+        </div>
+    </div>
+
     <!-- 모아가기(docs/auto-trade-accumulate.md) — 등록 코인은 정밀 매수조건을 통과하면 정해둔 금액만큼 사고
          자동으로 팔지 않는다. 설정과 현황을 이 카드 한 곳에 모았고, 등록 코인은 위 실거래 표에서 빠진다. -->
     <div class="card-panel mb-3">
@@ -958,6 +1020,7 @@
                              json.conditions_observe_only);
             renderConditionSummary([...(json.candidates || []), ...(json.extra_positions || [])]);
             renderAccumulate(json.accumulate);
+            renderConvergence(json.convergence);
 
             const dcaMaxCount = json.dca_max_count ?? 1;  // ??만 사용 — 0(물타기 완전 비활성화)은 유효한
                                                             // 값이므로 ||로 1로 뭉개면 안 됨(0/0회를 1회 가능처럼 표시하는 버그)
@@ -1236,6 +1299,81 @@
                     ${paramInputs}
                 </div>`;
         }).join('');
+    }
+
+    // ── 수렴 자동 매수. 입력칸은 처음 한 번(또는 저장 직후)만 채운다 — 새로고침마다 덮어쓰면 입력 중인 값이 날아간다.
+    let _convergenceFormLoaded = false;
+
+    function renderConvergence(cv) {
+        if (!cv) return;
+        if (!_convergenceFormLoaded) {
+            document.getElementById('convergenceEnabled').checked = !!cv.enabled;
+            document.getElementById('convergenceDailyLimit').value = cv.daily_limit ?? '';
+            document.getElementById('convergenceAmount').value = cv.amount_krw ?? '';
+            document.getElementById('convergenceMinValue').value = cv.min_trade_value_24h != null ? cv.min_trade_value_24h / 1e8 : '';
+            document.getElementById('convergenceMaxGap').value = cv.max_gap_pct ?? '';
+            document.getElementById('convergenceFreshDays').value = cv.fresh_days ?? '';
+            document.getElementById('convergenceRequireAbove').checked = !!cv.require_above;
+            document.getElementById('convergenceRequireDaily').checked = !!cv.require_daily_trend;
+            _convergenceFormLoaded = true;
+        }
+        const bought = cv.bought_today || [];
+        const boughtText = bought.length ? bought.map(t => t.replace(/^KRW-/, '')).join(', ') : '없음';
+        document.getElementById('convergenceStateText').innerHTML = cv.enabled
+            ? `<span class="text-success">켜짐</span> · 오늘 ${bought.length}/${cv.daily_limit}종목(${escapeAttr(boughtText)}) · 1회 ${fmtKrw(cv.effective_amount_krw)}`
+            : '꺼짐';
+        document.getElementById('convergenceScanInfo').textContent = cv.last_scan_at
+            ? `마지막 검사: ${cv.last_scan_at} · 거래대금 기준 통과 ${(cv.last_scan || []).length}개`
+            : '아직 검사 결과가 없습니다(다음 매매 사이클에 생깁니다).';
+        const rows = cv.last_scan || [];
+        const body = document.getElementById('convergenceBody');
+        if (!rows.length) {
+            body.innerHTML = '<tr><td colspan="4" class="text-muted">표시할 결과가 없습니다.</td></tr>';
+            return;
+        }
+        body.innerHTML = rows.map(r => {
+            const verdict = r.reason
+                ? `<span class="text-muted" style="font-size:0.74rem">${escapeAttr(r.reason)}</span>`
+                : '<span class="signal-badge signal-badge-good">통과</span>';
+            const gap = r.gap_pct != null ? `${Number(r.gap_pct).toFixed(2)}%` : '<span class="empty-val">—</span>';
+            return `<tr>
+                <td><b>${escapeAttr(r.ticker.replace(/^KRW-/, ''))}</b></td>
+                <td>${Math.round(r.trade_value_24h / 1e8).toLocaleString()}억</td>
+                <td>${gap}</td>
+                <td>${verdict}</td>
+            </tr>`;
+        }).join('');
+    }
+
+    async function saveConvergence() {
+        const msg = document.getElementById('convergenceSavedMsg');
+        const val = id => document.getElementById(id).value;
+        try {
+            const res = await fetch('api/auto-trade/convergence/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    enabled: document.getElementById('convergenceEnabled').checked,
+                    daily_limit: Number(val('convergenceDailyLimit')),
+                    amount_krw: val('convergenceAmount') === '' ? null : Number(val('convergenceAmount')),
+                    min_trade_value_24h_eok: Number(val('convergenceMinValue')),
+                    max_gap_pct: Number(val('convergenceMaxGap')),
+                    fresh_days: Number(val('convergenceFreshDays')),
+                    require_above: document.getElementById('convergenceRequireAbove').checked,
+                    require_daily_trend: document.getElementById('convergenceRequireDaily').checked,
+                }),
+            });
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(json.message);
+            msg.textContent = '저장됨 · 다음 사이클부터 적용';
+            msg.className = 'text-success';
+            _convergenceFormLoaded = false;
+            await loadLiveSummary();
+        } catch (e) {
+            msg.textContent = '저장 실패: ' + e.message;
+            msg.className = 'text-danger';
+        }
+        setTimeout(() => { msg.textContent = ''; }, 4000);
     }
 
     // ── 모아가기. 입력칸은 처음 한 번(또는 저장 직후)만 채운다 — 새로고침할 때마다 덮어쓰면 입력 중인 값이 날아간다.

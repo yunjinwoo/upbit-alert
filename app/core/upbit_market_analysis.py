@@ -86,19 +86,15 @@ def _calc_breakout(df: pd.DataFrame, vol_ratio_threshold: float, rate_threshold:
     return result
 
 
-def _calc_cloud(df: pd.DataFrame) -> dict:
-    """OHLCV DataFrame으로 일목균형표 구름 위/아래 여부를 계산한다 — 봉 종류(4시간봉/일봉) 무관하게
-    동작. 26봉(KIJUN) 전에 계산된 선행스팬을 지금 캔들과 비교하는 방식이라 KIJUN+SENKOU_B(78봉)
-    이상의 확정 캔들이 없으면 판정 불가로 보고 False를 반환한다."""
-    result = {'above_cloud': False, 'below_cloud': False}
-    idx_now = len(df) - 2
+def cloud_levels(df: pd.DataFrame, idx_now: int):
+    """idx_now 캔들 시점의 일목균형표 구름 (상단, 하단). 26봉(KIJUN) 전에 계산된 선행스팬을 쓰므로
+    KIJUN+SENKOU_B(78봉) 이상의 캔들이 없으면 None — 봉 종류 무관(4시간봉/일봉/5분봉)."""
     cloud_idx = idx_now - ICHIMOKU_KIJUN
     if cloud_idx - ICHIMOKU_SENKOU_B + 1 < 0:
-        return result
+        return None
 
     highs = df['high']
     lows = df['low']
-    close_now = df['close'].iloc[idx_now]
 
     def donchian_mid(period, end_idx):
         window_high = highs.iloc[end_idx - period + 1: end_idx + 1].max()
@@ -109,8 +105,19 @@ def _calc_cloud(df: pd.DataFrame) -> dict:
     kijun = donchian_mid(ICHIMOKU_KIJUN, cloud_idx)
     senkou_a = (tenkan + kijun) / 2
     senkou_b = donchian_mid(ICHIMOKU_SENKOU_B, cloud_idx)
-    cloud_top = max(senkou_a, senkou_b)
-    cloud_bottom = min(senkou_a, senkou_b)
+    return max(senkou_a, senkou_b), min(senkou_a, senkou_b)
+
+
+def _calc_cloud(df: pd.DataFrame) -> dict:
+    """OHLCV DataFrame으로 일목균형표 구름 위/아래 여부를 계산한다 — 봉 종류(4시간봉/일봉) 무관하게
+    동작. 마지막 확정 캔들 종가를 cloud_levels()와 비교하며, 판정 불가(캔들 부족)면 둘 다 False."""
+    result = {'above_cloud': False, 'below_cloud': False}
+    idx_now = len(df) - 2
+    levels = cloud_levels(df, idx_now)
+    if levels is None:
+        return result
+    cloud_top, cloud_bottom = levels
+    close_now = df['close'].iloc[idx_now]
     result['above_cloud'] = bool(close_now > cloud_top)
     result['below_cloud'] = bool(close_now < cloud_bottom)
     return result
