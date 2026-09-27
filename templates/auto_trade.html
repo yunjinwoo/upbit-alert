@@ -903,16 +903,23 @@
         } else {
             badge = `<span class="signal-badge signal-badge-warn" title="${detail}">미충족</span>`;
         }
-        const observeNote = observe
-            ? `<div style="font-size:0.64rem; color:#94a3b8">참고(관찰 모드)</div>` : '';
-        const perCondition = conditionItemsHtml(row.condition_detail);
-        const at = row.condition_checked_at
-            ? `<div style="font-size:0.64rem; color:#94a3b8">${row.condition_checked_at}</div>`
+        // 한 칸이 세로로 6~7줄까지 늘어나 행 높이를 키우던 걸 두 줄로 줄였다 — 1줄: 합친 결과 · 관찰 모드
+        // 여부 · 검사 시각(시:분:초만, 날짜는 툴팁), 2줄: 조건별 칩을 가로로 나란히.
+        const meta = [];
+        if (observe) meta.push('참고(관찰)');
+        if (row.condition_checked_at) {
+            const t = String(row.condition_checked_at);
+            const time = t.includes(' ') ? t.split(' ').pop() : t;
+            meta.push(`<span title="${escapeAttr(t)}">${time}</span>`);
+        }
+        const metaHtml = meta.length
+            ? ` <span style="font-size:0.64rem; color:#94a3b8" title="${observe ? '관찰 모드 — 결과만 표시하고 매수는 막지 않습니다' : ''}">${meta.join(' · ')}</span>`
             : '';
-        return `${badge}${perCondition}${observeNote}${at}`;
+        const perCondition = conditionItemsHtml(row.condition_detail);
+        return `<div style="white-space:nowrap">${badge}${metaHtml}</div>${perCondition}`;
     }
 
-    // 조건별 결과 라벨 — 합친 결과(통과/미충족) 아래에 조건마다 한 줄씩. 어떤 조건 때문에 미충족인지
+    // 조건별 결과 라벨 — 합친 결과(통과/미충족) 아래 한 줄에 가로로 나란히. 어떤 조건 때문에 미충족인지
     // 툴팁을 열지 않아도 보이게 한다. 값이 있는 조건(주봉 RSI)은 값도 같이 적는다.
     const CONDITION_SHORT_LABELS = {
         weekly_rsi_above: '주봉RSI',
@@ -928,9 +935,9 @@
             const value = (v.rsi !== null && v.rsi !== undefined) ? ` ${Number(v.rsi).toFixed(1)}` : '';
             const cls = v.passed ? 'signal-badge-good' : 'signal-badge-mild';
             const title = escapeAttr(`${CONDITION_LABELS[k] || k}: ${v.message || ''}`);
-            return `<span class="signal-badge ${cls}" style="font-size:0.62rem" title="${title}">${name}${value} ${v.passed ? '✓' : '✗'}</span>`;
+            return `<span class="signal-badge ${cls}" style="font-size:0.62rem; padding:1px 5px; margin:0 1px" title="${title}">${name}${value} ${v.passed ? '✓' : '✗'}</span>`;
         });
-        return items.length ? `<div style="margin-top:2px">${items.join('<br>')}</div>` : '';
+        return items.length ? `<div style="margin-top:2px; white-space:nowrap">${items.join('')}</div>` : '';
     }
 
     function conditionDetailText(detail) {
