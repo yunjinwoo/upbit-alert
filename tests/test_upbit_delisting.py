@@ -5,7 +5,7 @@
 확인하는 것:
   1. 공지 제목 파싱 — 여러 종목, 종료 시각, 연도 넘김, BTC 마켓 전용/철회 공지 제외
   2. refresh — 공지 + 투자유의를 합쳐 저장, 오래 지난 종료는 빠짐, 공지 조회 실패 시 기존 목록 유지
-  3. refresh_if_stale — 30분 안에는 다시 읽지 않음
+  3. refresh_if_stale — 12시간 안에는 다시 읽지 않음
 """
 import os
 import sys
@@ -96,7 +96,7 @@ def test_refresh():
         calls = []
         with mock.patch.object(ud, 'refresh', lambda: calls.append(1)):
             ud.refresh_if_stale()
-        check('30분 안에는 다시 읽지 않음', calls == [])
+        check('12시간 안에는 다시 읽지 않음', calls == [])
 
 
 if __name__ == '__main__':

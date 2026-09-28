@@ -960,7 +960,7 @@
     }
 
     // 거래지원 종료 예정(⛔, 봇이 새로 사지 않음) / 투자유의(⚠️) 라벨 — 업비트 공지·마켓 정보를 실거래
-    // 루프가 30분마다 읽어 둔 결과(app/core/upbit_delisting.py).
+    // 루프가 12시간마다 읽어 둔 결과(app/core/upbit_delisting.py).
     function marketAlertBadges(row) {
         let html = '';
         if (row.delisting) {
@@ -977,7 +977,7 @@
         const el = document.getElementById('liveMarketAlertSummary');
         const st = json.market_alert_state;
         if (!st) {
-            el.textContent = '⛔ 거래지원 종료 공지: 아직 확인 전(실거래 루프가 돌면 30분마다 확인합니다)';
+            el.textContent = '⛔ 거래지원 종료 공지: 아직 확인 전(실거래 루프가 돌면 12시간마다 확인합니다)';
             return;
         }
         const fail = st.success ? '' : ` — 마지막 확인 실패, 이전 목록 사용 중(${st.error_message || ''})`;

@@ -5472,7 +5472,7 @@ def get_recently_traded_tickers(broker: str, mode: str, since: str) -> set:
 
 
 # ── 업비트 거래지원 종료 예정 / 투자유의 — app/core/upbit_delisting.py
-# 실거래 루프(별도 프로세스)가 30분마다 채우고 대시보드(API 프로세스)가 읽는다. 시장 판단 테이블과
+# 실거래 루프(별도 프로세스)가 12시간마다 채우고 대시보드(API 프로세스)가 읽는다. 시장 판단 테이블과
 # 같은 이유로 조회/저장 함수마다 IF NOT EXISTS를 건다.
 #   upbit_market_alerts      — 종목별 1행(종료 예정 시각·근거 공지, 투자유의 여부). 새로 읽을 때마다 통째로 교체
 #   upbit_market_alert_state — 1행짜리 마지막 확인 결과(시각/성공 여부/오류)

@@ -5,7 +5,7 @@
 JSON(api-manager.upbit.com, 비공식)을 읽어 제목에서 티커와 종료 시각을 뽑는다. 투자유의 지정은 공식
 API(/v1/market/all?is_details=true)의 market_event.warning으로 받는다(종료 전 단계 신호).
 
-refresh_if_stale()을 실거래 사이클마다 부르면 30분에 한 번만 실제로 읽는다. 읽기에 실패하면 기존 목록을
+refresh_if_stale()을 실거래 사이클마다 부르면 12시간에 한 번만 실제로 읽는다. 읽기에 실패하면 기존 목록을
 유지한다(목록이 비어 매수 차단이 풀리지 않게).
 """
 import re
@@ -24,7 +24,7 @@ logger = get_logger()
 
 NOTICE_URL = 'https://api-manager.upbit.com/api/v1/announcements'
 MARKET_ALL_URL = 'https://api.upbit.com/v1/market/all'
-REFRESH_INTERVAL_MIN = 30
+REFRESH_INTERVAL_MIN = 12 * 60  # 하루 2회 — 종료 공지는 보통 1~2주 전에 올라와 이 정도면 충분
 NOTICE_PAGES = 2            # 거래 카테고리 최근 40건 — 종료 공지는 보통 종료 1~2주 전에 올라온다
 KEEP_AFTER_DELISTING_H = 24  # 종료 시각이 지나도 하루는 라벨을 남긴다(표에서 "왜 없어졌지?" 확인용)
 HEADERS = {

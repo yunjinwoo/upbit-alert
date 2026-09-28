@@ -352,7 +352,7 @@ def _run_convergence_buy(broker, strategy_cfg, accumulate_tickers: set, delistin
 
 
 def _delisting_blocked_tickers() -> set:
-    """거래지원 종료 예정 코인(매수 차단 대상). 30분이 지났으면 먼저 공지를 다시 읽는다. 읽기/조회가
+    """거래지원 종료 예정 코인(매수 차단 대상). 12시간이 지났으면 먼저 공지를 다시 읽는다. 읽기/조회가
     실패해도 사이클은 계속 돌아야 하므로 예외는 삼키고, 그땐 마지막으로 저장된 목록을 쓴다."""
     try:
         upbit_delisting.refresh_if_stale()
@@ -431,7 +431,7 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
             else:
                 account = get_or_create_paper_account(broker.broker_name, broker.mode, Config.TRADE_INITIAL_CASH_KRW)
             # 거래지원 종료 예정 코인은 어떤 경로(일반 진입/모아가기/수렴 매수)로도 새로 사지 않는다
-            # (app/core/upbit_delisting.py — 업비트 공지를 30분마다 읽어 둔 목록). 이미 보유 중인 건
+            # (app/core/upbit_delisting.py — 업비트 공지를 12시간마다 읽어 둔 목록). 이미 보유 중인 건
             # 청산 규칙대로 그대로 관리한다(여기선 신규 매수만 막음).
             delisting_blocked = _delisting_blocked_tickers()
             candidates = [c for c in get_coin_screening_candidates()
@@ -850,7 +850,7 @@ def get_live_dashboard_summary() -> dict:
             **invested_gauge_fields(pos.qty, pos.avg_buy_price, per_position_cap_krw),
         })
 
-    # 거래지원 종료 예정 / 투자유의 라벨(실거래 표 종목명 옆). 목록은 실거래 루프가 30분마다 채운다 —
+    # 거래지원 종료 예정 / 투자유의 라벨(실거래 표 종목명 옆). 목록은 실거래 루프가 12시간마다 채운다 —
     # 대시보드는 읽기만 한다(여기서 공지를 읽으면 새로고침마다 업비트 공지 서버를 두드리게 됨).
     market_alerts = get_upbit_market_alerts()
     market_alert_state = get_upbit_market_alert_state()
