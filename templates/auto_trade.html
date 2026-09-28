@@ -72,6 +72,9 @@
         .trade-table td { padding: 5px 10px; border-bottom: 1px solid #f1f5f9; text-align: right; white-space: nowrap; }
         .trade-table tr:hover td { background: #f8fafc; }
         /* 행이 많을 때 눈으로 줄을 따라가기 쉽게 5행마다 진한 구분선(실거래 표) */
+        /* 물타기 칸은 기본 모드(종목별 물타기 체크박스)에서만 쓴다 — 회복형은 상태 칸에 횟수가 이미 나오고,
+           짧은 손절 모드는 물타기를 안 하므로 renderLiveDcaColumn()이 표에서 칸을 숨긴다 */
+        table.hide-dca .col-dca { display: none; }
         .trade-table tr.row-group-end td { border-bottom: 2px solid #94a3b8; }
         .pnl-pos { color: #b91c1c; font-weight: 600; }
         .pnl-neg { color: #1d4ed8; font-weight: 600; }
@@ -208,7 +211,7 @@
                         <th>평가손익</th>
                         <th style="text-align:center">투입원금 / 상한</th>
                         <th style="text-align:center">상태</th>
-                        <th style="text-align:center">물타기</th>
+                        <th class="col-dca" style="text-align:center">물타기</th>
                         <th style="text-align:center">매매</th>
                     </tr>
                 </thead>
@@ -1004,14 +1007,16 @@
             : '';
         const dcaCheckbox = !held
             ? '<span class="empty-val">—</span>'
-            : rowTight
-                // 짧은 손절 · 긴 수익 모드는 물타기를 하지 않는다 — 체크 상태를 그대로 보여주면
-                // "체크했으니 물탄다"고 오해하므로 쓰지 않는다는 것만 알린다.
-                ? '<span class="text-muted" title="짧은 손절 · 긴 수익 모드에서는 물타기를 하지 않습니다">미사용</span>'
-                : rowRecovery
+            // 회복형이 짧은 손절보다 먼저다 — evaluate_exits()가 두 모드가 같이 켜져 있으면 회복형으로
+            // 판단하므로(trade_strategy.py), 순서가 반대면 실제로는 물타는데 "미사용"으로 보였다.
+            : rowRecovery
                 // 회복형 모드에서는 물타기 여부가 이 체크박스가 아니라 회복형 파라미터(트리거/쿨다운/상한)로
                 // 결정된다 — 체크 상태를 그대로 보여주면 "껐으니 안 물탄다"고 오해하므로 횟수만 표시한다.
                 ? `<span title="회복형 분할 물타기 모드에서는 종목별 체크박스와 무관하게 회복형 파라미터로 판단합니다">회복형 ${row.recovery_dca_count || 0}/${LIVE_RECOVERY.maxCount}회</span>`
+                : rowTight
+                // 짧은 손절 · 긴 수익 모드는 물타기를 하지 않는다 — 체크 상태를 그대로 보여주면
+                // "체크했으니 물탄다"고 오해하므로 쓰지 않는다는 것만 알린다.
+                ? '<span class="text-muted" title="짧은 손절 · 긴 수익 모드에서는 물타기를 하지 않습니다">미사용</span>'
                 : `<input type="checkbox" ${row.dca_enabled ? 'checked' : ''} ${dcaExhausted ? 'disabled' : ''}
                    title="${dcaExhausted ? `이미 최대 ${dcaMaxCount}회 물타기를 완료해 더 켤 수 없습니다` : `체크하면 손절 직전 물타기 트리거까지 대기 후 실제 추가매수 (현재 ${dcaCount}/${dcaMaxCount}회)`}"
                    onchange="toggleLiveDca('${ticker}', this)">`;
@@ -1036,7 +1041,7 @@
                 <td>${held && row.eval_amount != null ? pnlSpan(row.eval_amount - row.qty * row.avg_buy_price, row.pnl_pct) : '<span class="empty-val">—</span>'}</td>
                 <td style="text-align:center">${investGaugeHtml(row, perPositionCap)}</td>
                 <td style="text-align:center">${liveStatusBadge(row, dcaMaxCount, rowTight, rowRecovery)}${lockedTag}</td>
-                <td style="text-align:center">${dcaCheckbox}</td>
+                <td class="col-dca" style="text-align:center">${dcaCheckbox}</td>
                 <td style="text-align:center; white-space:nowrap">${tradeButtons}</td>
             </tr>`;
     }
@@ -1073,6 +1078,17 @@
             LIVE_TIGHT_STOP = !!json.tight_stop_enabled;
             renderExitModeSummary(json);
             renderMarketAlertSummary(json);
+            // 물타기 칸은 기본 모드일 때만 보인다. 전략 묶음 이전에 산 종목(exit_rule 고정)이 기본 모드
+            // 규칙이면 그 종목의 체크박스가 필요하니 그때도 보여준다.
+            const needDcaColumn = (!LIVE_RECOVERY.enabled && !LIVE_TIGHT_STOP)
+                || [...(json.candidates || []), ...(json.extra_positions || [])].some(r => {
+                    if (!r.exit_rule_locked) return false;
+                    try {
+                        const rule = JSON.parse(r.exit_rule || '{}');
+                        return !rule.TRADE_RECOVERY_DCA_ENABLED && !rule.TRADE_TIGHT_STOP_ENABLED;
+                    } catch (e) { return false; }
+                });
+            body.closest('table').classList.toggle('hide-dca', !needDcaColumn);
             const perPositionCap = json.per_position_cap_krw ?? null;
             const rows = [];
             for (const c of (json.candidates || [])) {
