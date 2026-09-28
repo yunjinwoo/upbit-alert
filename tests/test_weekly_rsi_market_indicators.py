@@ -162,6 +162,49 @@ try:
 finally:
     mi.calc_btc_indicators, mi._fetch_dominance = orig_calc, orig_dom
 
+# ── 업비트 캔들 직접 조회(pyupbit는 timeout이 없어 요청이 무한 대기할 수 있었음)
+rows = [  # 업비트 응답은 최신 봉이 앞
+    {'candle_date_time_kst': '2026-09-28T09:00:00', 'opening_price': 2, 'high_price': 3, 'low_price': 1,
+     'trade_price': 2.5, 'candle_acc_trade_volume': 10, 'candle_acc_trade_price': 25},
+    {'candle_date_time_kst': '2026-09-27T09:00:00', 'opening_price': 1, 'high_price': 2, 'low_price': 1,
+     'trade_price': 2, 'candle_acc_trade_volume': 5, 'candle_acc_trade_price': 10},
+]
+cdf = mi.parse_upbit_candles(rows)
+check('캔들 응답 → 과거→최신 정렬 + close 컬럼', list(cdf['close']) == [2, 2.5]
+      and list(cdf.columns) == ['open', 'high', 'low', 'close', 'volume', 'value'], cdf.to_dict())
+check('빈 캔들 응답은 None', mi.parse_upbit_candles([]) is None)
+
+captured = {}
+class _Resp:
+    def raise_for_status(self): pass
+    def json(self): return rows
+def fake_get(url, **kw):
+    captured.update(url=url, **kw)
+    return _Resp()
+orig_get = mi.requests.get
+mi.requests.get = fake_get
+try:
+    mi._upbit_candles('KRW-BTC', 'week', 200)
+finally:
+    mi.requests.get = orig_get
+check('업비트 캔들 조회에 제한시간을 건다', captured.get('timeout') and captured['url'].endswith('/candles/weeks')
+      and captured['params'] == {'market': 'KRW-BTC', 'count': 200}, captured)
+
+# 동시에 들어온 요청은 외부 조회를 한 번만 한다(두 번째는 첫 조회 결과를 캐시에서 받음)
+import threading
+import time as _time
+calls = {'n': 0}
+def slow_fetch():
+    calls['n'] += 1
+    _time.sleep(0.2)
+    return {'ok': True}
+mi._cache['dominance'].update(value=None, fetched_at=0.0)
+ths = [threading.Thread(target=mi._cached, args=('dominance', 300, slow_fetch)) for _ in range(3)]
+for t in ths: t.start()
+for t in ths: t.join()
+check('동시 요청이 겹쳐도 외부 조회는 1번', calls['n'] == 1, calls)
+mi._cache['dominance'].update(value=None, fetched_at=0.0)
+
 # ── DB 시딩: 주봉 RSI 조건은 업비트에만(토스 캔들 API엔 주봉이 없음), 기본 꺼짐
 from app.utils import db_manager
 
