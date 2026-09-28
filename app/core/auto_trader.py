@@ -58,7 +58,6 @@ from app.utils.db_manager import (
     conditions_gate_active,
     try_acquire_trade_cycle_lock,
     release_trade_cycle_lock,
-    conditions_enabled,
     get_accumulate_settings,
     get_active_accumulate_tickers,
     get_last_accumulate_buy_times,
@@ -477,13 +476,11 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
             for decision in entry_decisions:
                 _execute(decision, broker)
 
-            # ③ 모아가기 — 정밀조건을 통과한 등록 코인을 정해둔 금액만큼 산다(코인별 interval_hours에 1번).
+            # ③ 모아가기 — 등록 코인을 정해둔 금액만큼 주기적으로 산다(코인별 interval_hours에 1번, 정밀조건 무관).
             if accumulate_tickers:
                 accumulate_decisions = evaluate_accumulation(
                     accumulate_settings['tickers'], broker.get_cash_balance(),
                     accumulate_settings['amount_krw'], accumulate_settings['interval_hours'],
-                    conditions_enabled=conditions_enabled(broker.broker_name),
-                    condition_status_map=condition_status_map,
                     last_buy_at=get_last_accumulate_buy_times(broker.broker_name, broker.mode),
                     get_price_fn=broker.get_current_price,
                 )
@@ -887,8 +884,7 @@ def get_live_dashboard_summary() -> dict:
     accumulate_preview = {d.ticker: d for d in evaluate_accumulation(
         accumulate_settings['tickers'], cash_balance or 0,
         accumulate_settings['amount_krw'], accumulate_settings['interval_hours'],
-        conditions_enabled=any(c['enabled'] for c in get_trade_condition_settings(broker.broker_name)),
-        condition_status_map=condition_status_map, last_buy_at=last_accumulate_buy,
+        last_buy_at=last_accumulate_buy,
         get_price_fn=cached_price,
     )}
     accumulate_rows = []
@@ -906,7 +902,6 @@ def get_live_dashboard_summary() -> dict:
             'last_buy_at': last_accumulate_buy.get(ticker),
             'next_action': preview.action if preview else None,
             'next_reason': preview.reason if preview else None,
-            **_condition_fields(ticker),
         })
 
     engine_settings = get_trade_engine_settings(broker.broker_name, broker.mode)

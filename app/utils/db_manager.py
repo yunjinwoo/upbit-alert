@@ -695,8 +695,8 @@ def init_db():
         )
     ''')
 
-    # 모아가기(docs/auto-trade-accumulate.md) — 브로커별 1행. 등록한 코인은 정밀 매수조건을 통과하면
-    # amount_krw만큼 사고(interval_hours마다 최대 1번), 자동 매도(손절/익절/RSI/물타기)는 하지 않는다.
+    # 모아가기(docs/auto-trade-accumulate.md) — 브로커별 1행. 등록한 코인은 정밀 매수조건과 무관하게
+    # interval_hours마다 amount_krw만큼 사고, 자동 매도(손절/익절/RSI/물타기)는 하지 않는다.
     # tickers는 'KRW-BTC,KRW-ETH'처럼 쉼표로 이어 저장한다. 기본 꺼짐.
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS trade_accumulate_settings (
