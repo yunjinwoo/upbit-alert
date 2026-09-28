@@ -40,6 +40,7 @@ trail_pct까지(단 본전 아래로는 내려가지 않게) 버틴다. 물타�
 평단 조금 위에서 소폭 익절"을 반복하고, 물타기 상한을 다 쓴 뒤에만 소액 손절/시간 하드스톱으로
 정리한다. 기본값은 꺼짐. 설계와 결정 근거는 docs/auto-trade-recovery-dca.md.
 """
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, List, Optional
@@ -611,8 +612,11 @@ def invested_gauge_fields(qty, avg_buy_price, per_position_cap_krw) -> dict:
 
 def evaluate_accumulation(tickers: List[str], cash_balance: float, amount_krw: float, interval_hours: float,
                           last_buy_at: dict, get_price_fn: Callable[[str], Optional[float]],
-                          now: datetime = None) -> List[TradeDecision]:
+                          now: datetime = None, quantities: dict = None,
+                          min_order_krw: float = 5000) -> List[TradeDecision]:
     """모아가기(docs/auto-trade-accumulate.md) — 등록 코인마다 이번 사이클에 amount_krw만큼 살지 판단한다.
+    quantities({ticker: 수량})에 있는 코인은 금액 대신 그 수량만큼 산다 — 시장가 매수는 원화 금액으로만 낼 수
+    있어서 수량×현재가(원 단위 올림)를 주문 금액으로 쓴다. 그 금액이 최소 주문금액보다 작으면 사지 않는다.
 
     일반 진입(evaluate_entries)과 다른 점: 스크리닝 후보·실거래 승인·정밀 매수조건·"이미 보유 중"·최대 보유
     종목 수를 보지 않는다. 시세와 상관없이 주기적으로 모으는 게 목적이라 코인별로 interval_hours에 1번 산다.
@@ -620,9 +624,11 @@ def evaluate_accumulation(tickers: List[str], cash_balance: float, amount_krw: f
     last_buy_at: {ticker: 마지막 모아가기 매수 시각}. now: 기준 시각(테스트용, 안 넘기면 지금)."""
     decisions = []
     last_buy_at = last_buy_at or {}
+    quantities = quantities or {}
     now = now or datetime.now()
 
     for ticker in tickers:
+        target_qty = quantities.get(ticker)
         if ticker in last_buy_at:
             waited = _hours_since(last_buy_at[ticker], now)
             if waited is not None and waited < interval_hours:
@@ -630,13 +636,25 @@ def evaluate_accumulation(tickers: List[str], cash_balance: float, amount_krw: f
                     ticker, 'SKIP', reason=f'모아가기: 매수 간격 대기({waited:.1f}/{interval_hours:g}시간)',
                 ))
                 continue
-        if cash_balance < amount_krw:
+        if not target_qty and cash_balance < amount_krw:
             decisions.append(TradeDecision(ticker, 'SKIP', reason='모아가기: 현금 부족'))
             continue
         price = get_price_fn(ticker)
         if not price:
             decisions.append(TradeDecision(ticker, 'SKIP', reason='모아가기: 시세 조회 실패'))
             continue
-        decisions.append(TradeDecision(ticker, 'BUY', reason='모아가기(정기 매수)', price=price, amount_krw=amount_krw))
-        cash_balance -= amount_krw
+        order_krw = amount_krw
+        if target_qty:
+            order_krw = float(math.ceil(target_qty * price))
+            if order_krw < min_order_krw:
+                decisions.append(TradeDecision(
+                    ticker, 'SKIP', reason=f'모아가기: 수량 {target_qty:g}개는 {order_krw:,.0f}원이라 최소 주문금액 미달',
+                ))
+                continue
+            if cash_balance < order_krw:
+                decisions.append(TradeDecision(ticker, 'SKIP', reason='모아가기: 현금 부족'))
+                continue
+        decisions.append(TradeDecision(ticker, 'BUY', reason='모아가기(정기 매수)', price=price,
+                                       qty=target_qty, amount_krw=order_krw))
+        cash_balance -= order_krw
     return decisions

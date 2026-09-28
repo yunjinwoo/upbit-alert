@@ -697,7 +697,7 @@ def init_db():
 
     # 모아가기(docs/auto-trade-accumulate.md) — 브로커별 1행. 등록한 코인은 정밀 매수조건과 무관하게
     # interval_hours마다 amount_krw만큼 사고, 자동 매도(손절/익절/RSI/물타기)는 하지 않는다.
-    # tickers는 'KRW-BTC,KRW-ETH'처럼 쉼표로 이어 저장한다. 기본 꺼짐.
+    # tickers는 'KRW-BTC:0.00005,KRW-ETH'처럼 쉼표로 이어 저장한다(':수량'이 붙은 코인은 금액 대신 그 수량만큼). 기본 꺼짐.
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS trade_accumulate_settings (
             broker TEXT PRIMARY KEY,
@@ -5046,22 +5046,37 @@ def get_last_sell_times(broker: str, mode: str, since: str) -> dict:
 ACCUMULATE_REASON_PREFIX = '모아가기'
 
 
-def _parse_accumulate_tickers(raw) -> list:
-    """'btc, KRW-ETH' 같은 입력을 ['KRW-BTC', 'KRW-ETH']로 정리(중복 제거, 입력 순서 유지)."""
+def _parse_accumulate_entries(raw) -> list:
+    """'btc:0.00005, KRW-ETH' 같은 입력을 [('KRW-BTC', 0.00005), ('KRW-ETH', None)]로 정리(중복 제거, 입력 순서
+    유지). ':수량'이 붙은 코인은 1회 매수 금액 대신 그 수량만큼 산다. 수량이 0 이하·숫자가 아니면 ValueError."""
     if isinstance(raw, (list, tuple)):
         parts = raw
     else:
         parts = str(raw or '').replace('\n', ',').split(',')
-    tickers = []
+    entries = {}
     for part in parts:
-        t = str(part).strip().upper()
+        t, _, qty_text = str(part).strip().upper().partition(':')
+        t = t.strip()
         if not t:
             continue
         if '-' not in t:
             t = f'KRW-{t}'
-        if t not in tickers:
-            tickers.append(t)
-    return tickers
+        qty = None
+        if qty_text.strip():
+            try:
+                qty = float(qty_text)
+            except ValueError:
+                raise ValueError(f'{t}의 수량 "{qty_text.strip()}"이 숫자가 아닙니다.')
+            if qty <= 0:
+                raise ValueError(f'{t}의 수량은 0보다 커야 합니다.')
+        if t not in entries:
+            entries[t] = qty
+    return list(entries.items())
+
+
+def _parse_accumulate_tickers(raw) -> list:
+    """'btc, KRW-ETH:0.002' 같은 입력을 ['KRW-BTC', 'KRW-ETH']로 정리(수량은 떼고 코인만)."""
+    return [t for t, _ in _parse_accumulate_entries(raw)]
 
 
 def get_accumulate_settings(broker: str = 'upbit') -> dict:
@@ -5073,10 +5088,13 @@ def get_accumulate_settings(broker: str = 'upbit') -> dict:
     row = cursor.fetchone()
     conn.close()
     if not row:
-        return {'enabled': False, 'tickers': [], 'amount_krw': 10000.0, 'interval_hours': 24.0, 'updated_at': None}
+        return {'enabled': False, 'tickers': [], 'quantities': {}, 'amount_krw': 10000.0, 'interval_hours': 24.0,
+                'updated_at': None}
+    entries = _parse_accumulate_entries(row['tickers'])
     return {
         'enabled': bool(row['enabled']),
-        'tickers': _parse_accumulate_tickers(row['tickers']),
+        'tickers': [t for t, _ in entries],
+        'quantities': {t: q for t, q in entries if q},  # 수량으로 사는 코인만 {ticker: 1회 매수 수량}
         'amount_krw': row['amount_krw'],
         'interval_hours': row['interval_hours'],
         'updated_at': row['updated_at'],
@@ -5087,9 +5105,14 @@ def set_accumulate_settings(enabled: bool = None, tickers=None, amount_krw: floa
                             interval_hours: float = None, broker: str = 'upbit') -> dict:
     """모아가기 설정 저장(부분 갱신 — None인 필드는 기존값 유지). 저장된 값을 반환."""
     current = get_accumulate_settings(broker)
+    if tickers is not None:
+        entries = _parse_accumulate_entries(tickers)
+    else:
+        entries = [(t, current['quantities'].get(t)) for t in current['tickers']]
     merged = {
         'enabled': bool(enabled) if enabled is not None else current['enabled'],
-        'tickers': _parse_accumulate_tickers(tickers) if tickers is not None else current['tickers'],
+        'tickers': [t for t, _ in entries],
+        'quantities': {t: q for t, q in entries if q},
         'amount_krw': float(amount_krw) if amount_krw is not None else current['amount_krw'],
         'interval_hours': float(interval_hours) if interval_hours is not None else current['interval_hours'],
     }
@@ -5102,7 +5125,7 @@ def set_accumulate_settings(enabled: bool = None, tickers=None, amount_krw: floa
         ON CONFLICT(broker) DO UPDATE SET
             enabled=excluded.enabled, tickers=excluded.tickers, amount_krw=excluded.amount_krw,
             interval_hours=excluded.interval_hours, updated_at=excluded.updated_at
-    ''', (broker, int(merged['enabled']), ','.join(merged['tickers']), merged['amount_krw'],
+    ''', (broker, int(merged['enabled']), ','.join(f'{t}:{q:g}' if q else t for t, q in entries), merged['amount_krw'],
           merged['interval_hours'], timestamp))
     conn.commit()
     conn.close()

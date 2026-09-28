@@ -298,8 +298,8 @@
                 <input type="checkbox" id="accumulateEnabled" style="margin-right:4px"><b>켜기</b>
             </label>
             <div>
-                <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">모아갈 코인(쉼표로 구분)</label>
-                <input type="text" id="accumulateTickers" class="form-control form-control-sm" style="width:200px" placeholder="BTC, ETH">
+                <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">모아갈 코인(쉼표로 구분, <code>코인:수량</code>이면 수량으로)</label>
+                <input type="text" id="accumulateTickers" class="form-control form-control-sm" style="width:260px" placeholder="BTC:0.00005, ETH:0.002">
             </div>
             <div>
                 <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">1회 매수 금액(원)</label>
@@ -331,6 +331,8 @@
         </div>
         <div class="mt-2 text-muted" style="font-size:0.72rem">
             * 켜두면 등록한 코인은 <b>매수 간격마다</b> 1회 매수 금액만큼 삽니다(코인별로 간격에 1번).
+            <code>BTC:0.00005</code>처럼 수량을 붙이면 그 코인은 금액 대신 <b>수량×현재가</b>만큼 시장가로 삽니다
+            (체결 순간 가격이 조금 움직이면 수량이 아주 약간 다를 수 있고, 5,000원 미만이면 사지 않습니다).
             정밀 매수조건·스크리닝·실거래 승인·최대 동시보유 종목수와는 무관합니다. 거래지원 종료 예정 코인은 사지 않습니다.
             <br>* 등록 코인은 <b>자동으로 팔지 않습니다</b>(손절·익절·RSI 매도·물타기 전부 제외) — 팔 때는 업비트에서 직접 파세요.
             위 실거래 표에서도 빠집니다. 모아가기를 끄면 다시 일반 종목과 똑같이 취급합니다.
@@ -1421,19 +1423,26 @@
     // ── 모아가기. 입력칸은 처음 한 번(또는 저장 직후)만 채운다 — 새로고침할 때마다 덮어쓰면 입력 중인 값이 날아간다.
     let _accumulateFormLoaded = false;
 
+    // 'BTC:0.00005, ETH' — 수량으로 사는 코인은 ':수량'을 붙여 입력칸과 같은 모양으로 보여준다.
+    function accumulateTickerText(acc) {
+        const qty = acc.quantities || {};
+        return (acc.tickers || []).map(t => t.replace(/^KRW-/, '') + (qty[t] ? `:${qty[t]}` : '')).join(', ');
+    }
+
     function renderAccumulate(acc) {
         if (!acc) return;
         if (!_accumulateFormLoaded) {
             document.getElementById('accumulateEnabled').checked = !!acc.enabled;
-            document.getElementById('accumulateTickers').value = (acc.tickers || []).map(t => t.replace(/^KRW-/, '')).join(', ');
+            document.getElementById('accumulateTickers').value = accumulateTickerText(acc);
             document.getElementById('accumulateAmount').value = acc.amount_krw ?? '';
             document.getElementById('accumulateInterval').value = acc.interval_hours ?? '';
             _accumulateFormLoaded = true;
         }
         const state = document.getElementById('accumulateStateText');
-        const names = (acc.tickers || []).map(t => t.replace(/^KRW-/, '')).join(', ') || '등록 코인 없음';
+        const names = accumulateTickerText(acc) || '등록 코인 없음';
+        const hasAmountCoin = (acc.tickers || []).some(t => !(acc.quantities || {})[t]);
         state.innerHTML = acc.enabled
-            ? `<span class="text-success">켜짐</span> · ${escapeAttr(names)} · ${fmtKrw(acc.amount_krw)} · ${acc.interval_hours}시간에 1번`
+            ? `<span class="text-success">켜짐</span> · ${escapeAttr(names)}${hasAmountCoin ? ' · ' + fmtKrw(acc.amount_krw) : ''} · ${acc.interval_hours}시간에 1번`
             : '꺼짐';
 
         const body = document.getElementById('accumulateBody');
@@ -1447,7 +1456,9 @@
                 ? r.eval_amount - r.avg_buy_price * r.qty : null;
             let next;
             if (!acc.enabled) next = '<span class="text-muted">꺼짐</span>';
-            else if (r.next_action === 'BUY') next = `<span class="decision-badge decision-BUY">${fmtKrw(acc.amount_krw)} 매수</span>`;
+            else if (r.next_action === 'BUY') next = r.target_qty
+                ? `<span class="decision-badge decision-BUY">${r.target_qty}개 매수</span><div style="font-size:0.72rem; color:#94a3b8">약 ${fmtKrw(r.next_amount_krw)}</div>`
+                : `<span class="decision-badge decision-BUY">${fmtKrw(r.next_amount_krw ?? acc.amount_krw)} 매수</span>`;
             else next = `<span class="text-muted" style="font-size:0.74rem">${escapeAttr((r.next_reason || '').replace(/^모아가기: /, ''))}</span>`;
             return `<tr>
                 <td><b>${escapeAttr(r.ticker)}</b></td>
