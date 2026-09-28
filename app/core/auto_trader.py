@@ -785,21 +785,36 @@ def get_live_dashboard_summary() -> dict:
             cand['cost_basis'] = cand['invested_ratio'] = None
             cand['next_action'] = cand['next_status'] = None
 
-    # 승인했(었)거나 이미 봇이 추적 중인데 오늘 스크리닝 후보 목록엔 없는(예: 예전에 매수해서
-    # 계속 보유 중인) 종목도 화면에서 놓치지 않도록 별도로 붙인다. 봇과 무관한 다른 보유 코인은
-    # in_scope_tickers에 없으므로 여기 나타나지 않는다.
+    # 오늘 스크리닝 후보 목록엔 없지만 화면에서 놓치면 안 되는 종목을 별도로 붙인다:
+    #   - 승인했(었)거나 이미 봇이 추적 중인 보유 종목(예: 예전에 매수해서 계속 보유 중)
+    #   - 관심 등록(watchlist)해 둔 종목 — coin_screening_daily는 스크리닝이 돌 때마다 플래그가
+    #     바뀌어서, 돌파/구름위 조건이 풀리면 후보 목록에서 빠진다. 예전엔 이때 그 종목이 실거래 표에서
+    #     통째로 사라져(보유 중이 아니거나 승인 전이면) 체크해 둔 승인/관심 등록도 안 보였다.
+    #     매수 판단은 여전히 후보 목록 기준이라(run_trade_cycle) 이런 행은 off_screening=True로
+    #     "오늘 후보 아님 — 매수 안 함"을 표시만 한다.
+    # 봇과 무관한 다른 보유 코인은 두 집합 어디에도 없으므로 여기 나타나지 않는다.
     candidate_tickers = {c['ticker'] for c in candidates}
     extra_positions = []
-    for ticker in in_scope_tickers:
-        if ticker in candidate_tickers:
-            continue
+    for ticker in sorted(((in_scope_tickers | watchlist_tickers) - accumulate_tickers) - candidate_tickers):
         pos = real_positions.get(ticker)
         if not pos:
+            if ticker not in watchlist_tickers:
+                continue
+            extra_positions.append({
+                'ticker': ticker, 'held': False, 'off_screening': True,
+                'approved': ticker in approved_tickers,
+                'reentry_wait_hours': None,
+                'qty': None, 'avg_buy_price': None, 'current_price': cached_price(ticker),
+                'eval_amount': None, 'pnl_pct': None, 'dca_enabled': False, 'dca_count': 0,
+                'cost_basis': None, 'invested_ratio': None, 'next_action': None, 'next_status': None,
+                **_condition_fields(ticker),
+            })
             continue
-        price = broker.get_current_price(ticker)
+        price = cached_price(ticker)
         preview = preview_by_ticker.get(ticker)
         extra_positions.append({
-            'ticker': ticker, 'qty': pos.qty, 'avg_buy_price': pos.avg_buy_price,
+            'ticker': ticker, 'held': True, 'off_screening': True,
+            'qty': pos.qty, 'avg_buy_price': pos.avg_buy_price,
             'current_price': price, 'eval_amount': price * pos.qty if price else None,
             'pnl_pct': (price - pos.avg_buy_price) / pos.avg_buy_price * 100 if price and pos.avg_buy_price else None,
             'approved': ticker in approved_tickers,

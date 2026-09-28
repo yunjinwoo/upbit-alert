@@ -71,6 +71,8 @@
         .trade-table th:first-child, .trade-table td:first-child { text-align: left; }
         .trade-table td { padding: 5px 10px; border-bottom: 1px solid #f1f5f9; text-align: right; white-space: nowrap; }
         .trade-table tr:hover td { background: #f8fafc; }
+        /* 행이 많을 때 눈으로 줄을 따라가기 쉽게 5행마다 진한 구분선(실거래 표) */
+        .trade-table tr.row-group-end td { border-bottom: 2px solid #94a3b8; }
         .pnl-pos { color: #b91c1c; font-weight: 600; }
         .pnl-neg { color: #1d4ed8; font-weight: 600; }
         .decision-badge { font-size: 0.7rem; font-weight: 700; padding: 2px 8px; border-radius: 10px; }
@@ -196,7 +198,7 @@
                 <thead>
                     <tr>
                         <th style="text-align:center">실거래 승인</th>
-                        <th style="text-align:center">정밀검사</th>
+                        <th style="text-align:left">정밀검사</th>
                         <th>종목</th>
                         <th>현재가<div style="font-size:0.72rem; font-weight:400; color:#cbd5e1">보유수량</div></th>
                         <th>평단가<div style="font-size:0.72rem; font-weight:400; color:#cbd5e1">평가금액</div></th>
@@ -827,6 +829,9 @@
     // tight/recovery: 이 행에 적용되는 청산 모드 — 산 시점 규칙이 고정된 종목은 전체 설정과 다를 수 있다
     function liveStatusBadge(row, dcaMaxCount, tight = LIVE_TIGHT_STOP, recovery = LIVE_RECOVERY.enabled) {
         if (!row.held) {
+            if (row.off_screening) {
+                return '<span class="empty-val" title="매수 판단은 오늘 스크리닝 후보만 대상으로 합니다">후보 제외(매수 안 함)</span>';
+            }
             if (row.approved && row.reentry_wait_hours != null) {
                 return `<span class="decision-badge decision-SKIP">⏳ 매도 후 재매수 대기(${row.reentry_wait_hours}시간 남음)</span>`;
             }
@@ -992,8 +997,9 @@
         return `
             <tr>
                 <td style="text-align:center">${checkboxHtml}</td>
-                <td style="text-align:center">${conditionCellHtml(ticker, row)}</td>
-                <td>${coinLink(ticker, ticker)}</td>
+                <td style="text-align:left">${conditionCellHtml(ticker, row)}</td>
+                <td>${coinLink(ticker, ticker)}${row.off_screening
+                    ? `<div class="text-muted" style="font-size:0.66rem" title="오늘 스크리닝 조건(돌파/구름위/모멘텀)에서 빠진 종목입니다. 관심 등록·승인은 그대로 남아 있고, 다시 후보에 들면 매수 판단 대상이 됩니다.">오늘 후보 아님</div>` : ''}</td>
                 <td>${fmtKrw(row.current_price)}
                     <div class="text-muted" style="font-size:0.74rem">${held ? fmtQty(row.qty) : '<span class="empty-val">—</span>'}</div></td>
                 <td>${held ? fmtKrw(row.avg_buy_price) : '<span class="empty-val">—</span>'}
@@ -1045,11 +1051,12 @@
             }
             for (const p of (json.extra_positions || [])) {
                 const cb = `<input type="checkbox" ${p.approved ? 'checked' : ''} onchange="toggleLiveCandidateApproval('${p.ticker}', this)">`;
-                rows.push(liveRowHtml(p.ticker, { ...p, held: true }, cb, dcaMaxCount, perPositionCap));
+                rows.push(liveRowHtml(p.ticker, { held: true, ...p }, cb, dcaMaxCount, perPositionCap));
             }
 
             body.innerHTML = rows.length
-                ? rows.join('')
+                ? rows.map((r, i) => (i + 1) % 5 === 0 && i + 1 < rows.length
+                    ? r.replace('<tr>', '<tr class="row-group-end">') : r).join('')
                 : '<tr class="loading-row"><td colspan="10">아래 "🎯 매매 대상 코인" 표에서 관심 등록을 먼저 체크하세요.</td></tr>';
 
             renderAllCandidates(json.all_candidates || []);
