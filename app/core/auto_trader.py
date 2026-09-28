@@ -482,7 +482,8 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
                     accumulate_settings['tickers'], broker.get_cash_balance(),
                     accumulate_settings['amount_krw'], accumulate_settings['interval_hours'],
                     last_buy_at=get_last_accumulate_buy_times(broker.broker_name, broker.mode),
-                    get_price_fn=broker.get_current_price,
+                    get_price_fn=broker.get_current_price, quantities=accumulate_settings['quantities'],
+                    min_order_krw=Config.TRADE_MIN_ORDER_KRW,
                 )
                 accumulate_decisions = [d for d in accumulate_decisions if d.ticker not in delisting_blocked]
                 for decision in accumulate_decisions:
@@ -885,7 +886,8 @@ def get_live_dashboard_summary() -> dict:
         accumulate_settings['tickers'], cash_balance or 0,
         accumulate_settings['amount_krw'], accumulate_settings['interval_hours'],
         last_buy_at=last_accumulate_buy,
-        get_price_fn=cached_price,
+        get_price_fn=cached_price, quantities=accumulate_settings['quantities'],
+        min_order_krw=Config.TRADE_MIN_ORDER_KRW,
     )}
     accumulate_rows = []
     for ticker in accumulate_settings['tickers']:
@@ -902,6 +904,8 @@ def get_live_dashboard_summary() -> dict:
             'last_buy_at': last_accumulate_buy.get(ticker),
             'next_action': preview.action if preview else None,
             'next_reason': preview.reason if preview else None,
+            'next_amount_krw': preview.amount_krw if preview else None,
+            'target_qty': accumulate_settings['quantities'].get(ticker),
         })
 
     engine_settings = get_trade_engine_settings(broker.broker_name, broker.mode)

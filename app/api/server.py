@@ -1366,7 +1366,8 @@ def set_convergence_settings_api():
 @app.route('/api/auto-trade/accumulate/settings', methods=['POST'])
 def set_accumulate_settings_api():
     """모아가기 설정 저장(부분 갱신, docs/auto-trade-accumulate.md). body: {enabled?, tickers?, amount_krw?,
-    interval_hours?}. tickers는 'BTC, ETH' 문자열이나 배열 — 'KRW-' 없이 써도 붙여서 저장한다."""
+    interval_hours?}. tickers는 'BTC:0.00005, ETH' 문자열이나 배열 — 'KRW-' 없이 써도 붙여서 저장한다.
+    ':수량'을 붙인 코인은 1회 매수 금액 대신 그 수량만큼 산다."""
     body = request.get_json(silent=True) or {}
     try:
         kwargs = {}

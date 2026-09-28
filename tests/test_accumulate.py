@@ -53,7 +53,20 @@ def test_evaluate_accumulation():
         last_buy_at={}, get_price_fn=lambda t: 1000.0, now=NOW,
     )
     assert [d.action for d in both] == ['BUY', 'SKIP'], both
-    print('✓ 판단: 정밀조건 없이 간격마다 BUY, 간격 대기/현금 부족이면 SKIP')
+
+    # 수량으로 사는 코인은 수량×현재가(원 올림)를 주문 금액으로 쓴다
+    by_qty = evaluate_accumulation(
+        ['KRW-BTC', 'KRW-ETH', 'KRW-XRP'], 1_000_000, 50_000, 24, last_buy_at={},
+        get_price_fn=lambda t: {'KRW-BTC': 150_000_000.0, 'KRW-ETH': 5_000_000.0, 'KRW-XRP': 1000.0}[t],
+        now=NOW, quantities={'KRW-BTC': 0.00005, 'KRW-ETH': 0.002, 'KRW-XRP': 1},
+    )
+    assert by_qty[0].action == 'BUY' and by_qty[0].amount_krw == 7_500 and by_qty[0].qty == 0.00005, by_qty[0]
+    assert by_qty[1].action == 'BUY' and by_qty[1].amount_krw == 10_000, by_qty[1]
+    assert by_qty[2].action == 'SKIP' and '최소 주문금액' in by_qty[2].reason, by_qty[2]
+    poor = evaluate_accumulation(['KRW-BTC'], 5_000, 50_000, 24, last_buy_at={}, get_price_fn=lambda t: 150_000_000.0,
+                                 now=NOW, quantities={'KRW-BTC': 0.00005})
+    assert poor[0].action == 'SKIP' and '현금 부족' in poor[0].reason, poor
+    print('✓ 판단: 정밀조건 없이 간격마다 BUY, 간격 대기/현금 부족이면 SKIP, 수량 지정 코인은 수량×현재가로 BUY')
 
 
 def test_db_settings_and_last_buy():
@@ -73,6 +86,20 @@ def test_db_settings_and_last_buy():
         again = db_manager.get_accumulate_settings()
         assert again['tickers'] == ['KRW-BTC', 'KRW-ETH'] and again['amount_krw'] == 30_000, '부분 갱신'
         assert db_manager.get_active_accumulate_tickers() == {'KRW-BTC', 'KRW-ETH'}
+        assert again['quantities'] == {}
+
+        # 'BTC:0.00005'처럼 수량을 붙이면 그 코인만 수량으로, 다른 필드만 바꿔도 수량은 유지
+        db_manager.set_accumulate_settings(tickers='btc:0.00005, ETH')
+        db_manager.set_accumulate_settings(amount_krw=20_000)
+        q = db_manager.get_accumulate_settings()
+        assert q['tickers'] == ['KRW-BTC', 'KRW-ETH'] and q['quantities'] == {'KRW-BTC': 0.00005}, q
+        for bad in ('BTC:abc', 'BTC:0'):
+            try:
+                db_manager.set_accumulate_settings(tickers=bad)
+                raise AssertionError(f'{bad}는 거부해야 한다')
+            except ValueError:
+                pass
+        db_manager.set_accumulate_settings(tickers='BTC, ETH')
 
         log = db_manager.save_trade_order_log
         log('upbit', 'live', 'KRW-BTC', 'BUY', reason='모아가기+정밀조건충족')
