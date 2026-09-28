@@ -195,6 +195,7 @@
              "🔬 정밀 매수조건" 카드는 접혀 있어서, 펼치지 않으면 켜진 조건을 알 수 없었다. -->
         <div id="liveConditionSummary" class="text-muted mb-2" style="font-size:0.76rem"></div>
         <div id="liveExitModeSummary" class="text-muted mb-2" style="font-size:0.76rem"></div>
+        <div id="liveMarketAlertSummary" class="text-muted mb-2" style="font-size:0.76rem"></div>
         <div class="table-wrap">
             <table class="trade-table">
                 <thead>
@@ -958,6 +959,31 @@
         return String(t).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
+    // 거래지원 종료 예정(⛔, 봇이 새로 사지 않음) / 투자유의(⚠️) 라벨 — 업비트 공지·마켓 정보를 실거래
+    // 루프가 30분마다 읽어 둔 결과(app/core/upbit_delisting.py).
+    function marketAlertBadges(row) {
+        let html = '';
+        if (row.delisting) {
+            const when = row.delisting_at ? row.delisting_at.slice(5, 16).replace('-', '/') : '일정 미상';
+            html += ` <span class="signal-badge signal-badge-warn" title="${escapeAttr((row.delisting_notice || '') + ' — 봇이 새로 매수하지 않습니다')}">⛔ 종료 ${when}</span>`;
+        }
+        if (row.market_warning) {
+            html += ` <span class="signal-badge signal-badge-mild" title="업비트 투자유의 종목 — 거래지원 종료 심사 대상일 수 있습니다">⚠️ 유의</span>`;
+        }
+        return html;
+    }
+
+    function renderMarketAlertSummary(json) {
+        const el = document.getElementById('liveMarketAlertSummary');
+        const st = json.market_alert_state;
+        if (!st) {
+            el.textContent = '⛔ 거래지원 종료 공지: 아직 확인 전(실거래 루프가 돌면 30분마다 확인합니다)';
+            return;
+        }
+        const fail = st.success ? '' : ` — 마지막 확인 실패, 이전 목록 사용 중(${st.error_message || ''})`;
+        el.textContent = `⛔ 거래지원 종료 예정 ${json.delisting_count || 0}개(봇이 새로 사지 않음) · 공지 확인 ${st.checked_at}${fail}`;
+    }
+
     function liveRowHtml(ticker, row, checkboxHtml, dcaMaxCount, perPositionCap) {
         const held = !!row.held;
         const dcaCount = row.dca_count || 0;
@@ -1001,7 +1027,7 @@
             <tr>
                 <td style="text-align:center">${checkboxHtml}</td>
                 <td style="text-align:left">${conditionCellHtml(ticker, row)}</td>
-                <td>${coinLink(ticker, ticker)}${row.off_screening
+                <td>${coinLink(ticker, ticker)}${marketAlertBadges(row)}${row.off_screening
                     ? `<div class="text-muted" style="font-size:0.66rem" title="오늘 스크리닝 조건(돌파/구름위/모멘텀)에서 빠진 종목입니다. 관심 등록·승인은 그대로 남아 있고, 다시 후보에 들면 매수 판단 대상이 됩니다.">오늘 후보 아님</div>` : ''}</td>
                 <td>${fmtKrw(row.current_price)}
                     <div class="text-muted" style="font-size:0.74rem">${held ? fmtQty(row.qty) : '<span class="empty-val">—</span>'}</div></td>
@@ -1046,6 +1072,7 @@
             };
             LIVE_TIGHT_STOP = !!json.tight_stop_enabled;
             renderExitModeSummary(json);
+            renderMarketAlertSummary(json);
             const perPositionCap = json.per_position_cap_krw ?? null;
             const rows = [];
             for (const c of (json.candidates || [])) {

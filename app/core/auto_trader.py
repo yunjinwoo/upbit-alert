@@ -25,6 +25,8 @@ from app.core.strategy_presets import match_preset
 from app.core.trade_strategy import evaluate_entries, evaluate_exits, evaluate_accumulation, invested_gauge_fields
 from app.core.exit_conditions import compute_rsi
 from app.utils.db_manager import (
+    get_upbit_market_alerts,
+    get_upbit_market_alert_state,
     get_or_create_paper_account,
     get_paper_positions,
     get_paper_position,
@@ -66,6 +68,7 @@ from app.utils.db_manager import (
     save_convergence_scan,
 )
 from app.core.convergence_buy import scan_market as scan_convergence_market, pick_buys as pick_convergence_buys
+from app.core import upbit_delisting
 
 logger = get_logger()
 
@@ -306,7 +309,7 @@ def _track_new_live_position(broker, ticker: str, label: str) -> None:
         send_slack_msg(message)
 
 
-def _run_convergence_buy(broker, strategy_cfg, accumulate_tickers: set) -> list:
+def _run_convergence_buy(broker, strategy_cfg, accumulate_tickers: set, delisting_tickers: set = frozenset()) -> list:
     """④ 수렴 자동 매수(docs/auto-trade-convergence.md) — 오늘 한도가 남았을 때만 시장을 훑어 산다.
     SKIP은 trade_order_log에 남기지 않는다(5분마다 수십 줄이 쌓이므로) — 대신 훑은 결과 전체를
     save_convergence_scan()으로 저장해 화면 카드에서 보여준다."""
@@ -330,6 +333,8 @@ def _run_convergence_buy(broker, strategy_cfg, accumulate_tickers: set) -> list:
         excluded[t] = f"최근 {settings['fresh_days']:g}일 안에 매매함"
     for t in accumulate_tickers:
         excluded[t] = '모아가기 코인'
+    for t in delisting_tickers:
+        excluded[t] = '거래지원 종료 예정'
     for row in get_paper_positions(broker.broker_name, broker.mode):
         excluded[row['ticker']] = '보유 중'
     for pos in broker.get_positions():
@@ -344,6 +349,20 @@ def _run_convergence_buy(broker, strategy_cfg, accumulate_tickers: set) -> list:
         if result is not None and result.success and broker.mode == 'live':
             _track_new_live_position(broker, decision.ticker, '수렴매수')
     return decisions
+
+
+def _delisting_blocked_tickers() -> set:
+    """거래지원 종료 예정 코인(매수 차단 대상). 30분이 지났으면 먼저 공지를 다시 읽는다. 읽기/조회가
+    실패해도 사이클은 계속 돌아야 하므로 예외는 삼키고, 그땐 마지막으로 저장된 목록을 쓴다."""
+    try:
+        upbit_delisting.refresh_if_stale()
+    except Exception as e:
+        logger.error(f"거래지원 종료 목록 갱신 실패(마지막 목록으로 판단): {e}")
+    try:
+        return upbit_delisting.delisting_tickers()
+    except Exception as e:
+        logger.error(f"거래지원 종료 목록 조회 실패(이번 사이클은 차단 없이 진행): {e}")
+        return set()
 
 
 def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
@@ -411,7 +430,12 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
                 account = {'cash_balance': broker.get_cash_balance()}  # 가상 원장이 아니라 실제 KRW 잔고
             else:
                 account = get_or_create_paper_account(broker.broker_name, broker.mode, Config.TRADE_INITIAL_CASH_KRW)
-            candidates = [c for c in get_coin_screening_candidates() if c['ticker'] not in accumulate_tickers]
+            # 거래지원 종료 예정 코인은 어떤 경로(일반 진입/모아가기/수렴 매수)로도 새로 사지 않는다
+            # (app/core/upbit_delisting.py — 업비트 공지를 30분마다 읽어 둔 목록). 이미 보유 중인 건
+            # 청산 규칙대로 그대로 관리한다(여기선 신규 매수만 막음).
+            delisting_blocked = _delisting_blocked_tickers()
+            candidates = [c for c in get_coin_screening_candidates()
+                          if c['ticker'] not in accumulate_tickers and c['ticker'] not in delisting_blocked]
 
             # 대시보드에서 특정 종목만 체크(수동 승인)했다면 그 종목만 진입 대상으로 좁힌다.
             # 모의매매는 아무것도 체크 안 했으면(빈 집합) 기존처럼 전체 후보를 대상으로 하지만,
@@ -463,6 +487,7 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
                     last_buy_at=get_last_accumulate_buy_times(broker.broker_name, broker.mode),
                     get_price_fn=broker.get_current_price,
                 )
+                accumulate_decisions = [d for d in accumulate_decisions if d.ticker not in delisting_blocked]
                 for decision in accumulate_decisions:
                     _execute(decision, broker)
                 entry_decisions = entry_decisions + accumulate_decisions
@@ -470,7 +495,7 @@ def run_trade_cycle(broker=None, trigger_type: str = None) -> dict:
             # ④ 수렴 자동 매수 — 승인 없이 봇이 고른 새 코인을 하루 한도만큼 산다(docs/auto-trade-convergence.md).
             # 시세 조회 실패 등으로 여기서 예외가 나도 이미 끝난 청산·일반 매수 결과는 살리고 사이클을 이어간다.
             try:
-                entry_decisions = entry_decisions + _run_convergence_buy(broker, strategy_cfg, accumulate_tickers)
+                entry_decisions = entry_decisions + _run_convergence_buy(broker, strategy_cfg, accumulate_tickers, delisting_blocked)
             except Exception as e:
                 logger.error(f"[{broker.broker_name}/{broker.mode}] 수렴 자동 매수 단계 실패(이번 사이클은 건너뜀): {e}")
 
@@ -825,6 +850,17 @@ def get_live_dashboard_summary() -> dict:
             **invested_gauge_fields(pos.qty, pos.avg_buy_price, per_position_cap_krw),
         })
 
+    # 거래지원 종료 예정 / 투자유의 라벨(실거래 표 종목명 옆). 목록은 실거래 루프가 30분마다 채운다 —
+    # 대시보드는 읽기만 한다(여기서 공지를 읽으면 새로고침마다 업비트 공지 서버를 두드리게 됨).
+    market_alerts = get_upbit_market_alerts()
+    market_alert_state = get_upbit_market_alert_state()
+    for row in candidates + extra_positions:
+        alert = market_alerts.get(row['ticker'])
+        row['delisting'] = bool(alert and alert['delisting'])
+        row['delisting_at'] = alert['delisting_at'] if alert else None
+        row['delisting_notice'] = alert['notice_title'] if alert else None
+        row['market_warning'] = bool(alert and alert['warning'])
+
     # ── 하락위험 코인 관심목록(Downside Watch) — 진입 후보의 거울상. 표시 전용이라
     # 매매 판단/주문과 완전히 분리돼 있고, evaluate_exits/_reconcile_live_positions는 안 건드린다.
     # docs/auto-trade-downside-watch.md. Phase 2(관심 등록분을 봇이 처리)는 별도.
@@ -884,6 +920,8 @@ def get_live_dashboard_summary() -> dict:
         'all_candidates': all_candidates,
         'candidates': candidates,
         'extra_positions': extra_positions,
+        'market_alert_state': market_alert_state,
+        'delisting_count': sum(1 for a in market_alerts.values() if a['delisting']),
         'downside_candidates': downside_candidates,
         'dca_max_count': strategy_cfg.TRADE_DCA_MAX_COUNT,
         'per_position_cap_krw': per_position_cap_krw,
