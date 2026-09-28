@@ -289,7 +289,7 @@
         </div>
     </div>
 
-    <!-- 모아가기(docs/auto-trade-accumulate.md) — 등록 코인은 정밀 매수조건을 통과하면 정해둔 금액만큼 사고
+    <!-- 모아가기(docs/auto-trade-accumulate.md) — 등록 코인은 정밀검사와 무관하게 주기적으로 정해둔 금액만큼 사고
          자동으로 팔지 않는다. 설정과 현황을 이 카드 한 곳에 모았고, 등록 코인은 위 실거래 표에서 빠진다. -->
     <div class="card-panel mb-3">
         <div class="section-title mb-2">🪙 모아가기 <span id="accumulateStateText" class="text-muted" style="font-size:0.78rem; font-weight:400"></span></div>
@@ -317,7 +317,6 @@
                 <thead>
                     <tr>
                         <th>종목</th>
-                        <th style="text-align:center">정밀검사</th>
                         <th>현재가<div style="font-size:0.72rem; font-weight:400; color:#cbd5e1">보유수량</div></th>
                         <th>평단가<div style="font-size:0.72rem; font-weight:400; color:#cbd5e1">평가금액</div></th>
                         <th>평가손익</th>
@@ -326,17 +325,16 @@
                     </tr>
                 </thead>
                 <tbody id="accumulateBody">
-                    <tr class="loading-row"><td colspan="7">로딩 중...</td></tr>
+                    <tr class="loading-row"><td colspan="6">로딩 중...</td></tr>
                 </tbody>
             </table>
         </div>
         <div class="mt-2 text-muted" style="font-size:0.72rem">
-            * 켜두면 등록한 코인은 아래 "🔬 정밀 매수조건"에서 켠 조건을 <b>통과할 때마다</b> 1회 매수 금액만큼 삽니다.
-            조건이 계속 맞아도 코인별로 매수 간격에 <b>1번까지만</b> 삽니다. 스크리닝·실거래 승인·최대 동시보유 종목수와는 무관하고,
-            관찰 모드여도 삽니다(여기서는 조건이 매수 신호입니다). 켜진 정밀조건이 하나도 없으면 사지 않습니다.
+            * 켜두면 등록한 코인은 <b>매수 간격마다</b> 1회 매수 금액만큼 삽니다(코인별로 간격에 1번).
+            정밀 매수조건·스크리닝·실거래 승인·최대 동시보유 종목수와는 무관합니다. 거래지원 종료 예정 코인은 사지 않습니다.
             <br>* 등록 코인은 <b>자동으로 팔지 않습니다</b>(손절·익절·RSI 매도·물타기 전부 제외) — 팔 때는 업비트에서 직접 파세요.
             위 실거래 표에서도 빠집니다. 모아가기를 끄면 다시 일반 종목과 똑같이 취급합니다.
-            <br>* 실거래 실행 스위치가 켜져 있어야 사고, <code>condition-check-bot</code>이 떠 있어야 검사 결과가 생깁니다.
+            <br>* 실거래 실행 스위치가 켜져 있어야 삽니다.
         </div>
     </div>
 
@@ -1441,18 +1439,10 @@
         const body = document.getElementById('accumulateBody');
         const rows = acc.rows || [];
         if (!rows.length) {
-            body.innerHTML = '<tr><td colspan="7" class="text-muted">등록한 코인이 없습니다.</td></tr>';
+            body.innerHTML = '<tr><td colspan="6" class="text-muted">등록한 코인이 없습니다.</td></tr>';
             return;
         }
-        const conditionsOn = _conditions.some(c => c.enabled);
         body.innerHTML = rows.map(r => {
-            let cond;
-            if (!conditionsOn) cond = '<span class="text-muted">조건 꺼짐</span>';
-            else if (r.condition_passed === null || r.condition_passed === undefined) cond = '<span class="signal-badge signal-badge-mild">검사 없음</span>';
-            else if (r.condition_passed) cond = `<span class="signal-badge signal-badge-good" title="${escapeAttr(conditionDetailText(r.condition_detail))}">통과</span>`;
-            else cond = `<span class="signal-badge signal-badge-mild" title="${escapeAttr(conditionDetailText(r.condition_detail))}">미충족</span>`;
-            cond += conditionItemsHtml(r.condition_detail);
-            if (r.condition_checked_at) cond += `<div style="font-size:0.64rem; color:#94a3b8">${r.condition_checked_at}</div>`;
             const pnlKrw = (r.eval_amount !== null && r.eval_amount !== undefined && r.avg_buy_price && r.qty)
                 ? r.eval_amount - r.avg_buy_price * r.qty : null;
             let next;
@@ -1461,7 +1451,6 @@
             else next = `<span class="text-muted" style="font-size:0.74rem">${escapeAttr((r.next_reason || '').replace(/^모아가기: /, ''))}</span>`;
             return `<tr>
                 <td><b>${escapeAttr(r.ticker)}</b></td>
-                <td style="text-align:center">${cond}</td>
                 <td>${fmtKrw(r.current_price)}<div style="font-size:0.72rem; color:#94a3b8">${fmtQty(r.qty)}</div></td>
                 <td>${fmtKrw(r.avg_buy_price)}<div style="font-size:0.72rem; color:#94a3b8">${fmtKrw(r.eval_amount)}</div></td>
                 <td>${pnlSpan(pnlKrw, r.pnl_pct)}</td>
