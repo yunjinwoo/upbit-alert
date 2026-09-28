@@ -118,6 +118,8 @@
         .btn-row-buy:hover:not(:disabled) { background: #fecaca; }
         .btn-row-sell { background: #dbeafe; color: #1d4ed8; }
         .btn-row-sell:hover:not(:disabled) { background: #bfdbfe; }
+        .btn-row-exclude { background: #f1f5f9; color: #475569; }
+        .btn-row-exclude:hover:not(:disabled) { background: #e2e8f0; }
     </style>
 </head>
 <body>
@@ -993,6 +995,7 @@
         const tradeButtons = `
             <button class="btn-row-trade btn-row-buy" onclick="liveForceTradeRow('${ticker}', 'buy', this)" title="1종목당 매수금액만큼 지금 즉시 실매수">매수</button>
             ${held ? `<button class="btn-row-trade btn-row-sell" onclick="liveForceTradeRow('${ticker}', 'sell', this)" title="보유 수량 전량을 지금 즉시 실매도">매도</button>` : ''}
+            ${held ? '' : `<button class="btn-row-trade btn-row-exclude" onclick="liveExcludeRow('${ticker}', this)" title="관심 등록과 실거래 승인을 둘 다 해제해 이 표에서 뺍니다(보유 종목은 봇이 계속 관리하므로 뺄 수 없음)">제외</button>`}
         `;
         return `
             <tr>
@@ -1540,6 +1543,32 @@
             checkbox.checked = !nextApproved;
         } finally {
             checkbox.disabled = false;
+        }
+    }
+
+    // 매매 칸의 "제외" — 관심 등록(1단계)과 실거래 승인(2단계)을 한 번에 해제해 실거래 표에서 뺀다.
+    // 스크리닝 후보에서 빠진 종목은 "🎯 매매 대상 코인" 표에도 안 나와서 관심 등록을 끌 곳이 없었다.
+    // 보유 중인 종목은 봇이 손절/익절을 계속 관리해야 하므로 버튼을 두지 않는다(미보유 행에만 노출).
+    async function liveExcludeRow(ticker, btn) {
+        if (!confirm(`${ticker}을(를) 실거래 표에서 뺄까요? 관심 등록과 실거래 승인이 해제되고, 다시 쓰려면 "🎯 매매 대상 코인" 표에서 관심 등록하면 됩니다.`)) return;
+        btn.disabled = true;
+        try {
+            for (const [url, body] of [
+                ['api/auto-trade/live/candidates/approve', { ticker, approved: false }],
+                ['api/auto-trade/live/candidates/watchlist', { ticker, watchlisted: false }],
+            ]) {
+                const res = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const json = await res.json();
+                if (json.status !== 'success') throw new Error(json.message);
+            }
+            await loadLiveSummary();
+        } catch (e) {
+            alert('제외 실패: ' + e.message);
+            btn.disabled = false;
         }
     }
 
