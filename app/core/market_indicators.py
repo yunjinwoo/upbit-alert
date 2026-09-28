@@ -9,6 +9,7 @@
   (/api/v3/global, 키 불필요)의 market_cap_percentage를 쓴다. 조회 실패 시 None으로 두고
   RSI 쪽은 그대로 보여준다(한쪽 소스 장애가 카드 전체를 깨지 않게).
 """
+import threading
 import time
 from typing import Callable, Optional
 
@@ -29,6 +30,13 @@ CANDLE_COUNT = 200  # 업비트 1회 조회 최대치 — EWM 평활 워밍업�
 
 COINGECKO_GLOBAL_URL = 'https://api.coingecko.com/api/v3/global'
 _REQUEST_TIMEOUT_SEC = 5
+# 업비트 캔들 REST — pyupbit.get_ohlcv는 내부 requests.get에 timeout이 없어서 연결이 멈추면 요청이
+# 영원히 걸린다(화면에서 market-indicators가 계속 "보류 중"으로 남던 원인). 그래서 직접 부르고 제한시간을 건다.
+UPBIT_CANDLE_URLS = {
+    'minute240': 'https://api.upbit.com/v1/candles/minutes/240',
+    'day': 'https://api.upbit.com/v1/candles/days',
+    'week': 'https://api.upbit.com/v1/candles/weeks',
+}
 
 BTC_CACHE_TTL_SEC = 60        # RSI는 봉이 진행 중이라 계속 움직이므로 짧게
 DOMINANCE_CACHE_TTL_SEC = 300  # CoinGecko 무료 API 호출 제한 대비(값도 천천히 변함)
@@ -37,6 +45,9 @@ _cache = {
     'btc': {'value': None, 'fetched_at': 0.0},
     'dominance': {'value': None, 'fetched_at': 0.0},
 }
+# 키별 조회 잠금 — 캐시가 비었을 때 탭 여러 개/주기 호출이 겹쳐도 외부 API는 한 번만 부르고,
+# 뒤에 온 요청은 그 결과(캐시)를 받는다.
+_locks = {key: threading.Lock() for key in _cache}
 
 
 def calc_btc_indicators(get_candles_fn: Callable[[str, str, int], Optional[pd.DataFrame]]) -> dict:
@@ -96,25 +107,41 @@ def _fetch_dominance() -> dict:
     return parse_coingecko_global(resp.json())
 
 
+def parse_upbit_candles(rows: list) -> Optional[pd.DataFrame]:
+    """업비트 캔들 응답(최신 봉이 앞)을 pyupbit.get_ohlcv와 같은 모양(과거→최신, open/high/low/close/
+    volume/value 컬럼)의 DataFrame으로 바꾼다."""
+    if not rows:
+        return None
+    df = pd.DataFrame(rows)
+    df.index = pd.to_datetime(df['candle_date_time_kst'])
+    df = df.rename(columns={'opening_price': 'open', 'high_price': 'high', 'low_price': 'low',
+                            'trade_price': 'close', 'candle_acc_trade_volume': 'volume',
+                            'candle_acc_trade_price': 'value'})
+    return df[['open', 'high', 'low', 'close', 'volume', 'value']].sort_index()
+
+
 def _upbit_candles(ticker: str, interval: str, count: int):
-    import pyupbit  # 서버 프로세스에서만 필요 — 순수 계산 함수 테스트가 pyupbit 없이 돌게 지연 임포트
-    return pyupbit.get_ohlcv(ticker, interval=interval, count=count)
+    resp = requests.get(UPBIT_CANDLE_URLS[interval], params={'market': ticker, 'count': count},
+                        timeout=_REQUEST_TIMEOUT_SEC, headers={'Accept': 'application/json'})
+    resp.raise_for_status()
+    return parse_upbit_candles(resp.json())
 
 
 def _cached(key: str, ttl: float, fetch_fn):
     """캐시가 살아 있으면 그대로, 아니면 새로 조회. 조회 실패 시 예전 값(있으면)을 돌려주고
     stale=True로 표시한다 — 일시 장애 때문에 카드가 통째로 비지 않게."""
     slot = _cache[key]
-    now = time.time()
-    if slot['value'] is not None and now - slot['fetched_at'] < ttl:
-        return slot['value'], slot['fetched_at'], False, None
-    try:
-        value = fetch_fn()
-        slot['value'], slot['fetched_at'] = value, now
-        return value, now, False, None
-    except Exception as e:
-        logger.error(f"시장 지표({key}) 조회 실패: {e}")
-        return slot['value'], slot['fetched_at'], slot['value'] is not None, str(e)
+    with _locks[key]:
+        now = time.time()
+        if slot['value'] is not None and now - slot['fetched_at'] < ttl:
+            return slot['value'], slot['fetched_at'], False, None
+        try:
+            value = fetch_fn()
+            slot['value'], slot['fetched_at'] = value, now
+            return value, now, False, None
+        except Exception as e:
+            logger.error(f"시장 지표({key}) 조회 실패: {e}")
+            return slot['value'], slot['fetched_at'], slot['value'] is not None, str(e)
 
 
 def get_market_indicators() -> dict:

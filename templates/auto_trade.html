@@ -2018,11 +2018,18 @@
             </div>`;
     }
 
+    // 이전 요청이 아직 안 끝났으면 1분 주기 호출을 건너뛴다(응답이 늦을 때 요청이 쌓이지 않게).
+    // 30초 넘게 걸리면 끊고 실패로 표시한다 — 서버가 멈춰도 "보류 중"으로 영원히 남지 않게.
+    let marketIndicatorsLoading = false;
     async function loadMarketIndicators() {
+        if (marketIndicatorsLoading) return;
+        marketIndicatorsLoading = true;
         const body = document.getElementById('marketIndicatorsBody');
         const updatedEl = document.getElementById('marketIndicatorsUpdatedAt');
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 30000);
         try {
-            const res = await fetch("{{ url_for('get_market_indicators_api') }}");
+            const res = await fetch("{{ url_for('get_market_indicators_api') }}", {signal: ctrl.signal});
             const json = await res.json();
             if (json.status !== 'success') throw new Error(json.message);
             const btc = json.btc || {};
@@ -2053,7 +2060,11 @@
             updatedEl.textContent = (json.btc_fetched_at ? `기준 ${json.btc_fetched_at}` : '')
                 + (stale.length ? ` · ${stale.join('/')} 최신 조회 실패로 이전 값 표시 중` : '');
         } catch (e) {
-            body.innerHTML = `<div class="stat-box"><div class="text-danger" style="font-size:0.8rem">시장 지표 조회 실패: ${e.message}</div></div>`;
+            const msg = e.name === 'AbortError' ? '30초 안에 응답이 없어 중단했습니다' : e.message;
+            body.innerHTML = `<div class="stat-box"><div class="text-danger" style="font-size:0.8rem">시장 지표 조회 실패: ${msg}</div></div>`;
+        } finally {
+            clearTimeout(timer);
+            marketIndicatorsLoading = false;
         }
     }
 
