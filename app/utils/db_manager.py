@@ -5469,3 +5469,77 @@ def get_recently_traded_tickers(broker: str, mode: str, since: str) -> set:
     rows = {r[0] for r in cursor.fetchall()}
     conn.close()
     return rows
+
+
+# ── 업비트 거래지원 종료 예정 / 투자유의 — app/core/upbit_delisting.py
+# 실거래 루프(별도 프로세스)가 12시간마다 채우고 대시보드(API 프로세스)가 읽는다. 시장 판단 테이블과
+# 같은 이유로 조회/저장 함수마다 IF NOT EXISTS를 건다.
+#   upbit_market_alerts      — 종목별 1행(종료 예정 시각·근거 공지, 투자유의 여부). 새로 읽을 때마다 통째로 교체
+#   upbit_market_alert_state — 1행짜리 마지막 확인 결과(시각/성공 여부/오류)
+
+def _ensure_upbit_market_alert_tables(cursor) -> None:
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS upbit_market_alerts (
+            ticker TEXT PRIMARY KEY,
+            delisting INTEGER NOT NULL DEFAULT 0,
+            delisting_at TEXT,
+            notice_id TEXT,
+            notice_title TEXT,
+            warning INTEGER NOT NULL DEFAULT 0
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS upbit_market_alert_state (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            checked_at TEXT,
+            success INTEGER,
+            error_message TEXT
+        )
+    ''')
+
+
+def get_upbit_market_alerts() -> dict:
+    """{ticker: {delisting, delisting_at, notice_id, notice_title, warning}}"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    _ensure_upbit_market_alert_tables(cursor)
+    cursor.execute('SELECT * FROM upbit_market_alerts')
+    rows = cursor.fetchall()
+    conn.close()
+    return {r['ticker']: {**dict(r), 'delisting': bool(r['delisting']), 'warning': bool(r['warning'])} for r in rows}
+
+
+def get_upbit_market_alert_state() -> dict:
+    """마지막 확인 결과. 한 번도 확인하지 않았으면 None."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    _ensure_upbit_market_alert_tables(cursor)
+    cursor.execute('SELECT checked_at, success, error_message FROM upbit_market_alert_state WHERE id = 1')
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def save_upbit_market_alerts(alerts: dict = None, error_message: str = None) -> None:
+    """alerts가 None이면(조회 실패) 기존 목록은 그대로 두고 상태만 실패로 기록한다 — 공지 서버가 잠깐
+    안 될 때 종료 예정 목록이 비어 매수 차단이 풀리면 안 되기 때문."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    _ensure_upbit_market_alert_tables(cursor)
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    if alerts is not None:
+        cursor.execute('DELETE FROM upbit_market_alerts')
+        cursor.executemany(
+            'INSERT INTO upbit_market_alerts (ticker, delisting, delisting_at, notice_id, notice_title, warning) '
+            'VALUES (?, ?, ?, ?, ?, ?)',
+            [(t, int(bool(a.get('delisting'))), a.get('delisting_at'), a.get('notice_id'),
+              a.get('notice_title'), int(bool(a.get('warning')))) for t, a in alerts.items()],
+        )
+    cursor.execute(
+        'INSERT OR REPLACE INTO upbit_market_alert_state (id, checked_at, success, error_message) VALUES (1, ?, ?, ?)',
+        (now, 0 if alerts is None else 1, error_message),
+    )
+    conn.commit()
+    conn.close()
