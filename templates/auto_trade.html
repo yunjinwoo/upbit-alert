@@ -323,19 +323,21 @@
                         <th>현재가<div style="font-size:0.72rem; font-weight:400; color:#cbd5e1">보유수량</div></th>
                         <th>평단가<div style="font-size:0.72rem; font-weight:400; color:#cbd5e1">평가금액</div></th>
                         <th>평가손익</th>
+                        <th>1회 매수(예상)<div style="font-size:0.72rem; font-weight:400; color:#cbd5e1">수량 · 금액</div></th>
                         <th>마지막 모아가기 매수</th>
                         <th>다음 사이클</th>
                     </tr>
                 </thead>
                 <tbody id="accumulateBody">
-                    <tr class="loading-row"><td colspan="6">로딩 중...</td></tr>
+                    <tr class="loading-row"><td colspan="7">로딩 중...</td></tr>
                 </tbody>
             </table>
         </div>
         <div class="mt-2 text-muted" style="font-size:0.72rem">
             * 켜두면 등록한 코인은 <b>매수 간격마다</b> 1회 매수 금액만큼 삽니다(코인별로 간격에 1번).
             <code>BTC:0.00005</code>처럼 수량을 붙이면 그 코인은 금액 대신 <b>수량×현재가</b>만큼 시장가로 삽니다
-            (체결 순간 가격이 조금 움직이면 수량이 아주 약간 다를 수 있고, 5,000원 미만이면 사지 않습니다).
+            (체결 순간 가격이 조금 움직이면 수량이 아주 약간 다를 수 있습니다). 가격이 내려 5,000원이 안 되면 입력한 수량의
+            마지막 자릿수 단위(0.002 → 0.001, 0.00005 → 0.00001)로 수량을 올려 5,000원 이상이 되게 삽니다.
             정밀 매수조건·스크리닝·실거래 승인·최대 동시보유 종목수와는 무관합니다. 거래지원 종료 예정 코인은 사지 않습니다.
             <br>* 등록 코인은 <b>자동으로 팔지 않습니다</b>(손절·익절·RSI 매도·물타기 전부 제외) — 팔 때는 업비트에서 직접 파세요.
             위 실거래 표에서도 빠집니다. 모아가기를 끄면 다시 일반 종목과 똑같이 취급합니다.
@@ -1439,6 +1441,19 @@
     // ── 모아가기. 입력칸은 처음 한 번(또는 저장 직후)만 채운다 — 새로고침할 때마다 덮어쓰면 입력 중인 값이 날아간다.
     let _accumulateFormLoaded = false;
 
+    // 1회 매수 계획 — 수량 코인은 "0.00005개 · 약 7,500원", 최소 주문금액 때문에 수량을 올렸으면 원래 수량도 표시.
+    // 금액 코인은 "10,000원 · 약 0.0000667개".
+    function accumulatePlanHtml(r) {
+        if (r.plan_qty === null || r.plan_qty === undefined) return '<span class="empty-val">—</span>';
+        const coin = r.ticker.replace(/^KRW-/, '');
+        if (!r.target_qty) {
+            return `${fmtKrw(r.plan_amount_krw)}<div style="font-size:0.72rem; color:#94a3b8">약 ${fmtQty(r.plan_qty)} ${escapeAttr(coin)}</div>`;
+        }
+        let html = `<b>${r.plan_qty} ${escapeAttr(coin)}</b><div style="font-size:0.72rem; color:#94a3b8">약 ${fmtKrw(r.plan_amount_krw)}</div>`;
+        if (r.plan_bumped_from) html += `<div style="font-size:0.68rem; color:#d97706">최소 5,000원 맞춰 ${r.plan_bumped_from}→${r.plan_qty}</div>`;
+        return html;
+    }
+
     // 'BTC:0.00005, ETH' — 수량으로 사는 코인은 ':수량'을 붙여 입력칸과 같은 모양으로 보여준다.
     function accumulateTickerText(acc) {
         const qty = acc.quantities || {};
@@ -1464,7 +1479,7 @@
         const body = document.getElementById('accumulateBody');
         const rows = acc.rows || [];
         if (!rows.length) {
-            body.innerHTML = '<tr><td colspan="6" class="text-muted">등록한 코인이 없습니다.</td></tr>';
+            body.innerHTML = '<tr><td colspan="7" class="text-muted">등록한 코인이 없습니다.</td></tr>';
             return;
         }
         body.innerHTML = rows.map(r => {
@@ -1472,15 +1487,14 @@
                 ? r.eval_amount - r.avg_buy_price * r.qty : null;
             let next;
             if (!acc.enabled) next = '<span class="text-muted">꺼짐</span>';
-            else if (r.next_action === 'BUY') next = r.target_qty
-                ? `<span class="decision-badge decision-BUY">${r.target_qty}개 매수</span><div style="font-size:0.72rem; color:#94a3b8">약 ${fmtKrw(r.next_amount_krw)}</div>`
-                : `<span class="decision-badge decision-BUY">${fmtKrw(r.next_amount_krw ?? acc.amount_krw)} 매수</span>`;
+            else if (r.next_action === 'BUY') next = '<span class="decision-badge decision-BUY">매수</span>';
             else next = `<span class="text-muted" style="font-size:0.74rem">${escapeAttr((r.next_reason || '').replace(/^모아가기: /, ''))}</span>`;
             return `<tr>
                 <td><b>${escapeAttr(r.ticker)}</b></td>
                 <td>${fmtKrw(r.current_price)}<div style="font-size:0.72rem; color:#94a3b8">${fmtQty(r.qty)}</div></td>
                 <td>${fmtKrw(r.avg_buy_price)}<div style="font-size:0.72rem; color:#94a3b8">${fmtKrw(r.eval_amount)}</div></td>
                 <td>${pnlSpan(pnlKrw, r.pnl_pct)}</td>
+                <td>${accumulatePlanHtml(r)}</td>
                 <td>${r.last_buy_at ? escapeAttr(r.last_buy_at) : '<span class="empty-val">—</span>'}</td>
                 <td>${next}</td>
             </tr>`;

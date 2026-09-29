@@ -62,11 +62,26 @@ def test_evaluate_accumulation():
     )
     assert by_qty[0].action == 'BUY' and by_qty[0].amount_krw == 7_500 and by_qty[0].qty == 0.00005, by_qty[0]
     assert by_qty[1].action == 'BUY' and by_qty[1].amount_krw == 10_000, by_qty[1]
-    assert by_qty[2].action == 'SKIP' and '최소 주문금액' in by_qty[2].reason, by_qty[2]
+    # 5,000원이 안 되면 입력 수량의 마지막 자릿수 단위로 올려 5,000원 이상에서 산다(1 → 1단위 → 5개)
+    assert by_qty[2].action == 'BUY' and by_qty[2].qty == 5 and by_qty[2].amount_krw == 5_000, by_qty[2]
+    assert '최소 주문금액 맞춤' in by_qty[2].reason and by_qty[2].reason.startswith('모아가기'), by_qty[2]
+    assert '맞춤' not in by_qty[0].reason
+
+    from app.core.trade_strategy import accumulate_order_plan
+    plan = accumulate_order_plan(80_000_000.0, 10_000, 0.00005)   # 4,000원 → 0.00001씩 올려 0.00007(5,600원)
+    assert plan == {'qty': 0.00007, 'amount_krw': 5_600, 'bumped_from': 0.00005}, plan
+    plan = accumulate_order_plan(2_000_000.0, 10_000, 0.002)      # 4,000원 → 0.001씩 올려 0.003(6,000원)
+    assert plan == {'qty': 0.003, 'amount_krw': 6_000, 'bumped_from': 0.002}, plan
+    plan = accumulate_order_plan(1_000_000.0, 10_000, 0.002)      # 딱 5,000원이면 그걸로
+    assert plan == {'qty': 0.005, 'amount_krw': 5_000, 'bumped_from': 0.002}, plan
+    plan = accumulate_order_plan(150_000_000.0, 10_000, 0.00005)  # 이미 넘으면 그대로
+    assert plan == {'qty': 0.00005, 'amount_krw': 7_500, 'bumped_from': None}, plan
+    plan = accumulate_order_plan(100_000_000.0, 10_000)           # 금액 코인
+    assert plan['amount_krw'] == 10_000 and plan['bumped_from'] is None, plan
     poor = evaluate_accumulation(['KRW-BTC'], 5_000, 50_000, 24, last_buy_at={}, get_price_fn=lambda t: 150_000_000.0,
                                  now=NOW, quantities={'KRW-BTC': 0.00005})
     assert poor[0].action == 'SKIP' and '현금 부족' in poor[0].reason, poor
-    print('✓ 판단: 정밀조건 없이 간격마다 BUY, 간격 대기/현금 부족이면 SKIP, 수량 지정 코인은 수량×현재가로 BUY')
+    print('✓ 판단: 정밀조건 없이 간격마다 BUY, 간격 대기/현금 부족이면 SKIP, 수량 지정 코인은 수량×현재가로 BUY(5,000원 미만이면 수량 올림)')
 
 
 def test_db_settings_and_last_buy():

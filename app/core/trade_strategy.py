@@ -43,6 +43,7 @@ trail_pct까지(단 본전 아래로는 내려가지 않게) 버틴다. 물타�
 import math
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal, ROUND_CEILING
 from typing import Callable, List, Optional
 
 
@@ -610,13 +611,35 @@ def invested_gauge_fields(qty, avg_buy_price, per_position_cap_krw) -> dict:
     }
 
 
+def accumulate_order_plan(price: float, amount_krw: float, target_qty: float = None,
+                          min_order_krw: float = 5000) -> dict:
+    """모아가기 1회 매수 계획 {qty, amount_krw, bumped_from} — 매매 사이클과 대시보드가 같이 쓴다.
+
+    금액 코인은 amount_krw 그대로(qty는 예상치). 수량 코인은 수량×현재가(원 단위 올림)를 주문 금액으로 쓰는데
+    (시장가 매수는 원화 금액으로만 낼 수 있음), 그게 최소 주문금액보다 작으면 입력 수량의 마지막 자릿수 단위
+    (0.002 → 0.001, 0.00005 → 0.00001)로 수량을 올려 최소 주문금액 이상이 되는 가장 작은 수량을 쓴다.
+    bumped_from은 올렸을 때 원래 입력 수량, 안 올렸으면 None."""
+    if not target_qty:
+        return {'qty': amount_krw / price, 'amount_krw': amount_krw, 'bumped_from': None}
+    qty = Decimal(repr(float(target_qty))).normalize()
+    step = Decimal(1).scaleb(min(qty.as_tuple().exponent, 0))
+    price_d = Decimal(repr(float(price)))
+    need = Decimal(repr(float(min_order_krw)))
+    bumped_from = None
+    if (qty * price_d).to_integral_value(rounding=ROUND_CEILING) < need:
+        bumped_from = float(target_qty)
+        qty += step * ((need / price_d - qty) / step).to_integral_value(rounding=ROUND_CEILING)
+    return {'qty': float(qty), 'amount_krw': float((qty * price_d).to_integral_value(rounding=ROUND_CEILING)),
+            'bumped_from': bumped_from}
+
+
 def evaluate_accumulation(tickers: List[str], cash_balance: float, amount_krw: float, interval_hours: float,
                           last_buy_at: dict, get_price_fn: Callable[[str], Optional[float]],
                           now: datetime = None, quantities: dict = None,
                           min_order_krw: float = 5000) -> List[TradeDecision]:
     """모아가기(docs/auto-trade-accumulate.md) — 등록 코인마다 이번 사이클에 amount_krw만큼 살지 판단한다.
-    quantities({ticker: 수량})에 있는 코인은 금액 대신 그 수량만큼 산다 — 시장가 매수는 원화 금액으로만 낼 수
-    있어서 수량×현재가(원 단위 올림)를 주문 금액으로 쓴다. 그 금액이 최소 주문금액보다 작으면 사지 않는다.
+    quantities({ticker: 수량})에 있는 코인은 금액 대신 그 수량만큼 산다 — 주문 금액과 최소 주문금액 미달 시
+    수량 올림은 accumulate_order_plan() 참고.
 
     일반 진입(evaluate_entries)과 다른 점: 스크리닝 후보·실거래 승인·정밀 매수조건·"이미 보유 중"·최대 보유
     종목 수를 보지 않는다. 시세와 상관없이 주기적으로 모으는 게 목적이라 코인별로 interval_hours에 1번 산다.
@@ -643,18 +666,15 @@ def evaluate_accumulation(tickers: List[str], cash_balance: float, amount_krw: f
         if not price:
             decisions.append(TradeDecision(ticker, 'SKIP', reason='모아가기: 시세 조회 실패'))
             continue
-        order_krw = amount_krw
-        if target_qty:
-            order_krw = float(math.ceil(target_qty * price))
-            if order_krw < min_order_krw:
-                decisions.append(TradeDecision(
-                    ticker, 'SKIP', reason=f'모아가기: 수량 {target_qty:g}개는 {order_krw:,.0f}원이라 최소 주문금액 미달',
-                ))
-                continue
-            if cash_balance < order_krw:
-                decisions.append(TradeDecision(ticker, 'SKIP', reason='모아가기: 현금 부족'))
-                continue
-        decisions.append(TradeDecision(ticker, 'BUY', reason='모아가기(정기 매수)', price=price,
-                                       qty=target_qty, amount_krw=order_krw))
-        cash_balance -= order_krw
+        plan = accumulate_order_plan(price, amount_krw, target_qty, min_order_krw)
+        if cash_balance < plan['amount_krw']:
+            decisions.append(TradeDecision(ticker, 'SKIP', reason='모아가기: 현금 부족'))
+            continue
+        reason = '모아가기(정기 매수)'
+        if plan['bumped_from']:
+            fmt = lambda q: f'{q:.10f}'.rstrip('0').rstrip('.')
+            reason += f" 수량 {fmt(plan['bumped_from'])}→{fmt(plan['qty'])}(최소 주문금액 맞춤)"
+        decisions.append(TradeDecision(ticker, 'BUY', reason=reason, price=price,
+                                       qty=plan['qty'] if target_qty else None, amount_krw=plan['amount_krw']))
+        cash_balance -= plan['amount_krw']
     return decisions

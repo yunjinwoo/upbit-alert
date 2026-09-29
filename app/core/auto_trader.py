@@ -22,7 +22,7 @@ from app.core.brokers.paper_broker import PaperBroker
 from app.core.brokers.upbit_live_broker import UpbitLiveBroker
 from app.core.brokers.upbit_account import get_real_krw_balance
 from app.core.strategy_presets import match_preset
-from app.core.trade_strategy import evaluate_entries, evaluate_exits, evaluate_accumulation, invested_gauge_fields
+from app.core.trade_strategy import evaluate_entries, evaluate_exits, evaluate_accumulation, accumulate_order_plan, invested_gauge_fields
 from app.core.exit_conditions import compute_rsi
 from app.utils.db_manager import (
     get_upbit_market_alerts,
@@ -894,6 +894,10 @@ def get_live_dashboard_summary() -> dict:
         pos = real_positions.get(ticker)
         price = cached_price(ticker)
         preview = accumulate_preview.get(ticker)
+        # 1회 매수 계획(수량·예상 금액) — 간격 대기 중이어도 지금 시세로 사면 얼마인지 보여준다.
+        plan = accumulate_order_plan(price, accumulate_settings['amount_krw'],
+                                     accumulate_settings['quantities'].get(ticker),
+                                     Config.TRADE_MIN_ORDER_KRW) if price else None
         accumulate_rows.append({
             'ticker': ticker,
             'qty': pos.qty if pos else None,
@@ -904,8 +908,10 @@ def get_live_dashboard_summary() -> dict:
             'last_buy_at': last_accumulate_buy.get(ticker),
             'next_action': preview.action if preview else None,
             'next_reason': preview.reason if preview else None,
-            'next_amount_krw': preview.amount_krw if preview else None,
             'target_qty': accumulate_settings['quantities'].get(ticker),
+            'plan_qty': plan['qty'] if plan else None,
+            'plan_amount_krw': plan['amount_krw'] if plan else None,
+            'plan_bumped_from': plan['bumped_from'] if plan else None,
         })
 
     engine_settings = get_trade_engine_settings(broker.broker_name, broker.mode)
