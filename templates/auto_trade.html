@@ -204,6 +204,9 @@
         <div id="liveConditionSummary" class="text-muted mb-2" style="font-size:0.76rem"></div>
         <div id="liveExitModeSummary" class="text-muted mb-2" style="font-size:0.76rem"></div>
         <div id="liveMarketAlertSummary" class="text-muted mb-2" style="font-size:0.76rem"></div>
+        <!-- 여러 종목 한 번에 제외 — 행마다 선택 체크박스를 늘리지 않고, 이미 표에 있는 정보(오늘 후보
+             아님 / 실거래 승인 해제)로 대상을 골라 버튼 한 번에 정리한다. 보유 종목은 대상이 아니다. -->
+        <div id="liveBulkExclude" class="mb-2" style="font-size:0.76rem; display:flex; gap:6px; flex-wrap:wrap"></div>
         <div class="table-wrap">
             <table class="trade-table">
                 <thead>
@@ -1073,6 +1076,7 @@
     };
 
     function renderLiveRows() {
+        renderBulkExclude();
         const body = document.getElementById('liveCandidatesBody');
         let items = _liveRows;
         const getter = LIVE_SORT_VALUE[_liveSort.key];
@@ -1663,22 +1667,57 @@
     // 매매 칸의 "제외" — 관심 등록(1단계)과 실거래 승인(2단계)을 한 번에 해제해 실거래 표에서 뺀다.
     // 스크리닝 후보에서 빠진 종목은 "🎯 매매 대상 코인" 표에도 안 나와서 관심 등록을 끌 곳이 없었다.
     // 보유 중인 종목은 봇이 손절/익절을 계속 관리해야 하므로 버튼을 두지 않는다(미보유 행에만 노출).
+    // 관심 등록·실거래 승인을 둘 다 해제 — 한 종목 제외와 일괄 제외가 같이 쓴다.
+    async function excludeLiveTicker(ticker) {
+        for (const [url, body] of [
+            ['api/auto-trade/live/candidates/approve', { ticker, approved: false }],
+            ['api/auto-trade/live/candidates/watchlist', { ticker, watchlisted: false }],
+        ]) {
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            const json = await res.json();
+            if (json.status !== 'success') throw new Error(`${ticker}: ${json.message}`);
+        }
+    }
+
+    // 일괄 제외 대상 — 미보유 행 중에서 (a) 오늘 스크리닝 후보에서 빠진 종목, (b) 실거래 승인을 꺼 둔 종목.
+    // (b) 덕분에 "승인 체크를 여러 개 끈 뒤 버튼 한 번"으로 원하는 종목을 골라 뺄 수 있다.
+    const LIVE_BULK_EXCLUDE = [
+        { key: 'off', label: '후보 아닌 미보유', pick: r => !r.held && r.off_screening },
+        { key: 'unapproved', label: '승인 해제된 미보유', pick: r => !r.held && !r.approved },
+    ];
+
+    function renderBulkExclude() {
+        const el = document.getElementById('liveBulkExclude');
+        el.innerHTML = LIVE_BULK_EXCLUDE.map(g => {
+            const n = _liveRows.filter(it => g.pick(it.row)).length;
+            return n ? `<button class="btn-row-trade btn-row-exclude" onclick="liveBulkExclude('${g.key}', this)"
+                title="관심 등록과 실거래 승인을 해제해 이 표에서 뺍니다(보유 종목은 제외 대상 아님)">🧹 ${g.label} ${n}개 제외</button>` : '';
+        }).join('');
+    }
+
+    async function liveBulkExclude(key, btn) {
+        const g = LIVE_BULK_EXCLUDE.find(x => x.key === key);
+        const tickers = _liveRows.filter(it => g.pick(it.row)).map(it => it.row.ticker);
+        if (!tickers.length) return;
+        if (!confirm(`${g.label} ${tickers.length}개를 실거래 표에서 뺄까요?\n\n${tickers.join(', ')}\n\n관심 등록과 실거래 승인이 해제되고, 다시 쓰려면 "🎯 매매 대상 코인" 표에서 관심 등록하면 됩니다.`)) return;
+        btn.disabled = true;
+        const failed = [];
+        for (const t of tickers) {
+            try { await excludeLiveTicker(t); } catch (e) { failed.push(e.message); }
+        }
+        await loadLiveSummary();
+        if (failed.length) alert(`${failed.length}개 제외 실패:\n${failed.join('\n')}`);
+    }
+
     async function liveExcludeRow(ticker, btn) {
         if (!confirm(`${ticker}을(를) 실거래 표에서 뺄까요? 관심 등록과 실거래 승인이 해제되고, 다시 쓰려면 "🎯 매매 대상 코인" 표에서 관심 등록하면 됩니다.`)) return;
         btn.disabled = true;
         try {
-            for (const [url, body] of [
-                ['api/auto-trade/live/candidates/approve', { ticker, approved: false }],
-                ['api/auto-trade/live/candidates/watchlist', { ticker, watchlisted: false }],
-            ]) {
-                const res = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body),
-                });
-                const json = await res.json();
-                if (json.status !== 'success') throw new Error(json.message);
-            }
+            await excludeLiveTicker(ticker);
             await loadLiveSummary();
         } catch (e) {
             alert('제외 실패: ' + e.message);
