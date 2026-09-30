@@ -1078,7 +1078,8 @@
     function renderLiveRows() {
         renderBulkExclude();
         const body = document.getElementById('liveCandidatesBody');
-        let items = _liveRows;
+        const filterPick = liveFilterPick();
+        let items = filterPick ? _liveRows.filter(it => filterPick(it.row)) : _liveRows;
         const getter = LIVE_SORT_VALUE[_liveSort.key];
         if (getter && _liveSort.dir) {
             const sign = _liveSort.dir === 'asc' ? 1 : -1;
@@ -1690,20 +1691,43 @@
         { key: 'unapproved', label: '승인 해제된 미보유', pick: r => !r.held && !r.approved },
     ];
 
-    function renderBulkExclude() {
-        const el = document.getElementById('liveBulkExclude');
-        el.innerHTML = LIVE_BULK_EXCLUDE.map(g => {
-            const n = _liveRows.filter(it => g.pick(it.row)).length;
-            return n ? `<button class="btn-row-trade btn-row-exclude" onclick="liveBulkExclude('${g.key}', this)"
-                title="관심 등록과 실거래 승인을 해제해 이 표에서 뺍니다(보유 종목은 제외 대상 아님)">🧹 ${g.label} ${n}개 제외</button>` : '';
-        }).join('');
+    // 버튼을 누르면 확인 창 대신 표를 그 종목들로 거른다(다시 누르거나 "전체 보기"로 해제). 걸러진
+    // 상태에서 "이 N개 제외"를 누르면 보이는 종목만 뺀다 — 표 자체가 확인 화면 역할을 한다.
+    let _liveFilter = null;
+
+    function liveFilterPick() {
+        const g = LIVE_BULK_EXCLUDE.find(x => x.key === _liveFilter);
+        return g ? g.pick : null;
     }
 
-    async function liveBulkExclude(key, btn) {
-        const g = LIVE_BULK_EXCLUDE.find(x => x.key === key);
-        const tickers = _liveRows.filter(it => g.pick(it.row)).map(it => it.row.ticker);
-        if (!tickers.length) return;
-        if (!confirm(`${g.label} ${tickers.length}개를 실거래 표에서 뺄까요?\n\n${tickers.join(', ')}\n\n관심 등록과 실거래 승인이 해제되고, 다시 쓰려면 "🎯 매매 대상 코인" 표에서 관심 등록하면 됩니다.`)) return;
+    function renderBulkExclude() {
+        const el = document.getElementById('liveBulkExclude');
+        const counts = Object.fromEntries(LIVE_BULK_EXCLUDE.map(g => [g.key, _liveRows.filter(it => g.pick(it.row)).length]));
+        if (_liveFilter && !counts[_liveFilter]) _liveFilter = null;  // 다 빼고 나면 필터 자동 해제
+        let html = LIVE_BULK_EXCLUDE.map(g => {
+            const n = counts[g.key];
+            if (!n) return '';
+            const on = _liveFilter === g.key;
+            return `<button class="btn-row-trade ${on ? 'btn-row-sell' : 'btn-row-exclude'}" onclick="toggleLiveFilter('${g.key}')"
+                title="${on ? '다시 누르면 전체 보기' : '이 종목들만 표에 보기'}">🔎 ${g.label} ${n}개</button>`;
+        }).join('');
+        if (_liveFilter) {
+            html += `<button class="btn-row-trade btn-row-buy" onclick="liveBulkExclude(this)"
+                title="관심 등록과 실거래 승인을 해제해 이 표에서 뺍니다">🧹 이 ${counts[_liveFilter]}개 제외</button>
+                <button class="btn-row-trade btn-row-exclude" onclick="toggleLiveFilter(null)">전체 보기</button>`;
+        }
+        el.innerHTML = html;
+    }
+
+    function toggleLiveFilter(key) {
+        _liveFilter = (key && _liveFilter !== key) ? key : null;
+        renderLiveRows();
+    }
+
+    async function liveBulkExclude(btn) {
+        const pick = liveFilterPick();
+        if (!pick) return;
+        const tickers = _liveRows.filter(it => pick(it.row)).map(it => it.row.ticker);
         btn.disabled = true;
         const failed = [];
         for (const t of tickers) {
