@@ -29,6 +29,11 @@ logger = get_logger()
 MIN_ORDER_KRW = 5000
 
 
+def _plain_number(v: float) -> str:
+    """0.00005 → '0.00005', 3626000.0 → '3626000' (지수 표기 없이, 뒤쪽 0 제거)."""
+    return f'{v:.10f}'.rstrip('0').rstrip('.')
+
+
 class UpbitLiveBroker(BrokerClient):
     broker_name = "upbit"
     mode = "live"
@@ -209,6 +214,65 @@ class UpbitLiveBroker(BrokerClient):
             return OrderResult(False, ticker, 'BUY', message=f"주문 거부됨: {resp}")
 
         return self._finalize_order(resp['uuid'], ticker, 'BUY', reason, unconfirmed_kwargs={'amount_krw': amount_krw})
+
+    def _best_ask(self, ticker: str) -> Optional[float]:
+        """매도 1호가. 호가 자체가 거래소 호가 단위에 맞는 값이라 그대로 지정가로 쓸 수 있다. 실패 시 None."""
+        try:
+            book = pyupbit.get_orderbook(ticker)
+            if isinstance(book, list):
+                book = book[0] if book else None
+            units = (book or {}).get('orderbook_units') or []
+            return float(units[0]['ask_price']) if units else None
+        except Exception as e:
+            logger.error(f"[{ticker}] 호가 조회 실패: {e}")
+            return None
+
+    def buy_qty(self, ticker: str, qty: float, amount_krw: float, reason: str = "") -> OrderResult:
+        """정확히 qty개 매수(모아가기 수량 지정 코인). 시장가 매수는 원화 금액으로만 주문할 수 있어 체결 순간
+        가격이 움직이면 0.002 대신 0.001999개처럼 수량이 어긋난다 — 그래서 매도 1호가에 수량 그대로 지정가
+        매수를 낸다. 호가에 바로 걸리므로 보통 즉시 체결되고, 기다려도(_wait_for_fill) 다 안 채워지면 남은
+        주문은 취소한다(체결된 만큼만 기록, 전혀 안 됐으면 실패 → 다음 사이클에 다시 시도). 호가 조회가
+        안 되면 기존처럼 amount_krw 시장가 매수로 대신한다."""
+        blocked = self._blocked_reason()
+        if blocked:
+            logger.warning(f"[실거래 매수 차단] {ticker} — {blocked}")
+            return OrderResult(False, ticker, 'BUY', message=blocked)
+        ask = self._best_ask(ticker)
+        if not ask:
+            logger.warning(f"[{ticker}] 호가 조회 실패 — 수량 지정 대신 {amount_krw:,.0f}원 시장가 매수")
+            return self.buy_market(ticker, amount_krw, reason=reason)
+        if ask * qty < MIN_ORDER_KRW:
+            message = f"주문금액 {ask * qty:,.0f}원 < 최소주문금액 {MIN_ORDER_KRW:,.0f}원"
+            logger.warning(f"[실거래 매수 차단] {ticker} — {message}")
+            return OrderResult(False, ticker, 'BUY', message=message)
+        try:
+            # pyupbit는 str(값)을 그대로 보내는데 str(0.00005)는 '5e-05'라 거래소가 거부할 수 있다 — 소수로 풀어서 넘긴다.
+            resp = self._client.buy_limit_order(ticker, _plain_number(ask), _plain_number(qty))
+        except Exception as e:
+            logger.error(f"[{ticker}] 지정가 실매수 주문 실패: {e}")
+            return OrderResult(False, ticker, 'BUY', message=str(e))
+        if not isinstance(resp, dict) or 'uuid' not in resp:
+            logger.error(f"[실매수] {ticker} 지정가 주문 거부: {resp}")
+            return OrderResult(False, ticker, 'BUY', message=f"주문 거부됨: {resp}")
+
+        uuid = resp['uuid']
+        filled = self._wait_for_fill(uuid)
+        if not (isinstance(filled, dict) and filled.get('state') in ('done', 'cancel')):
+            try:
+                self._client.cancel_order(uuid)
+            except Exception as e:
+                logger.error(f"[{ticker}] 미체결 지정가 주문 취소 실패(uuid={uuid}): {e}")
+            logger.warning(f"[실매수] {ticker} 지정가 {ask:,.0f}원 × {qty}개 — 시간 내 다 안 채워져 남은 주문 취소")
+            filled = self._wait_for_fill(uuid, max_wait_sec=3.0)
+        price, got = self._extract_fill(filled)
+        if got:
+            logger.info(f"[실매수] {ticker} {got:.8f}개 @ {price:,.0f}원 (총 {got * price:,.0f}원, 지정가) — {reason}")
+            return OrderResult(True, ticker, 'BUY', price=price, qty=got, amount_krw=got * price, message=reason)
+        if isinstance(filled, dict) and filled.get('state') == 'cancel':
+            # 한 개도 안 샀으면 실패로 남긴다 — 성공으로 기록하면 매수 간격이 돌아가 다음 매수가 밀린다.
+            return OrderResult(False, ticker, 'BUY', message='지정가 매수 미체결(취소됨)')
+        logger.warning(f"[실매수] {ticker} 지정가 주문 체결 확인 지연 — uuid={uuid} (다음 사이클에 실제 잔고로 반영됨)")
+        return OrderResult(True, ticker, 'BUY', message=reason, amount_krw=ask * qty)
 
     def sell_market(self, ticker: str, qty: float, reason: str = "") -> OrderResult:
         blocked = self._blocked_reason()

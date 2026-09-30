@@ -196,8 +196,57 @@ def test_trade_cycle_does_not_sell_and_keeps_buying():
               f'끄면 일반 청산 규칙을 탄다({later[0][2]})')
 
 
+def test_upbit_live_buy_qty_uses_limit_order():
+    """수량 지정 코인은 시장가(원화 금액)가 아니라 매도 1호가 지정가로 수량 그대로 주문한다 —
+    시장가는 체결 순간 가격이 움직이면 0.002 대신 0.001999개가 된다."""
+    from app.core.brokers import upbit_live_broker as m
+    orig = (m.get_trade_engine_settings, m.pyupbit.get_orderbook, m.time.sleep)
+    m.get_trade_engine_settings = lambda *a: {'enabled': True}
+    ask = {'price': 3_626_000.0}
+    m.pyupbit.get_orderbook = lambda t: {'orderbook_units': [{'ask_price': ask['price']}]}
+    m.time.sleep = lambda x: None
+
+    class Client:
+        def __init__(self, state, vol):
+            self.state, self.vol, self.calls = state, vol, []
+
+        def buy_limit_order(self, ticker, price, volume):
+            self.calls.append(('limit', price, volume))
+            return {'uuid': 'u'}
+
+        def cancel_order(self, uuid):
+            self.calls.append('cancel')
+            self.state = 'cancel'
+
+        def get_individual_order(self, uuid):
+            trades = [{'funds': str(self.vol * 3_626_000)}] if self.vol else []
+            return {'state': self.state, 'executed_volume': str(self.vol), 'trades': trades}
+
+    def run(state, vol, qty=0.002):
+        b = m.UpbitLiveBroker.__new__(m.UpbitLiveBroker)
+        b._client = Client(state, vol)
+        b._wait_for_fill = lambda uuid, max_wait_sec=8.0: b._client.get_individual_order(uuid)
+        return b.buy_qty('KRW-ETH', qty, 7_252, reason='모아가기(정기 매수)'), b._client.calls
+
+    try:
+        r, calls = run('done', 0.002)
+        assert r.success and r.qty == 0.002 and calls == [('limit', '3626000', '0.002')], (r, calls)
+        ask['price'] = 150_000_000.0
+        _, calls = run('done', 0.00007, qty=0.00007)
+        assert calls == [('limit', '150000000', '0.00007')], f'지수 표기(7e-05)로 보내면 안 된다: {calls}'
+        ask['price'] = 3_626_000.0
+        r, calls = run('wait', 0)
+        assert not r.success and 'cancel' in calls, '안 채워지면 취소하고 실패로 남긴다(매수 간격이 안 돌게)'
+        r, calls = run('wait', 0.001)
+        assert r.success and r.qty == 0.001 and 'cancel' in calls, '일부만 채워지면 남은 건 취소, 체결분만 기록'
+    finally:
+        m.get_trade_engine_settings, m.pyupbit.get_orderbook, m.time.sleep = orig
+    print('✓ 실거래 수량 매수: 매도 1호가 지정가로 수량 그대로, 미체결분은 취소')
+
+
 if __name__ == '__main__':
     test_evaluate_accumulation()
     test_db_settings_and_last_buy()
     test_trade_cycle_does_not_sell_and_keeps_buying()
+    test_upbit_live_buy_qty_uses_limit_order()
     print('\n전부 통과')

@@ -74,3 +74,8 @@ class BrokerClient(ABC):
     def sell_market(self, ticker: str, qty: float, reason: str = "") -> OrderResult:
         """시장가 매도. qty만큼 매도를 시도한다."""
         ...
+
+    def buy_qty(self, ticker: str, qty: float, amount_krw: float, reason: str = "") -> OrderResult:
+        """정확히 qty개 매수(모아가기 수량 지정 코인). 기본 구현은 amount_krw(수량×현재가) 시장가 매수 —
+        실거래 업비트는 지정가로 수량을 그대로 주문하도록 덮어쓴다(UpbitLiveBroker.buy_qty)."""
+        return self.buy_market(ticker, amount_krw, reason=reason)

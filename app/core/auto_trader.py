@@ -164,7 +164,10 @@ def _execute(decision, broker):
     DB에 갱신해야 한다. 실행 결과(OrderResult, BUY/SELL이 아니면 None)를 반환한다 — 호출부가 "이번
     사이클에 실제로 매도가 체결됐는지" 등을 판단할 때 쓴다(run_trade_cycle의 청산→진입 분리 참고)."""
     result = None
-    if decision.action in ('BUY', 'DCA_BUY'):
+    if decision.action == 'BUY' and decision.qty and decision.reason.startswith('모아가기'):
+        # 모아가기 수량 지정 코인 — 금액이 아니라 수량 그대로 주문한다(업비트 실거래는 지정가).
+        result = broker.buy_qty(decision.ticker, decision.qty, decision.amount_krw, reason=decision.reason)
+    elif decision.action in ('BUY', 'DCA_BUY'):
         result = broker.buy_market(decision.ticker, decision.amount_krw, reason=decision.reason)
     elif decision.action == 'SELL':
         result = broker.sell_market(decision.ticker, decision.qty, reason=decision.reason)
