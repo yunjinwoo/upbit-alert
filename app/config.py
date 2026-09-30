@@ -159,6 +159,15 @@ class Config:
     TRADE_TIGHT_STOP_ARM_PCT = 5.0        # 고점 수익률(평단 대비, %)이 이 값을 넘으면 트레일링 구간으로 전환
     TRADE_TIGHT_STOP_TRAIL_PCT = 8.0      # 전환 후 허용 하락폭 — 고점 대비 이 % 이상 밀리면 매도
 
+    # ── 적극 청산 코인(fast exit) — docs/auto-trade-fast-exit.md
+    # 기존 청산 규칙은 그대로 두고, 여기 적은 코인만 평단 대비 더 좁은 선에서 먼저 판다(연속 확인·물타기 없음).
+    # 선에 안 닿으면 기존 규칙이 그대로 판단한다. 폭을 0으로 두면 그쪽(손절/익절)은 적극 청산을 쓰지 않는다.
+    # 기본값은 꺼짐. 모아가기 코인은 목록에 있어도 봇이 팔지 않는다(docs/auto-trade-accumulate.md).
+    TRADE_FAST_EXIT_ENABLED = False
+    TRADE_FAST_EXIT_TICKERS = ''              # 'KRW-XRP,KRW-SOL' — 쉼표로 구분
+    TRADE_FAST_EXIT_STOP_PCT = 3.0            # 평단 대비 이 % 이상 하락하면 즉시 손절(기본 손절은 고점대비 5% + 물타기)
+    TRADE_FAST_EXIT_TAKE_PROFIT_PCT = 5.0     # 평단 대비 이 % 이상 오르면 즉시 익절(기본 익절은 +10%)
+
     # ── 회복형 분할 물타기(recovery DCA) — docs/auto-trade-recovery-dca.md
     # 깊은 하락에서 소액으로 나눠 물타고, 새 평단 조금 위에서 소폭 익절로 빠져나오는 걸 반복하는
     # 청산 모드. 켜면 이 포지션들에 대해 트레일링 손절(TRADE_STOP_LOSS_PCT)을 쓰지 않고 아래

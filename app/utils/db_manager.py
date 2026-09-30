@@ -615,6 +615,10 @@ def init_db():
             tight_stop_initial_pct REAL NOT NULL DEFAULT 2.0,
             tight_stop_arm_pct REAL NOT NULL DEFAULT 5.0,
             tight_stop_trail_pct REAL NOT NULL DEFAULT 8.0,
+            fast_exit_enabled INTEGER NOT NULL DEFAULT 0,
+            fast_exit_tickers TEXT NOT NULL DEFAULT '',
+            fast_exit_stop_pct REAL NOT NULL DEFAULT 3.0,
+            fast_exit_take_profit_pct REAL NOT NULL DEFAULT 5.0,
             recovery_dca_enabled INTEGER NOT NULL DEFAULT 0,
             recovery_dca_trigger_pct REAL NOT NULL DEFAULT 20.0,
             recovery_dca_amount_krw REAL NOT NULL DEFAULT 50000,
@@ -859,6 +863,11 @@ def init_db():
         'ALTER TABLE trade_strategy_settings ADD COLUMN rsi_exit_min_profit_pct REAL NOT NULL DEFAULT 1.0',
         # 매도 후 재매수 대기(시간) — 0이면 꺼짐(기존 행도 0으로 채워져 동작 그대로)
         'ALTER TABLE trade_strategy_settings ADD COLUMN reentry_block_hours REAL NOT NULL DEFAULT 0',
+        # 적극 청산 코인(docs/auto-trade-fast-exit.md) — 기본 꺼짐이라 켜기 전까진 동작 동일
+        'ALTER TABLE trade_strategy_settings ADD COLUMN fast_exit_enabled INTEGER NOT NULL DEFAULT 0',
+        "ALTER TABLE trade_strategy_settings ADD COLUMN fast_exit_tickers TEXT NOT NULL DEFAULT ''",
+        'ALTER TABLE trade_strategy_settings ADD COLUMN fast_exit_stop_pct REAL NOT NULL DEFAULT 3.0',
+        'ALTER TABLE trade_strategy_settings ADD COLUMN fast_exit_take_profit_pct REAL NOT NULL DEFAULT 5.0',
 
     ]
     for sql in migrations:
@@ -4535,6 +4544,32 @@ def _TIGHT_STOP_SETTING_DEFAULTS() -> dict:
     }
 
 
+def _FAST_EXIT_SETTING_DEFAULTS() -> dict:
+    """적극 청산 코인(docs/auto-trade-fast-exit.md) 파라미터의 app/config.py 기본값. fast_exit_tickers는
+    DB에 'KRW-XRP,KRW-SOL' 문자열로 두고 조회할 때 리스트로 바꾼다(_parse_fast_exit_tickers)."""
+    return {
+        'fast_exit_enabled': Config.TRADE_FAST_EXIT_ENABLED,
+        'fast_exit_tickers': _parse_fast_exit_tickers(Config.TRADE_FAST_EXIT_TICKERS),
+        'fast_exit_stop_pct': Config.TRADE_FAST_EXIT_STOP_PCT,
+        'fast_exit_take_profit_pct': Config.TRADE_FAST_EXIT_TAKE_PROFIT_PCT,
+    }
+
+
+def _parse_fast_exit_tickers(raw) -> list:
+    """'xrp, KRW-SOL' 같은 입력(문자열 또는 배열)을 ['KRW-XRP', 'KRW-SOL']로 정리(중복 제거, 입력 순서 유지)."""
+    parts = raw if isinstance(raw, (list, tuple)) else str(raw or '').replace('\n', ',').split(',')
+    tickers = []
+    for part in parts:
+        t = str(part).strip().upper()
+        if not t:
+            continue
+        if '-' not in t:
+            t = f'KRW-{t}'
+        if t not in tickers:
+            tickers.append(t)
+    return tickers
+
+
 def _RECOVERY_SETTING_DEFAULTS() -> dict:
     """회복형 분할 물타기(recovery DCA) 파라미터의 app/config.py 기본값 — 컬럼/행이 아직 없는
     DB에서도 get_trade_strategy_settings()가 같은 키 집합을 항상 돌려주도록 한 곳에 모아둔다
@@ -4585,6 +4620,7 @@ def get_trade_strategy_settings(broker: str = 'upbit') -> dict:
             'trailing_tp_floor_pct': Config.TRADE_TRAILING_TP_FLOOR_PCT,
             'reentry_block_hours': Config.TRADE_REENTRY_BLOCK_HOURS,
             **_TIGHT_STOP_SETTING_DEFAULTS(),
+            **_FAST_EXIT_SETTING_DEFAULTS(),
             **_RECOVERY_SETTING_DEFAULTS(),
             'updated_at': None,
         }
@@ -4613,6 +4649,12 @@ def get_trade_strategy_settings(broker: str = 'upbit') -> dict:
             for key, default in _TIGHT_STOP_SETTING_DEFAULTS().items()
         },
         **{
+            key: (bool(row[key]) if key == 'fast_exit_enabled'
+                  else _parse_fast_exit_tickers(row[key]) if key == 'fast_exit_tickers'
+                  else row[key]) if key in row.keys() else default
+            for key, default in _FAST_EXIT_SETTING_DEFAULTS().items()
+        },
+        **{
             key: (bool(row[key]) if key == 'recovery_dca_enabled' else row[key]) if key in row.keys() else default
             for key, default in _RECOVERY_SETTING_DEFAULTS().items()
         },
@@ -4639,6 +4681,8 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
                                  recovery_partial_stop_pct: float = None, recovery_partial_stop_ratio: float = None,
                                  recovery_partial_stop_cooldown_min: int = None,
                                  reentry_block_hours: float = None,
+                                 fast_exit_enabled: bool = None, fast_exit_tickers=None,
+                                 fast_exit_stop_pct: float = None, fast_exit_take_profit_pct: float = None,
                                  broker: str = 'upbit') -> dict:
     """매매 전략 파라미터 저장(upsert, 브로커별 1행, 부분 갱신 — None인 필드는 기존값 유지). 저장된 값을 반환.
 
@@ -4689,6 +4733,14 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
         merged[key] = tight_stop_args[key] if tight_stop_args[key] is not None else current[key]
     for key in _RECOVERY_SETTING_DEFAULTS():
         merged[key] = recovery_args[key] if recovery_args[key] is not None else current[key]
+    fast_exit_args = {
+        'fast_exit_enabled': fast_exit_enabled,
+        'fast_exit_tickers': _parse_fast_exit_tickers(fast_exit_tickers) if fast_exit_tickers is not None else None,
+        'fast_exit_stop_pct': fast_exit_stop_pct,
+        'fast_exit_take_profit_pct': fast_exit_take_profit_pct,
+    }
+    for key in _FAST_EXIT_SETTING_DEFAULTS():
+        merged[key] = fast_exit_args[key] if fast_exit_args[key] is not None else current[key]
 
     tight_stop_keys = list(_TIGHT_STOP_SETTING_DEFAULTS())
     tight_stop_columns = ', '.join(tight_stop_keys)
@@ -4697,6 +4749,17 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
     tight_stop_values = [
         int(bool(merged[key])) if key == 'tight_stop_enabled' else merged[key]
         for key in tight_stop_keys
+    ]
+
+    fast_exit_keys = list(_FAST_EXIT_SETTING_DEFAULTS())
+    fast_exit_columns = ', '.join(fast_exit_keys)
+    fast_exit_placeholders = ', '.join('?' for _ in fast_exit_keys)
+    fast_exit_updates = ', '.join(f'{key}=excluded.{key}' for key in fast_exit_keys)
+    fast_exit_values = [
+        int(bool(merged[key])) if key == 'fast_exit_enabled'
+        else ','.join(merged[key]) if key == 'fast_exit_tickers'
+        else merged[key]
+        for key in fast_exit_keys
     ]
 
     recovery_keys = list(_RECOVERY_SETTING_DEFAULTS())
@@ -4718,8 +4781,8 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
              condition_check_interval_sec, conditions_observe_only, per_position_cap_krw,
              rsi_exit_enabled, rsi_exit_period, rsi_exit_overbought, rsi_exit_min_profit_pct,
              trailing_tp_enabled, trailing_tp_arm_pct, trailing_tp_floor_pct, reentry_block_hours,
-             {tight_stop_columns}, {recovery_columns}, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, {tight_stop_placeholders}, {recovery_placeholders}, ?)
+             {tight_stop_columns}, {fast_exit_columns}, {recovery_columns}, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, {tight_stop_placeholders}, {fast_exit_placeholders}, {recovery_placeholders}, ?)
         ON CONFLICT(broker) DO UPDATE SET
             max_position_krw=excluded.max_position_krw,
             max_concurrent_positions=excluded.max_concurrent_positions,
@@ -4741,6 +4804,7 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
             reentry_block_hours=excluded.reentry_block_hours,
             per_position_cap_krw=excluded.per_position_cap_krw,
             {tight_stop_updates},
+            {fast_exit_updates},
             {recovery_updates},
             updated_at=excluded.updated_at
     ''', (broker, merged['max_position_krw'], merged['max_concurrent_positions'], merged['stop_loss_pct'],
@@ -4750,7 +4814,7 @@ def set_trade_strategy_settings(max_position_krw: float = None, max_concurrent_p
           int(bool(merged['rsi_exit_enabled'])), merged['rsi_exit_period'],
           merged['rsi_exit_overbought'], merged['rsi_exit_min_profit_pct'], int(bool(merged['trailing_tp_enabled'])), merged['trailing_tp_arm_pct'],
           merged['trailing_tp_floor_pct'], merged['reentry_block_hours'],
-          *tight_stop_values, *recovery_values, timestamp))
+          *tight_stop_values, *fast_exit_values, *recovery_values, timestamp))
     conn.commit()
     conn.close()
     merged['updated_at'] = timestamp

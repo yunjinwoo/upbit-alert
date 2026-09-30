@@ -35,6 +35,10 @@ _evaluate_exit_tight_stop()으로 대체된다 — 손실을 끊는 폭과 수�
 trail_pct까지(단 본전 아래로는 내려가지 않게) 버틴다. 물타기는 이 모드에서 동작하지 않는다.
 기본값은 꺼짐. 설계와 결정 근거는 docs/auto-trade-tight-stop.md.
 
+적극 청산 코인(cfg.TRADE_FAST_EXIT_*)은 위 모든 판단보다 먼저 본다 — 지정한 코인만 평단 대비
+-stop_pct / +take_profit_pct에 닿으면 즉시 판다. 안 닿으면 기존 흐름을 그대로 탄다. 기본값은 꺼짐.
+설계는 docs/auto-trade-fast-exit.md.
+
 회복형 분할 물타기(recovery DCA) 모드가 켜져 있으면(cfg.TRADE_RECOVERY_DCA_ENABLED) 위 청산 로직
 전체가 _evaluate_exit_recovery()로 대체된다 — 트레일링 손절 없이 "깊은 하락에서 소액 물타기 → 새
 평단 조금 위에서 소폭 익절"을 반복하고, 물타기 상한을 다 쓴 뒤에만 소액 손절/시간 하드스톱으로
@@ -303,6 +307,47 @@ def _evaluate_exit_tight_stop(pos: dict, price: float, peak: float, cfg) -> Trad
     )
 
 
+def fast_exit_ticker_set(cfg) -> set:
+    """적극 청산 대상 코인 집합 — 기능이 꺼져 있거나 목록이 비었으면 빈 집합."""
+    if not getattr(cfg, 'TRADE_FAST_EXIT_ENABLED', False):
+        return set()
+    raw = getattr(cfg, 'TRADE_FAST_EXIT_TICKERS', None) or []
+    if isinstance(raw, str):
+        raw = raw.split(',')
+    return {str(t).strip().upper() for t in raw if str(t).strip()}
+
+
+def _evaluate_fast_exit(pos: dict, price: float, cfg) -> Optional[TradeDecision]:
+    """적극 청산 코인(docs/auto-trade-fast-exit.md) — 지정한 코인만 기존 규칙보다 먼저, 더 좁은 폭으로 판다.
+
+    평단 대비 수익률이 +take_profit_pct 이상이면 익절, -stop_pct 이하이면 손절이고 둘 다 즉시 매도한다
+    (연속 확인·물타기 대기 없음). 어느 쪽에도 안 걸리면 None을 돌려주고, 호출부는 기존 청산 흐름
+    (익절/RSI/트레일링 손절/짧은 손절/회복형 등)을 그대로 탄다 — 그래서 기존 규칙이 더 빨리 파는
+    상황은 그대로 살아 있고, 이 규칙은 "더 일찍 파는 선"을 하나 더 얹을 뿐이다.
+    폭을 0으로 두면 그쪽(손절 또는 익절)은 적극 청산을 쓰지 않는다."""
+    if pos['ticker'] not in fast_exit_ticker_set(cfg):
+        return None
+    avg_price = pos['avg_buy_price']
+    if not avg_price:
+        return None
+    qty = pos['qty']
+    stop_pct = getattr(cfg, 'TRADE_FAST_EXIT_STOP_PCT', 0) or 0
+    tp_pct = getattr(cfg, 'TRADE_FAST_EXIT_TAKE_PROFIT_PCT', 0) or 0
+    pnl_krw = (price - avg_price) * qty
+    pnl_pct = (price - avg_price) / avg_price * 100
+    if tp_pct > 0 and pnl_pct >= tp_pct:
+        return TradeDecision(
+            pos['ticker'], 'SELL', reason=f'fast_take_profit(평단대비 {pnl_pct:.2f}%, 기준 +{tp_pct:.2f}%)',
+            price=price, qty=qty, pnl_krw=pnl_krw, pnl_pct=pnl_pct,
+        )
+    if stop_pct > 0 and pnl_pct <= -stop_pct:
+        return TradeDecision(
+            pos['ticker'], 'SELL', reason=f'fast_stop_loss(평단대비 {pnl_pct:.2f}%, 기준 -{stop_pct:.2f}%)',
+            price=price, qty=qty, pnl_krw=pnl_krw, pnl_pct=pnl_pct,
+        )
+    return None
+
+
 class _CfgOverlay:
     """기본 설정(cfg) 위에 일부 값만 덮어쓴 읽기 전용 설정 — 나머지 속성은 기본 설정에서 읽는다."""
 
@@ -397,6 +442,13 @@ def evaluate_exits(positions: List[dict], get_price_fn: Callable[[str], Optional
         price = get_price_fn(ticker)
         if not price:
             decisions.append(TradeDecision(ticker, 'SKIP', reason='시세 조회 실패'))
+            continue
+
+        # 적극 청산 코인 — 지정한 코인은 평단 대비 좁은 손절/익절선에 닿으면 모든 모드보다 먼저 판다.
+        # 안 닿았으면 아래 기존 흐름을 그대로 탄다(_evaluate_fast_exit() 참고)
+        fast = _evaluate_fast_exit(pos, price, cfg)
+        if fast:
+            decisions.append(fast)
             continue
 
         # 회복형 분할 물타기 모드 — 아래 트레일링 손절/물타기 로직 전체를 대체한다

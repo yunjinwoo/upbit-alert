@@ -101,6 +101,12 @@ def normalize_exit_reason(reason: Optional[str]) -> str:
         return 'tight_trail_exit'
     if text.startswith('tight_breakeven_exit'):
         return 'tight_breakeven_exit'
+    # 적극 청산 코인(docs/auto-trade-fast-exit.md) — 지정 코인만 좁은 선에서 판 건 따로 묶어야
+    # 기존 익절/손절과 섞이지 않고 "빨리 판 게 나았는지"를 볼 수 있다
+    if text.startswith('fast_take_profit'):
+        return 'fast_take_profit'
+    if text.startswith('fast_stop_loss'):
+        return 'fast_stop_loss'
     if text.startswith('take_profit'):
         return 'take_profit'
     if text.startswith('stop_loss'):

@@ -17,6 +17,7 @@
 | [auto-trade-toss-live.md](auto-trade-toss-live.md) | ✅ 운영 중 (2026-08-22~) | 토스증권 실거래 — 업비트 실거래와 동일 구조, 정수 주 단위·체결 폴링만 다름 |
 | [auto-trade-recovery-dca.md](auto-trade-recovery-dca.md) | ✅ 구현 완료 · 기본 꺼짐 | 회복형 분할 물타기 — 깊은 하락에서 소액 분할매수 → 소폭 반등 익절 반복 + 하드캡(투입 상한 · 소액 손절 · 시간 하드스톱) |
 | [auto-trade-tight-stop.md](auto-trade-tight-stop.md) | ✅ 구현 완료 · 기본 꺼짐 | 짧은 손절 · 긴 수익 — 손실을 끊는 폭과 수익을 지키는 폭을 분리(전환 전 평단 대비 짧은 손절 → 전환 후 고점 대비 긴 트레일링, 물타기 없음) |
+| [auto-trade-fast-exit.md](auto-trade-fast-exit.md) | ✅ 구현 완료 · 기본 꺼짐 | 적극 손절 · 익절 코인 — 기존 규칙은 그대로 두고 지정한 코인만 평단 대비 좁은 선(기본 -3% / +5%)에서 먼저 즉시 매도 |
 | [auto-trade-accumulate.md](auto-trade-accumulate.md) | ✅ 구현 완료 · 기본 꺼짐 | 모아가기 — 등록 코인(BTC/ETH 등)은 정밀 매수조건을 통과하면 정해둔 금액만큼 매수(코인별 간격에 1번), 자동 매도 없음 |
 | [auto-trade-convergence.md](auto-trade-convergence.md) | ✅ 구현 완료 · **기본 켜짐**(하루 1종목) | 수렴 자동 매수 — 승인 없이 봇이 고름: 24h 거래대금 400억↑ 새 코인 중 5분봉 가격·구름·80선·120선이 1.5% 안에 모이고 일봉 구름·기준선 위면 매수, 이후 일반 청산 규칙 |
 | [auto-trade-downside-watch.md](auto-trade-downside-watch.md) | ✅ Phase 1 머지됨 (PR #62, 2026-09-03) · Phase 2 미정 | 하락위험 코인 관심목록 — 매수 파이프라인의 거울상, 표시 전용 |
