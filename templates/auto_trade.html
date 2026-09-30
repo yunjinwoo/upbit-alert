@@ -203,6 +203,7 @@
              "🔬 정밀 매수조건" 카드는 접혀 있어서, 펼치지 않으면 켜진 조건을 알 수 없었다. -->
         <div id="liveConditionSummary" class="text-muted mb-2" style="font-size:0.76rem"></div>
         <div id="liveExitModeSummary" class="text-muted mb-2" style="font-size:0.76rem"></div>
+        <div id="liveFastExitSummary" class="text-muted mb-2" style="font-size:0.76rem"></div>
         <div id="liveMarketAlertSummary" class="text-muted mb-2" style="font-size:0.76rem"></div>
         <!-- 여러 종목 한 번에 제외 — 행마다 선택 체크박스를 늘리지 않고, 이미 표에 있는 정보(오늘 후보
              아님 / 실거래 승인 해제)로 대상을 골라 버튼 한 번에 정리한다. 보유 종목은 대상이 아니다. -->
@@ -473,6 +474,26 @@
                 <div>
                     <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">전환 후 허용 하락(고점대비 -%)</label>
                     <input type="number" id="setTightStopTrail" class="form-control form-control-sm" style="width:160px" min="0.1" step="0.5">
+                </div>
+            </div>
+            <div class="settings-group">
+                <div class="settings-group-label" title="기존 규칙은 그대로 두고, 적은 코인만 평단 대비 이 선에 닿으면 먼저 팝니다(연속 확인·물타기 없음). 선에 안 닿으면 기존 규칙대로 판단합니다. 모아가기 코인은 적어도 팔지 않습니다.">적극 손절 · 익절 코인</div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">
+                        <input type="checkbox" id="setFastExitEnabled" style="margin-right:4px">사용
+                    </label>
+                </div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">코인(쉼표로 구분)</label>
+                    <input type="text" id="setFastExitTickers" class="form-control form-control-sm" style="width:220px" placeholder="XRP, SOL">
+                </div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b" title="0이면 손절은 기존 규칙대로">손절(평단대비 -%)</label>
+                    <input type="number" id="setFastExitStop" class="form-control form-control-sm" style="width:110px" min="0" step="0.5">
+                </div>
+                <div>
+                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b" title="0이면 익절은 기존 규칙대로">익절(평단대비 +%)</label>
+                    <input type="number" id="setFastExitTakeProfit" class="form-control form-control-sm" style="width:110px" min="0" step="0.5">
                 </div>
             </div>
             <div class="settings-group">
@@ -842,6 +863,9 @@
     // (docs/auto-trade-tight-stop.md). 요약 응답에서 한 번 받아 보관한다.
     let LIVE_TIGHT_STOP = false;
 
+    // 적극 손절 · 익절 코인(docs/auto-trade-fast-exit.md) — 종목명 옆 ⚡ 라벨용. 요약 응답에서 받아 보관한다.
+    let LIVE_FAST_EXIT = { enabled: false, tickers: new Set(), stop: 0, tp: 0 };
+
     // tight/recovery: 이 행에 적용되는 청산 모드 — 산 시점 규칙이 고정된 종목은 전체 설정과 다를 수 있다
     function liveStatusBadge(row, dcaMaxCount, tight = LIVE_TIGHT_STOP, recovery = LIVE_RECOVERY.enabled) {
         if (!row.held) {
@@ -986,6 +1010,26 @@
         return html;
     }
 
+    function fastExitBadge(ticker) {
+        if (!LIVE_FAST_EXIT.enabled || !LIVE_FAST_EXIT.tickers.has(ticker)) return '';
+        const parts = [];
+        if (LIVE_FAST_EXIT.stop > 0) parts.push(`-${LIVE_FAST_EXIT.stop}%`);
+        if (LIVE_FAST_EXIT.tp > 0) parts.push(`+${LIVE_FAST_EXIT.tp}%`);
+        return ` <span class="signal-badge signal-badge-mild" title="적극 손절 · 익절 코인: 평단대비 ${parts.join(' / ')}에 닿으면 기존 규칙보다 먼저 즉시 매도합니다">⚡ ${parts.join(' ')}</span>`;
+    }
+
+    function renderFastExitSummary(json) {
+        const el = document.getElementById('liveFastExitSummary');
+        if (!el) return;
+        const tickers = json.fast_exit_tickers || [];
+        if (!json.fast_exit_enabled || !tickers.length) { el.innerHTML = ''; return; }
+        const sides = [];
+        if (json.fast_exit_stop_pct > 0) sides.push(`평단대비 <b>-${json.fast_exit_stop_pct}%</b>에서 손절`);
+        if (json.fast_exit_take_profit_pct > 0) sides.push(`<b>+${json.fast_exit_take_profit_pct}%</b>에서 익절`);
+        el.innerHTML = `⚡ <b>적극 손절 · 익절</b>: ${tickers.map(t => t.replace('KRW-', '')).join(', ')} — `
+            + `${sides.join(', ') || '폭이 모두 0이라 적용 안 됨'}(즉시 매도, 나머지는 기존 규칙).`;
+    }
+
     function renderMarketAlertSummary(json) {
         const el = document.getElementById('liveMarketAlertSummary');
         const st = json.market_alert_state;
@@ -1042,7 +1086,7 @@
             <tr>
                 <td style="text-align:center">${checkboxHtml}</td>
                 <td style="text-align:left">${conditionCellHtml(ticker, row)}</td>
-                <td>${coinLink(ticker, ticker)}${marketAlertBadges(row)}${row.off_screening
+                <td>${coinLink(ticker, ticker)}${marketAlertBadges(row)}${fastExitBadge(ticker)}${row.off_screening
                     ? `<div class="text-muted" style="font-size:0.66rem" title="오늘 스크리닝 조건(돌파/구름위/모멘텀)에서 빠진 종목입니다. 관심 등록·승인은 그대로 남아 있고, 다시 후보에 들면 매수 판단 대상이 됩니다.">오늘 후보 아님</div>` : ''}</td>
                 <td>${fmtKrw(row.current_price)}
                     <div class="text-muted" style="font-size:0.74rem">${held ? fmtQty(row.qty) : '<span class="empty-val">—</span>'}</div></td>
@@ -1142,7 +1186,14 @@
                 maxCount: json.recovery_dca_max_count ?? 0,
             };
             LIVE_TIGHT_STOP = !!json.tight_stop_enabled;
+            LIVE_FAST_EXIT = {
+                enabled: !!json.fast_exit_enabled,
+                tickers: new Set(json.fast_exit_tickers || []),
+                stop: json.fast_exit_stop_pct || 0,
+                tp: json.fast_exit_take_profit_pct || 0,
+            };
             renderExitModeSummary(json);
+            renderFastExitSummary(json);
             renderMarketAlertSummary(json);
             // 물타기 칸은 기본 모드일 때만 보인다. 전략 묶음 이전에 산 종목(exit_rule 고정)이 기본 모드
             // 규칙이면 그 종목의 체크박스가 필요하니 그때도 보여준다.
@@ -1900,7 +1951,7 @@
         }
     }
 
-    const SETTINGS_INPUT_IDS = ['setMaxPosition', 'setMaxPositions', 'setStopLoss', 'setTakeProfit', 'setLoopInterval', 'setStopConfirm', 'setDcaTrigger', 'setDcaMaxCount', 'setPerPositionCap', 'setReentryBlockHours', 'setRsiExitEnabled', 'setRsiExitPeriod', 'setRsiExitOverbought', 'setRsiExitMinProfit', 'setTrailingTpEnabled', 'setTrailingTpArm', 'setTrailingTpFloor', 'setTightStopEnabled', 'setTightStopInitial', 'setTightStopArm', 'setTightStopTrail', 'setRecoveryEnabled', 'setRecoveryTrigger', 'setRecoveryAmount', 'setRecoveryCooldown', 'setRecoveryTakeProfit', 'setRecoveryMaxCount', 'setRecoveryMaxInvested', 'setRecoveryTimeStopDays', 'setRecoveryPartialPct', 'setRecoveryPartialRatio', 'setRecoveryPartialCooldown'];
+    const SETTINGS_INPUT_IDS = ['setMaxPosition', 'setMaxPositions', 'setStopLoss', 'setTakeProfit', 'setLoopInterval', 'setStopConfirm', 'setDcaTrigger', 'setDcaMaxCount', 'setPerPositionCap', 'setReentryBlockHours', 'setRsiExitEnabled', 'setRsiExitPeriod', 'setRsiExitOverbought', 'setRsiExitMinProfit', 'setTrailingTpEnabled', 'setTrailingTpArm', 'setTrailingTpFloor', 'setTightStopEnabled', 'setTightStopInitial', 'setTightStopArm', 'setTightStopTrail', 'setFastExitEnabled', 'setFastExitTickers', 'setFastExitStop', 'setFastExitTakeProfit', 'setRecoveryEnabled', 'setRecoveryTrigger', 'setRecoveryAmount', 'setRecoveryCooldown', 'setRecoveryTakeProfit', 'setRecoveryMaxCount', 'setRecoveryMaxInvested', 'setRecoveryTimeStopDays', 'setRecoveryPartialPct', 'setRecoveryPartialRatio', 'setRecoveryPartialCooldown'];
 
     function populateSettingsInputs(settings) {
         // 사용자가 입력창 하나를 타이핑 중인 동안엔 이번 새로고침으로 값을 덮어쓰지 않음
@@ -1926,6 +1977,10 @@
         document.getElementById('setTightStopInitial').value = settings.tight_stop_initial_pct ?? '';
         document.getElementById('setTightStopArm').value = settings.tight_stop_arm_pct ?? '';
         document.getElementById('setTightStopTrail').value = settings.tight_stop_trail_pct ?? '';
+        document.getElementById('setFastExitEnabled').checked = !!settings.fast_exit_enabled;
+        document.getElementById('setFastExitTickers').value = (settings.fast_exit_tickers || []).map(t => t.replace('KRW-', '')).join(', ');
+        document.getElementById('setFastExitStop').value = settings.fast_exit_stop_pct ?? '';
+        document.getElementById('setFastExitTakeProfit').value = settings.fast_exit_take_profit_pct ?? '';
         document.getElementById('setRecoveryEnabled').checked = !!settings.recovery_dca_enabled;
         document.getElementById('setRecoveryTrigger').value = settings.recovery_dca_trigger_pct ?? '';
         document.getElementById('setRecoveryAmount').value = settings.recovery_dca_amount_krw ?? '';
@@ -1962,6 +2017,10 @@
             tight_stop_initial_pct: Number(document.getElementById('setTightStopInitial').value),
             tight_stop_arm_pct: Number(document.getElementById('setTightStopArm').value),
             tight_stop_trail_pct: Number(document.getElementById('setTightStopTrail').value),
+            fast_exit_enabled: document.getElementById('setFastExitEnabled').checked,
+            fast_exit_tickers: document.getElementById('setFastExitTickers').value,
+            fast_exit_stop_pct: Number(document.getElementById('setFastExitStop').value),
+            fast_exit_take_profit_pct: Number(document.getElementById('setFastExitTakeProfit').value),
             recovery_dca_enabled: document.getElementById('setRecoveryEnabled').checked,
             recovery_dca_trigger_pct: Number(document.getElementById('setRecoveryTrigger').value),
             recovery_dca_amount_krw: Number(document.getElementById('setRecoveryAmount').value),

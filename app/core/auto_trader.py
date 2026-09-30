@@ -117,6 +117,11 @@ def _effective_strategy_config() -> SimpleNamespace:
         TRADE_TIGHT_STOP_INITIAL_PCT=s['tight_stop_initial_pct'],
         TRADE_TIGHT_STOP_ARM_PCT=s['tight_stop_arm_pct'],
         TRADE_TIGHT_STOP_TRAIL_PCT=s['tight_stop_trail_pct'],
+        # 적극 청산 코인(docs/auto-trade-fast-exit.md) — 기본값은 꺼짐
+        TRADE_FAST_EXIT_ENABLED=s['fast_exit_enabled'],
+        TRADE_FAST_EXIT_TICKERS=s['fast_exit_tickers'],
+        TRADE_FAST_EXIT_STOP_PCT=s['fast_exit_stop_pct'],
+        TRADE_FAST_EXIT_TAKE_PROFIT_PCT=s['fast_exit_take_profit_pct'],
         # 회복형 분할 물타기(docs/auto-trade-recovery-dca.md) — 기본값은 꺼짐.
         # TRADE_MIN_ORDER_KRW는 대시보드에서 바꾸는 값이 아니라 거래소 제약이라 Config에서 직접 읽는다
         # (부분 매도 금액이 이 밑으로 내려가면 쪼개지 않고 전량 매도).
@@ -945,6 +950,11 @@ def get_live_dashboard_summary() -> dict:
         'tight_stop_initial_pct': getattr(strategy_cfg, 'TRADE_TIGHT_STOP_INITIAL_PCT', None),
         'tight_stop_arm_pct': getattr(strategy_cfg, 'TRADE_TIGHT_STOP_ARM_PCT', None),
         'tight_stop_trail_pct': getattr(strategy_cfg, 'TRADE_TIGHT_STOP_TRAIL_PCT', None),
+        # 적극 청산 코인 — 표의 종목명 옆 라벨과 표 위 한 줄 요약에 쓴다(docs/auto-trade-fast-exit.md)
+        'fast_exit_enabled': bool(strategy_settings['fast_exit_enabled']),
+        'fast_exit_tickers': strategy_settings['fast_exit_tickers'],
+        'fast_exit_stop_pct': strategy_settings['fast_exit_stop_pct'],
+        'fast_exit_take_profit_pct': strategy_settings['fast_exit_take_profit_pct'],
         # 정밀 매수조건 설정(브로커 단위 — mode 구분 없음). 화면에서 조건별 on/off·파라미터를 수정한다.
         'conditions': get_trade_condition_settings(broker.broker_name),
         'condition_check_interval_sec': strategy_settings['condition_check_interval_sec'],

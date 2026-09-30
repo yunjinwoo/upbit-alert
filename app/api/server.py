@@ -1129,6 +1129,9 @@ def set_trade_strategy_settings_api():
     짧은 손절 · 긴 수익(docs/auto-trade-tight-stop.md) 파라미터도 같은 방식으로 부분 갱신한다:
     {tight_stop_enabled, tight_stop_initial_pct, tight_stop_arm_pct, tight_stop_trail_pct}
 
+    적극 청산 코인(docs/auto-trade-fast-exit.md) 파라미터도 같은 방식으로 부분 갱신한다:
+    {fast_exit_enabled, fast_exit_tickers('KRW-XRP, SOL' 문자열 또는 배열), fast_exit_stop_pct, fast_exit_take_profit_pct}
+
     회복형 분할 물타기(docs/auto-trade-recovery-dca.md) 파라미터도 같은 방식으로 부분 갱신한다:
     {recovery_dca_enabled, recovery_dca_trigger_pct, recovery_dca_amount_krw, recovery_dca_cooldown_min,
      recovery_take_profit_pct, recovery_dca_max_count, recovery_max_invested_krw, recovery_time_stop_days,
@@ -1251,6 +1254,23 @@ def set_trade_strategy_settings_api():
             if v <= 0:
                 raise ValueError('트레일링 허용 하락폭(%)은 0보다 커야 합니다.')
             kwargs['tight_stop_trail_pct'] = v
+
+        # ── 적극 청산 코인(docs/auto-trade-fast-exit.md). 폭은 0이면 그쪽(손절/익절)을 쓰지 않는다는 뜻이라
+        # 0은 허용하고 음수만 막는다. 코인 목록은 'XRP, KRW-SOL' 문자열이나 배열 — 'KRW-'는 붙여서 저장한다.
+        if 'fast_exit_enabled' in body:
+            kwargs['fast_exit_enabled'] = bool(body['fast_exit_enabled'])
+        if 'fast_exit_tickers' in body:
+            kwargs['fast_exit_tickers'] = body['fast_exit_tickers'] or ''
+        if 'fast_exit_stop_pct' in body:
+            v = float(body['fast_exit_stop_pct'])
+            if v < 0:
+                raise ValueError('적극 청산 손절(%)은 0 이상이어야 합니다(0=손절은 기존 규칙대로).')
+            kwargs['fast_exit_stop_pct'] = v
+        if 'fast_exit_take_profit_pct' in body:
+            v = float(body['fast_exit_take_profit_pct'])
+            if v < 0:
+                raise ValueError('적극 청산 익절(%)은 0 이상이어야 합니다(0=익절은 기존 규칙대로).')
+            kwargs['fast_exit_take_profit_pct'] = v
 
         # ── 회복형 분할 물타기(docs/auto-trade-recovery-dca.md).
         # 0을 "비활성"으로 쓰는 세 파라미터(시간 하드스톱 일수/소액 손절 기준·비율)만 0을 허용하고,

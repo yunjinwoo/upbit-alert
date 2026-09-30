@@ -32,6 +32,10 @@ _FIELDS = [
     ('TRADE_TIGHT_STOP_INITIAL_PCT', 'tight_stop_initial_pct'),
     ('TRADE_TIGHT_STOP_ARM_PCT', 'tight_stop_arm_pct'),
     ('TRADE_TIGHT_STOP_TRAIL_PCT', 'tight_stop_trail_pct'),
+    ('TRADE_FAST_EXIT_ENABLED', 'fast_exit_enabled'),
+    ('TRADE_FAST_EXIT_TICKERS', 'fast_exit_tickers'),
+    ('TRADE_FAST_EXIT_STOP_PCT', 'fast_exit_stop_pct'),
+    ('TRADE_FAST_EXIT_TAKE_PROFIT_PCT', 'fast_exit_take_profit_pct'),
     ('TRADE_RECOVERY_DCA_ENABLED', 'recovery_dca_enabled'),
     ('TRADE_RECOVERY_DCA_TRIGGER_PCT', 'recovery_dca_trigger_pct'),
     ('TRADE_RECOVERY_DCA_AMOUNT_KRW', 'recovery_dca_amount_krw'),
@@ -81,6 +85,10 @@ def describe(cfg: SimpleNamespace) -> str:
         parts.append(f"되돌림 익절 {cfg.TRADE_TRAILING_TP_ARM_PCT}→{cfg.TRADE_TRAILING_TP_FLOOR_PCT}%")
     if cfg.TRADE_RECOVERY_DCA_ENABLED:
         parts.append(f"회복형 물타기 {cfg.TRADE_RECOVERY_DCA_MAX_COUNT}회")
+    if getattr(cfg, 'TRADE_FAST_EXIT_ENABLED', False) and getattr(cfg, 'TRADE_FAST_EXIT_TICKERS', None):
+        tickers = cfg.TRADE_FAST_EXIT_TICKERS
+        tickers = tickers if isinstance(tickers, str) else ','.join(tickers)
+        parts.append(f"적극 청산 {tickers}(-{cfg.TRADE_FAST_EXIT_STOP_PCT}%/+{cfg.TRADE_FAST_EXIT_TAKE_PROFIT_PCT}%)")
     if getattr(cfg, 'TRADE_REENTRY_BLOCK_HOURS', 0):
         parts.append(f"매도 후 {cfg.TRADE_REENTRY_BLOCK_HOURS:g}시간 재매수 금지")
     return ', '.join(parts)

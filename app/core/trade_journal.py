@@ -41,6 +41,8 @@ _REASON_LABELS = {
     'tight_stop_loss': '손절',
     'tight_trail_exit': '고점 대비 하락 매도',
     'tight_breakeven_exit': '본전 매도',
+    'fast_take_profit': '적극 익절',
+    'fast_stop_loss': '적극 손절',
 }
 _PRECISION_SUFFIX = '+정밀조건충족'
 
