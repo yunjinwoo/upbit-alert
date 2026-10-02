@@ -7,7 +7,7 @@
 
 매수 권유가 아니라 앱이 계산한 지표를 정리한 것 — 메시지 끝에 그 문구를 붙인다.
 """
-from app.utils.db_manager import get_signal_score_history, get_stock_screening_candidates
+from app.utils.db_manager import get_signal_score_history, get_stock_screening, get_stock_screening_candidates
 from app.utils.logger import get_logger
 
 logger = get_logger()
@@ -80,8 +80,21 @@ def build_stock_digest_text(digest: dict) -> str:
 
 
 def load_stock_digest() -> dict:
-    """DB에 저장된 최신 Signal Score/스크리닝 후보로 요약 구조를 만든다."""
-    return collect_stock_digest(get_signal_score_history(limit=200), get_stock_screening_candidates())
+    """DB에 저장된 최신 Signal Score/스크리닝 후보로 요약 구조를 만든다.
+    페이지가 "왜 비었는지"를 보여줄 수 있게 원본 건수(stats)도 같이 담는다."""
+    signal_rows = get_signal_score_history(limit=1000)
+    screening_all = get_stock_screening()
+    digest = collect_stock_digest(signal_rows, get_stock_screening_candidates())
+    grade_counts = {}
+    for r in signal_rows:
+        grade_counts[r.get('grade') or '-'] = grade_counts.get(r.get('grade') or '-', 0) + 1
+    digest['stats'] = {
+        'signal_total': len(signal_rows),
+        'grade_counts': grade_counts,
+        'screening_total': len(screening_all),
+        'screening_updated_at': max((r.get('updated_at') or '' for r in screening_all), default='') or None,
+    }
+    return digest
 
 
 def send_stock_digest(send_fn) -> bool:
