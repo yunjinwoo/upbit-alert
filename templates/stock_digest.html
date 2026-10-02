@@ -96,7 +96,7 @@ function rateCell(rate) {
 }
 
 async function loadDigest() {
-    const res = await fetch('/api/stock-digest');
+    const res = await fetch('api/stock-digest');
     const d = await res.json();
     if (d.status !== 'success') {
         document.getElementById('bothBody').innerHTML = emptyRow(4, '불러오기 실패: ' + esc(d.message));
