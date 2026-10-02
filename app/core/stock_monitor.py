@@ -1179,7 +1179,6 @@ def run_stock_monitor():
                 last_sync_date = today_str
 
             # 매일 19:30 이후 첫 루프 — 최신 Signal Score/토스 스크리닝 후보 요약을 Slack으로 (하루 1회, 새 API 호출 없음)
-            # 주말 낮엔 루프가 4시간씩 자서 19시대를 건너뛸 수 있어 "19:30 이후"로 잡았다.
             # 주말엔 금요일 데이터가 그대로 나가며, 메시지의 기준일로 구분된다. 같은 내용은 /stock-digest 페이지.
             if (now.hour, now.minute) >= (19, 30) and last_evening_digest_date != today_str:
                 logger.info("⏰ [스케줄] 19시 30분 주식 요약 알림 시작")
@@ -1194,7 +1193,9 @@ def run_stock_monitor():
                 time.sleep(240) # 60 * 4
                 continue
             if now.weekday() >= 5:
-                time.sleep(14400) # 3600 * 4
+                # 4시간씩 자되 19:30 저녁 요약 시각은 넘기지 않게 그 직전까지만 잔다
+                until_digest = (now.replace(hour=19, minute=30, second=0, microsecond=0) - now).total_seconds()
+                time.sleep(min(14400, until_digest) if until_digest > 0 else 14400) # 3600 * 4
                 continue
 
             # 일 1회 시가총액 데이터 수집 + 종목별 투자자 수집 + Signal Score 계산 (오후 3시 40분쯤, 장 마감 후)
