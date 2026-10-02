@@ -3,7 +3,7 @@
     'investor_ranking': 'data', 'volume_ratio': 'data', 'sector_index': 'data',
     'ranking_preview': 'data', 'hts_top_view': 'data', 'top_interest': 'data',
     'top_gainers': 'data', 'coin_screening': 'data', 'coin_ranking': 'data',
-    'signal_score_preview': 'signal', 'signal_score_history': 'signal',
+    'signal_score_preview': 'signal', 'signal_score_history': 'signal', 'stock_digest': 'signal',
     'raw_data': 'ops', 'history': 'ops', 'sync_admin': 'ops', 'date_column_convert': 'ops', 'security': 'ops',
     'powerball': 'lottery', 'lotto645': 'lottery', 'pension720': 'lottery', 'lottery_recommend': 'lottery',
 } %}
@@ -26,6 +26,7 @@
     'signal': [
         ('signal_score_preview_view', 'signal_score_preview', 'Signal Score 종목'),
         ('signal_score_history_view', 'signal_score_history', 'Signal Score 이력'),
+        ('stock_digest_view', 'stock_digest', '저녁 주식 요약'),
     ],
     'ops': [
         ('raw_data_view', 'raw_data', '원본 데이터'),
@@ -103,6 +104,7 @@
                 <ul class="dropdown-menu">
                     <li><a class="dropdown-item{{ ' active' if active_page == 'signal_score_preview' }}" href="{{ url_for('signal_score_preview_view') }}">Signal Score 종목</a></li>
                     <li><a class="dropdown-item{{ ' active' if active_page == 'signal_score_history' }}" href="{{ url_for('signal_score_history_view') }}">Signal Score 이력</a></li>
+                    <li><a class="dropdown-item{{ ' active' if active_page == 'stock_digest' }}" href="{{ url_for('stock_digest_view') }}">🌙 저녁 주식 요약</a></li>
                 </ul>
             </div>
 
