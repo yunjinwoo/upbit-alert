@@ -108,16 +108,27 @@ async function loadDigest() {
         ? d.both.map(r => `<tr><td>${stockLink(r.name, r.code)}</td><td>${gradeBadge(r.grade)}</td><td><b>${esc(r.total_score)}</b></td><td>${reasonTags(r.reasons)}</td></tr>`).join('')
         : emptyRow(4, '두 목록에 동시에 걸린 종목이 없습니다.');
 
+    // 표가 비었을 때 "데이터가 아예 없는지 / 조건에 맞는 종목만 없는지"를 구분해 보여준다
+    const st = d.stats || {};
+    const gc = st.grade_counts || {};
+    const gradeText = ['A', 'B', 'C', '제외'].map(g => `${g} ${gc[g] || 0}`).join(' · ');
+    const signalEmpty = st.signal_total
+        ? `기준일 ${esc(d.score_date)} 계산 ${st.signal_total}종목 중 A/B등급이 없습니다. (${gradeText})`
+        : 'Signal Score 계산 기록이 없습니다. 평일 15:40 시가총액 수집 + Signal Score 잡이 이 서버에서 아직 돌지 않았어요.';
+    const screeningEmpty = st.screening_total
+        ? `스크리닝 ${st.screening_total}종목 중 조건(일봉 돌파 / 200선 근접+구름 위 / 모멘텀)에 맞는 종목이 없습니다. (갱신 ${esc(st.screening_updated_at || '-')})`
+        : '토스 스크리닝 데이터가 없습니다. toss-analysis-bot이 돌지 않았거나 토스 API 키가 설정되지 않았어요.';
+
     document.getElementById('gradedBody').innerHTML = d.graded.length
         ? d.graded.map(r => `<tr><td>${stockLink(r.name, r.code)}</td><td>${gradeBadge(r.grade)}</td><td><b>${esc(r.total_score)}</b></td>
             <td>${esc(r.momentum_score)}</td><td>${esc(r.supply_demand_score)}</td><td>${esc(r.rank_stability_score)}</td>
             <td>${esc(r.market_environment_score)}</td><td>${esc(r.risk_penalty_score)}</td></tr>`).join('')
-        : emptyRow(8, 'A/B등급 종목이 없습니다.');
+        : emptyRow(8, signalEmpty);
 
     document.getElementById('candidatesBody').innerHTML = d.candidates.length
         ? d.candidates.map(s => `<tr><td>${stockLink(s.name, s.ticker)}</td><td>${typeof s.price === 'number' ? s.price.toLocaleString() : '-'}</td>
             <td>${rateCell(s.change_rate)}</td><td>${reasonTags(s.reasons)}</td></tr>`).join('')
-        : emptyRow(4, '스크리닝 후보가 없습니다.');
+        : emptyRow(4, screeningEmpty);
 }
 loadDigest();
 </script>
