@@ -1,8 +1,8 @@
-from app.core.stock_nightly_digest import build_nightly_stock_digest
+from app.core.stock_digest import build_stock_digest_text, collect_stock_digest
 
 
 def test_empty_returns_blank():
-    assert build_nightly_stock_digest([], []) == ''
+    assert build_stock_digest_text(collect_stock_digest([], [])) == ''
 
 
 def test_overlap_listed_first_and_c_grade_excluded():
@@ -18,7 +18,9 @@ def test_overlap_listed_first_and_c_grade_excluded():
         {'ticker': '005930', 'name': '삼성전자', 'change_rate': 2.5, 'breakout_1d': 1},
         {'ticker': '035420', 'name': 'NAVER', 'change_rate': -0.4, 'near_ma200': 1, 'above_cloud': 1},
     ]
-    text = build_nightly_stock_digest(signal, screening)
+    digest = collect_stock_digest(signal, screening)
+    assert [r['code'] for r in digest['both']] == ['005930']
+    text = build_stock_digest_text(digest)
     assert '기준일 2026-10-01' in text
     assert text.index('관심 1순위') < text.index('Signal Score A/B 상위')
     assert '삼성전자(005930) A등급 85점 · 일봉 돌파' in text

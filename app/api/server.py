@@ -67,6 +67,7 @@ from app.utils.db_manager import (
 from app.core.powerball import parse_powerball_block
 from app.core.lotto645 import parse_lotto645_block, parse_lotto645_excel
 from app.core.pension720 import parse_pension720_block, parse_pension720_excel
+from app.core.stock_digest import load_stock_digest
 from app.core.stock_monitor import (
     fetch_market_cap_ranking, fetch_investor_trend, fetch_sector_index_daily, fetch_stock_investor_daily,
     fetch_ranking_preview, fetch_sector_stocks, fetch_multi_stock_price,
@@ -3051,6 +3052,19 @@ def signal_score_preview_api():
             "grade_counts": grade_counts,
             "data": rows
         })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/stock-digest')
+def stock_digest_view():
+    """아침 주식 요약 페이지 — 매일 7:30 Slack 요약과 같은 내용(Signal Score A/B + 토스 스크리닝 후보)"""
+    return render_template('stock_digest.html', active_page='stock_digest')
+
+@app.route('/api/stock-digest', methods=['GET'])
+def stock_digest_api():
+    """DB에 저장된 최신 Signal Score/토스 스크리닝 후보 요약 (새 API 호출 없음)"""
+    try:
+        return jsonify({"status": "success", **load_stock_digest()})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 

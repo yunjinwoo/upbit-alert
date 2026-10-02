@@ -7,7 +7,7 @@ from app.config import Config
 from app.utils.db_manager import save_stock_alert_to_db, init_db, save_api_token, get_api_token, save_stock_raw_data, save_daily_market_cap, save_daily_investor_trend, save_stock_investor_daily, save_sector_index_daily, save_sector_stocks_daily, get_signal_score_batch, save_hts_top_view, save_job_run_log, get_market_cap_history, save_top_interest_daily, save_top_gainers_snapshot, get_recent_avg_volume
 from app.core.kis_models import RequestHeader, RequestQueryParam, MarketCapQueryParam, FluctuationRankingResponse, MarketCapRankingResponse, StockInvestorDailyItem
 from app.core.upbit_monitor import send_slack_msg
-from app.core.stock_nightly_digest import send_nightly_stock_digest
+from app.core.stock_digest import send_stock_digest
 from app.utils.google_sheets import save_signal_score_to_sheet, save_signal_score_readme, save_investor_ranking_to_sheet
 from app.utils.sync_client import push_all_tables_to_server, push_top_gainers_to_server
 from app.utils.logger import get_logger
@@ -1106,7 +1106,7 @@ def run_stock_monitor():
     last_top_gainers_hour = None  # 상승률 순위 스냅샷 9:10/12:10/15:10/18:10 수집 여부 (시간 단위로 추적)
     last_top_gainers_sync_date = None  # 상승률 순위 전용 동기화(18:20) 여부 (하루 1회)
     last_market_cap_morning_date = None  # 시가총액 수집 오전 백업(8:30) 여부 (하루 1회)
-    last_nightly_digest_date = None  # 23시 주식 요약 알림 여부 (하루 1회)
+    last_morning_digest_date = None  # 7시 30분 주식 요약 알림 여부 (하루 1회)
 
     while True:
         try:
@@ -1178,14 +1178,15 @@ def run_stock_monitor():
                 run_job_remote_sync()
                 last_sync_date = today_str
 
-            # 평일 23시 — 그날 Signal Score/토스 스크리닝 후보 요약을 Slack으로 (하루 1회, 새 API 호출 없음)
-            if now.weekday() < 5 and now.hour == 23 and last_nightly_digest_date != today_str:
-                logger.info("⏰ [스케줄] 23시 주식 요약 알림 시작")
+            # 매일 7:30 — 최신 Signal Score/토스 스크리닝 후보 요약을 Slack으로 (하루 1회, 새 API 호출 없음)
+            # 주말엔 금요일 데이터가 그대로 나가며, 메시지의 기준일로 구분된다. 같은 내용은 /stock-digest 페이지.
+            if now.hour == 7 and now.minute >= 30 and last_morning_digest_date != today_str:
+                logger.info("⏰ [스케줄] 7시 30분 주식 요약 알림 시작")
                 try:
-                    send_nightly_stock_digest(send_slack_msg)
+                    send_stock_digest(send_slack_msg)
                 except Exception as e:
-                    logger.error(f"⚠️ 23시 주식 요약 알림 실패: {e}")
-                last_nightly_digest_date = today_str
+                    logger.error(f"⚠️ 7시 30분 주식 요약 알림 실패: {e}")
+                last_morning_digest_date = today_str
 
             # 장 운영 시간 외 대기
             if now.hour < 8 or now.hour >= 20:
