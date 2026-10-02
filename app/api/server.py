@@ -3057,7 +3057,7 @@ def signal_score_preview_api():
 
 @app.route('/stock-digest')
 def stock_digest_view():
-    """아침 주식 요약 페이지 — 매일 7:30 Slack 요약과 같은 내용(Signal Score A/B + 토스 스크리닝 후보)"""
+    """저녁 주식 요약 페이지 — 매일 19:30 Slack 요약과 같은 내용(Signal Score A/B + 토스 스크리닝 후보)"""
     return render_template('stock_digest.html', active_page='stock_digest')
 
 @app.route('/api/stock-digest', methods=['GET'])

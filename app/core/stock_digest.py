@@ -1,4 +1,4 @@
-"""아침 7시 30분 국내주식 요약 — 이미 저장된 데이터만 모아 Slack으로 한 번 보내고(새 API 호출 없음),
+"""저녁 7시 30분 국내주식 요약 — 이미 저장된 데이터만 모아 Slack으로 한 번 보내고(새 API 호출 없음),
 같은 내용을 /stock-digest 페이지에서도 보여준다.
 
 - Signal Score(signal_score_daily, 15:40 계산) 최신 날짜의 A/B등급 상위
@@ -49,7 +49,7 @@ def build_stock_digest_text(digest: dict) -> str:
     if not graded and not candidates:
         return ''
 
-    lines = [f"☀️ [아침 주식 요약] Signal Score 기준일 {digest['score_date'] or '-'}"]
+    lines = [f"🌙 [저녁 주식 요약] Signal Score 기준일 {digest['score_date'] or '-'}"]
 
     if both:
         lines.append("")
@@ -88,8 +88,8 @@ def send_stock_digest(send_fn) -> bool:
     """요약 메시지를 만들어 send_fn(text)로 보낸다. 보낼 내용이 없으면 False."""
     text = build_stock_digest_text(load_stock_digest())
     if not text:
-        logger.info("[아침 주식 요약] 보낼 데이터 없음 — 생략")
+        logger.info("[저녁 주식 요약] 보낼 데이터 없음 — 생략")
         return False
     send_fn(text)
-    logger.info("[아침 주식 요약] Slack 발송 완료")
+    logger.info("[저녁 주식 요약] Slack 발송 완료")
     return True

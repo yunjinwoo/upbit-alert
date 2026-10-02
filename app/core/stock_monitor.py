@@ -1106,7 +1106,7 @@ def run_stock_monitor():
     last_top_gainers_hour = None  # 상승률 순위 스냅샷 9:10/12:10/15:10/18:10 수집 여부 (시간 단위로 추적)
     last_top_gainers_sync_date = None  # 상승률 순위 전용 동기화(18:20) 여부 (하루 1회)
     last_market_cap_morning_date = None  # 시가총액 수집 오전 백업(8:30) 여부 (하루 1회)
-    last_morning_digest_date = None  # 7시 30분 주식 요약 알림 여부 (하루 1회)
+    last_evening_digest_date = None  # 19시 30분 주식 요약 알림 여부 (하루 1회)
 
     while True:
         try:
@@ -1178,15 +1178,16 @@ def run_stock_monitor():
                 run_job_remote_sync()
                 last_sync_date = today_str
 
-            # 매일 7:30 — 최신 Signal Score/토스 스크리닝 후보 요약을 Slack으로 (하루 1회, 새 API 호출 없음)
+            # 매일 19:30 이후 첫 루프 — 최신 Signal Score/토스 스크리닝 후보 요약을 Slack으로 (하루 1회, 새 API 호출 없음)
+            # 주말 낮엔 루프가 4시간씩 자서 19시대를 건너뛸 수 있어 "19:30 이후"로 잡았다.
             # 주말엔 금요일 데이터가 그대로 나가며, 메시지의 기준일로 구분된다. 같은 내용은 /stock-digest 페이지.
-            if now.hour == 7 and now.minute >= 30 and last_morning_digest_date != today_str:
-                logger.info("⏰ [스케줄] 7시 30분 주식 요약 알림 시작")
+            if (now.hour, now.minute) >= (19, 30) and last_evening_digest_date != today_str:
+                logger.info("⏰ [스케줄] 19시 30분 주식 요약 알림 시작")
                 try:
                     send_stock_digest(send_slack_msg)
                 except Exception as e:
-                    logger.error(f"⚠️ 7시 30분 주식 요약 알림 실패: {e}")
-                last_morning_digest_date = today_str
+                    logger.error(f"⚠️ 19시 30분 주식 요약 알림 실패: {e}")
+                last_evening_digest_date = today_str
 
             # 장 운영 시간 외 대기
             if now.hour < 8 or now.hour >= 20:
