@@ -21,6 +21,15 @@ class TradeCycleBusyError(Exception):
     pass
 
 
+class BalanceUnavailableError(RuntimeError):
+    """실계좌 잔고를 못 읽었을 때(네트워크 오류·429·인증 오류 등) get_positions()가 던진다.
+    예전엔 빈 목록을 돌려줘서 "보유 코인이 하나도 없다"와 구분이 안 됐고, 그걸 본
+    _reconcile_live_positions()가 승인 안 된 추적 종목의 추적 행을 지워 실거래 표에서 영영 빠지고
+    손절/익절 관리도 끊겼다. 잔고를 모르면 아무것도 바꾸지 않고 이번 사이클을 건너뛰는 게 맞다.
+    RuntimeError 하위라 대시보드 API는 400 + 메시지로, 실거래 루프는 로그만 남기고 다음 사이클로 간다."""
+    pass
+
+
 @dataclass
 class Position:
     """보유 포지션 1건."""
