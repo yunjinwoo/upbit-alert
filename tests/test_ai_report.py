@@ -37,4 +37,4 @@ def test_report_markdown_has_prompt_table_and_disclaimer():
     assert 'AI에게 부탁하는 것' in text
     assert '| 삼성전자 | 005930 | 전기전자 | 3 | 2회 (1위) | 1회 (+4.50%) | - | 10-02 A82 | 1,000 | -200 | -800 | 일봉 돌파 | 최신 메모 |' in text
     assert '✅ 모두 정상' in text and '매수 권유가 아닙니다' in text
-    assert '자동매매 성과' not in text  # 체결 기록이 없으면 섹션 자체를 생략
+    assert '## 자동매매 성과' not in text  # 체결 기록이 없으면 섹션 자체를 생략
