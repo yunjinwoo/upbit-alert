@@ -119,7 +119,7 @@
         <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
             <div>
                 <h6 class="fw-bold mb-1">번호별 통계 (<span id="freqGameLabel"></span> 기준, 저장된 추천 전체)</h6>
-                <p class="hint mb-2">번호를 클릭하면 아래 표에서 같은 번호에 보라색 테두리가 표시돼요 · 칩과 표의 번호는 서로 연동됩니다.</p>
+                <p class="hint mb-2">번호를 클릭하면 표에서 같은 번호에 보라색 테두리가 표시되고, 고른 번호로 위 당첨 확인과 아래 표 번호 검색이 바로 채워져요.</p>
             </div>
             <div class="d-flex align-items-center gap-2">
                 <span class="hint" id="markCount">일반 0/6 · 보너스 0/6</span>
@@ -143,7 +143,7 @@
             <select id="filterMethod" class="form-select form-select-sm" style="max-width:160px">
                 <option value="">방식 전체</option>
             </select>
-            <input type="text" id="filterNumber" class="form-control form-control-sm" style="max-width:160px" placeholder="번호 검색 (예: 7)">
+            <input type="text" id="filterNumber" class="form-control form-control-sm" style="max-width:200px" placeholder="번호 검색 (예: 7 12)">
             <button type="button" class="btn btn-outline-secondary btn-sm" id="resetFilterBtn">필터 초기화</button>
             <div class="form-check ms-auto">
                 <input class="form-check-input" type="checkbox" id="selectAll">
@@ -539,9 +539,9 @@
     // 내 번호 당첨 확인 — 입력한 번호를 저장된 당첨결과 전체와 비교해 당첨된 회차를 모두 보여줌
     // ──────────────────────────────────────────────
     const CHECK_META = {
-        powerball: { hint: '일반볼 5개(1~28)와 파워볼 1개(0~9)를 입력하세요. 번호는 띄어쓰기나 쉼표로 구분해요.', placeholder: '일반볼 5개 (예: 3 9 15 22 27)' },
-        lotto645: { hint: '번호 6개(1~45)를 입력하세요. 띄어쓰기나 쉼표로 구분해요. 2등은 보너스 번호까지 자동으로 따져요.', placeholder: '번호 6개 (예: 3 11 19 27 33 41)' },
-        pension720: { hint: '조와 6자리 번호를 입력하세요. 뒤에서부터 일치하는 자릿수로 등수를 매겨요.', placeholder: '6자리 번호 (예: 123456)' },
+        powerball: { hint: '일반볼(1~28)과 파워볼(0~9)을 입력하세요. 5개+파워볼을 다 넣으면 등수를, 일부만 넣으면 그 번호가 모두 나온 회차를 찾아줘요. 아래 번호별 통계에서 번호를 눌러도 채워져요.', placeholder: '일반볼 (예: 3 9 15 22 27)' },
+        lotto645: { hint: '번호(1~45)를 입력하세요. 6개를 다 넣으면 등수를(2등은 보너스까지), 일부만 넣으면 그 번호가 모두 나온 회차를 찾아줘요. 아래 번호별 통계에서 번호를 눌러도 채워져요.', placeholder: '번호 (예: 3 11 19 27 33 41)' },
+        pension720: { hint: '조와 6자리 번호를 입력하면 등수를, 뒷자리 일부만(예: 456) 넣으면 끝자리가 같은 회차를 찾아줘요.', placeholder: '번호 (예: 123456 또는 456)' },
     };
 
     function updateCheckForm() {
@@ -559,29 +559,53 @@
         return (text.match(/\d+/g) || []).map(n => parseInt(n, 10));
     }
 
-    // 입력값을 추천 결과와 같은 형태({game, main, bonus})로 변환. 문제가 있으면 { error }
+    // 두 숫자 문자열의 끝자리부터 연속으로 같은 자릿수
+    function trailingMatch(a, b) {
+        let k = 0;
+        while (k < a.length && k < b.length && a[a.length - 1 - k] === b[b.length - 1 - k]) k++;
+        return k;
+    }
+
+    // 입력값을 { game, main, bonus, partial }로 변환. 문제가 있으면 { error }
+    // partial=true면 등수 대신 "입력한 번호가 모두 나온 회차"(연금은 끝자리 일치)를 찾는다.
     function readCheckInput() {
         const mainText = document.getElementById('checkMain').value;
         if (currentGame === 'pension720') {
             const digits = mainText.replace(/\D/g, '');
-            if (digits.length !== 6) return { error: '6자리 번호를 입력해주세요.' };
-            return { game: 'pension720', main: digits.split('').map(Number), bonus: parseInt(document.getElementById('checkGroup').value, 10) };
+            if (!digits.length || digits.length > 6) return { error: '번호를 1~6자리로 입력해주세요.' };
+            return { game: 'pension720', main: digits.split('').map(Number), bonus: parseInt(document.getElementById('checkGroup').value, 10), partial: digits.length < 6 };
         }
         const nums = parseNums(mainText);
         const [count, max] = currentGame === 'powerball' ? [5, 28] : [6, 45];
-        if (nums.length !== count) return { error: `번호를 ${count}개 입력해주세요. (지금 ${nums.length}개)` };
+        if (nums.length > count) return { error: `번호는 최대 ${count}개까지 입력할 수 있어요. (지금 ${nums.length}개)` };
         if (nums.some(n => n < 1 || n > max)) return { error: `번호는 1~${max} 사이여야 해요.` };
-        if (new Set(nums).size !== count) return { error: '같은 번호가 중복됐어요.' };
+        if (new Set(nums).size !== nums.length) return { error: '같은 번호가 중복됐어요.' };
         const main = nums.slice().sort((a, b) => a - b);
-        if (currentGame === 'lotto645') return { game: 'lotto645', main, bonus: null };
+        if (currentGame === 'lotto645') {
+            if (!main.length) return { error: '번호를 1개 이상 입력해주세요.' };
+            return { game: 'lotto645', main, bonus: null, partial: main.length < count };
+        }
         const pb = parseNums(document.getElementById('checkBonus').value);
-        if (pb.length !== 1 || pb[0] > 9) return { error: '파워볼 번호(0~9)를 1개 입력해주세요.' };
-        return { game: 'powerball', main, bonus: pb[0] };
+        if (pb.length > 1 || (pb.length && pb[0] > 9)) return { error: '파워볼 번호는 0~9 중 1개만 입력해주세요.' };
+        if (!main.length && !pb.length) return { error: '번호를 1개 이상 입력해주세요.' };
+        const bonus = pb.length ? pb[0] : null;
+        return { game: 'powerball', main, bonus, partial: main.length < count || bonus === null };
     }
 
-    // 입력 번호를 저장된 회차 전체와 비교 — 당첨된 회차만 [{ rank, label, round, prize, r }] (등수 → 최신 회차 순)
+    // 입력 번호를 저장된 회차 전체와 비교
+    // - 전체 입력: 당첨된 회차만 [{ rank, label, round, prize, r }] (등수 → 최신 회차 순)
+    // - 일부 입력: 입력한 번호가 모두 나온 회차(연금은 끝자리 일치) [{ round, r }] (최신 회차 순)
     function findAllMatches(rec) {
         const rounds = roundsData[rec.game] || [];
+        const byRoundDesc = (a, b) => parseInt(b.round, 10) - parseInt(a.round, 10);
+        if (rec.partial) {
+            const mine = rec.main.join('');
+            return rounds.filter(r => {
+                if (rec.game === 'pension720') return trailingMatch(mine, r.number) === mine.length;
+                if (!rec.main.every(n => r.nums.includes(n))) return false;
+                return rec.bonus === null || rec.bonus === undefined || rec.bonus === r.pb;
+            }).map(r => ({ round: r.round, r })).sort(byRoundDesc);
+        }
         const hits = [];
         rounds.forEach(r => {
             let g = null, prize = null;
@@ -596,7 +620,7 @@
             }
             if (g) hits.push({ ...g, round: r.round, prize, r });
         });
-        return hits.sort((a, b) => a.rank - b.rank || parseInt(b.round, 10) - parseInt(a.round, 10));
+        return hits.sort((a, b) => a.rank - b.rank || byRoundDesc(a, b));
     }
 
     // 회차 당첨번호를 보여주되, 입력 번호와 맞은 건 강조하고 나머지는 흐리게
@@ -609,46 +633,78 @@
             const balls = r.nums.map(n => `<span class="ball ${bandClass('lotto645', n)} ${rec.main.includes(n) ? 'hit' : 'dim'}">${n}</span>`).join('');
             return `<div class="reco-balls">${balls}<span class="hint">+</span><span class="ball ${bandClass('lotto645', r.bonus)} ${rec.main.includes(r.bonus) ? 'hit' : 'dim'}">${r.bonus}</span></div>`;
         }
-        const mine = rec.main.join('');
-        let trailing = 0;
-        for (let i = 5; i >= 0 && mine[i] === r.number[i]; i--) trailing++;
-        const digits = r.number.split('').map((d, i) => `<span class="digit ${i >= 6 - trailing ? 'hit' : 'dim'}">${d}</span>`).join('');
-        return `<div class="reco-digits"><span class="group-badge ${rec.bonus === r.group ? 'hit' : 'dim'}">${r.group}조</span>${digits}</div>`;
+        const trailing = trailingMatch(rec.main.join(''), r.number);
+        const digits = r.number.split('').map((d, i) => `<span class="digit ${i >= r.number.length - trailing ? 'hit' : 'dim'}">${d}</span>`).join('');
+        const groupHit = !rec.partial && rec.bonus === r.group;
+        return `<div class="reco-digits"><span class="group-badge ${groupHit ? 'hit' : 'dim'}">${r.group}조</span>${digits}</div>`;
     }
 
-    function runCheck() {
+    // 일부 입력일 때 요약 문구에 쓸 "찾은 번호" 설명
+    function partialLabel(rec) {
+        if (rec.game === 'pension720') return `끝자리가 ${rec.main.join('')}인`;
+        const parts = [];
+        if (rec.main.length) parts.push(`[${rec.main.join(', ')}]`);
+        if (rec.bonus !== null && rec.bonus !== undefined) parts.push(`파워볼 ${rec.bonus}`);
+        return `${parts.join(' + ')}가 모두 나온`;
+    }
+
+    function runCheck({ quiet = false } = {}) {
         const msg = document.getElementById('checkMsg');
         const out = document.getElementById('checkResult');
-        const rec = readCheckInput();
         out.innerHTML = '';
-        if (rec.error) { msg.textContent = rec.error; msg.className = 'msg err'; return; }
-        const total = (roundsData[rec.game] || []).length;
-        if (!total) { msg.textContent = `저장된 ${GAME_META[rec.game].label} 당첨결과가 없어요. 해당 페이지에서 회차를 먼저 추가해주세요.`; msg.className = 'msg err'; return; }
         msg.textContent = '';
-        const hits = findAllMatches(rec);
-        if (!hits.length) {
-            out.innerHTML = `<div class="check-summary">저장된 ${total.toLocaleString()}개 회차 중 당첨된 회차가 없어요.</div>`;
+        const rec = readCheckInput();
+        if (rec.error) {
+            if (!quiet) { msg.textContent = rec.error; msg.className = 'msg err'; }
             return;
         }
-        const byRank = {};
-        hits.forEach(h => { byRank[h.label] = (byRank[h.label] || 0) + 1; });
-        const summary = Object.entries(byRank).map(([label, c]) => `${label} ${c}회`).join(' · ');
+        const total = (roundsData[rec.game] || []).length;
+        if (!total) { msg.textContent = `저장된 ${GAME_META[rec.game].label} 당첨결과가 없어요. 해당 페이지에서 회차를 먼저 추가해주세요.`; msg.className = 'msg err'; return; }
+        const hits = findAllMatches(rec);
+        let summary;
+        if (rec.partial) {
+            summary = hits.length
+                ? `저장된 ${total.toLocaleString()}개 회차 중 ${partialLabel(rec)} 회차 ${hits.length.toLocaleString()}번`
+                : `저장된 ${total.toLocaleString()}개 회차 중 ${partialLabel(rec)} 회차가 없어요.`;
+        } else if (hits.length) {
+            const byRank = {};
+            hits.forEach(h => { byRank[h.label] = (byRank[h.label] || 0) + 1; });
+            summary = `저장된 ${total.toLocaleString()}개 회차 중 ${hits.length.toLocaleString()}번 당첨 — ` + Object.entries(byRank).map(([label, c]) => `${label} ${c}회`).join(' · ');
+        } else {
+            summary = `저장된 ${total.toLocaleString()}개 회차 중 당첨된 회차가 없어요.`;
+        }
         const MAX_ROWS = 100;
         const rows = hits.slice(0, MAX_ROWS).map(h => `
             <div class="check-row">
                 <span class="round">${h.round}회</span>
                 ${h.r.date ? `<span class="hint">${h.r.date}</span>` : ''}
-                <span class="match-badge hit">${h.label}</span>
+                ${h.label ? `<span class="match-badge hit">${h.label}</span>` : ''}
                 ${winningNumbersHtml(rec, h.r)}
                 ${h.prize ? `<span class="prize-amount">${h.prize.toLocaleString()}원</span>` : ''}
             </div>`).join('');
         out.innerHTML = `
-            <div class="check-summary">저장된 ${total.toLocaleString()}개 회차 중 ${hits.length.toLocaleString()}번 당첨 — ${summary}</div>
-            <div class="check-list">${rows}</div>
-            ${hits.length > MAX_ROWS ? `<div class="hint mt-1">등수가 높은 순으로 ${MAX_ROWS}개만 보여줘요.</div>` : ''}`;
+            <div class="check-summary">${summary}</div>
+            ${hits.length ? `<div class="check-list">${rows}</div>` : ''}
+            ${hits.length > MAX_ROWS ? `<div class="hint mt-1">${rec.partial ? '최신 회차' : '등수가 높은 순'}으로 ${MAX_ROWS}개만 보여줘요.</div>` : ''}`;
     }
 
-    document.getElementById('checkBtn').addEventListener('click', runCheck);
+    // 번호별 통계·표에서 번호를 눌러 표시하면, 표시한 번호를 당첨 확인 입력칸과 표 번호 검색에 채워 바로 검색
+    function syncMarksToInputs() {
+        const main = Array.from(markedMain).sort((a, b) => a - b);
+        const bonus = Array.from(markedBonus).sort((a, b) => a - b);
+        if (currentGame === 'pension720') {
+            // 연금은 자릿수 순서가 의미 있어서 당첨 확인칸엔 넣지 않고, 조 하나만 골랐으면 조 선택만 맞춤
+            if (bonus.length === 1) document.getElementById('checkGroup').value = String(bonus[0]);
+        } else {
+            document.getElementById('checkMain').value = main.join(' ');
+            if (currentGame === 'powerball') document.getElementById('checkBonus').value = bonus.length === 1 ? String(bonus[0]) : '';
+            runCheck({ quiet: true });
+        }
+        document.getElementById('filterNumber').value = [...main, ...bonus].join(' ');
+        applyColumnFilters();
+    }
+
+    document.getElementById('checkBtn').addEventListener('click', () => runCheck());
     ['checkMain', 'checkBonus'].forEach(id => document.getElementById(id).addEventListener('keydown', e => {
         if (e.key === 'Enter') runCheck();
     }));
@@ -685,14 +741,15 @@
     // 그래서 렌더링된 텍스트가 아니라 원본 데이터(allRecommendations)를 직접 검사하는 커스텀 필터를 등록한다.
     $.fn.dataTable.ext.search.push((settings, searchData, rowIdx) => {
         if (settings.nTable.id !== 'recoTable') return true; // 이 페이지의 테이블에만 적용
-        const num = document.getElementById('filterNumber').value.trim();
-        if (num === '') return true;
-        const n = Number(num);
-        if (Number.isNaN(n)) return false;
+        // 여러 번호를 띄어쓰기/쉼표로 넣으면 그 번호가 모두 들어있는 행만 남김 (일부 번호만 넣어도 검색됨)
+        const text = document.getElementById('filterNumber').value.trim();
+        if (text === '') return true;
+        const nums = parseNums(text);
+        if (!nums.length) return false;
         const rec = allRecommendations[rowIdx];
         if (!rec) return true;
         const values = (rec.bonus !== null && rec.bonus !== undefined) ? [...rec.main, rec.bonus] : rec.main;
-        return values.includes(n);
+        return nums.every(n => values.includes(n));
     });
 
     // 게임별 생성 결과(N세트)를 저장용 공통 row 형태로 변환
@@ -1029,12 +1086,14 @@
         if (mainEl) {
             toggleMark(markedMain, parseInt(mainEl.dataset.num, 10));
             applyMarks();
+            syncMarksToInputs();
             return;
         }
         const bonusEl = e.target.closest('.pball-single, .group-badge');
         if (bonusEl) {
             toggleMark(markedBonus, parseInt(bonusEl.dataset.num, 10));
             applyMarks();
+            syncMarksToInputs();
         }
     });
 
@@ -1044,6 +1103,7 @@
             if (!chip) return;
             toggleMark(set, parseInt(chip.dataset.num, 10));
             applyMarks();
+            syncMarksToInputs();
         });
     }
     bindFreqBoardClicks('freqMainBoard', markedMain);
@@ -1053,6 +1113,7 @@
         markedMain.clear();
         markedBonus.clear();
         applyMarks();
+        syncMarksToInputs();
     });
 
     document.getElementById('bulkDeleteBtn').addEventListener('click', async () => {
