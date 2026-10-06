@@ -1984,6 +1984,23 @@ def get_job_run_log(days: int = 7, job_name: str = None, limit: int = 500) -> li
     return [dict(row) for row in rows]
 
 
+def get_job_run_log_since(since: str) -> list:
+    """since('%Y-%m-%d %H:%M:%S') 이후 작업 실행 이력 전체(오래된 순). 저녁 요약의 스케줄 점검용 —
+    정밀조건 검사처럼 1분마다 도는 작업이 있어 get_job_run_log()의 limit에 걸리지 않게 필요한 컬럼만 다 읽는다."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT job_name, description, start_time, success, error_message, trigger_type
+        FROM job_run_log
+        WHERE start_time >= ?
+        ORDER BY start_time ASC, id ASC
+    ''', (since,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
 def get_recent_avg_volume(code: str, avg_days: int = 20) -> dict:
     """종목의 최근 avg_days "완결된 이전 거래일" 평균 거래량 조회 (오늘 날짜는 항상 제외).
     실시간 감시(stock_monitor.run_stock_monitor)에서 장중 누적거래량(acml_vol)과 비교할 분모로 쓴다.
