@@ -78,7 +78,7 @@ function esc(v) {
     return String(v ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
 }
 function stockLink(name, code) {
-    return `<a class="ticker-link" href="https://finance.naver.com/item/main.nhn?code=${encodeURIComponent(code)}" target="_blank">${esc(name)}</a> <span class="text-muted">${esc(code)}</span>`;
+    return `<a class="ticker-link" href="https://stock.naver.com/domestic/stock/${encodeURIComponent(code)}/price" target="_blank">${esc(name)}</a> <span class="text-muted">${esc(code)}</span>`;
 }
 function gradeBadge(g) {
     return `<span class="badge grade-${esc(g)}">${esc(g)}</span>`;

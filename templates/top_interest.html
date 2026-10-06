@@ -243,7 +243,7 @@
                 <tr>
                     <td><span class="badge rank-badge bg-primary">${r.info.market_div || '-'}</span></td>
                     <td>
-                        <a href="https://finance.naver.com/item/main.nhn?code=${r.code}" target="_blank" class="ticker-link">
+                        <a href="https://stock.naver.com/domestic/stock/${r.code}/price" target="_blank" class="ticker-link">
                             ${displayName} <small class="text-muted">(${r.code})</small>
                         </a>
                         <button class="memo-icon-btn" onclick='openStockMemo(${JSON.stringify(r.code)}, ${JSON.stringify(r.name || displayName || "")})' title="메모">📝</button>

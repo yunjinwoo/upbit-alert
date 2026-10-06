@@ -101,7 +101,7 @@
     // 임베드 위젯이 종목이 바뀌어도 갱신되지 않는 문제가 있어, 차트는 임베드 대신
     // 네이버/트레이딩뷰 외부 링크로만 제공한다.
     function setMemoChartLinks(code) {
-        document.getElementById('memoChartNaverLink').href = `https://finance.naver.com/item/main.naver?code=${code}`;
+        document.getElementById('memoChartNaverLink').href = `https://stock.naver.com/domestic/stock/${code}/price`;
         document.getElementById('memoChartTvLink').href = `https://www.tradingview.com/chart/?symbol=KRX%3A${code}`;
     }
 

@@ -281,7 +281,7 @@
             return `<tr>
                 <td><span class="badge rank-badge ${badge}">${row.rank}위</span></td>
                 <td>
-                    <a href="https://finance.naver.com/item/main.nhn?code=${row.code}" target="_blank" class="ticker-link">${row.name}</a>
+                    <a href="https://stock.naver.com/domestic/stock/${row.code}/price" target="_blank" class="ticker-link">${row.name}</a>
                     <small class="text-muted">(${row.code})</small>
                     <button class="memo-icon-btn" onclick='openStockMemo(${JSON.stringify(row.code)}, ${JSON.stringify(row.name || "")})' title="메모">📝</button>
                 </td>
