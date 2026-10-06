@@ -116,6 +116,17 @@
     </div>
 
     <div class="card-panel my-3">
+        <h6 class="fw-bold mb-1">📋 당첨 회차 검색 (<span id="drawGameLabel"></span>)</h6>
+        <p class="hint mb-2" id="drawHint"></p>
+        <div class="check-form">
+            <input type="text" id="drawRound" class="form-control form-control-sm" style="max-width:220px" placeholder="회차 (예: 1190 또는 1180-1190)" autocomplete="off">
+            <input type="text" id="drawNums" class="form-control form-control-sm" style="max-width:220px" autocomplete="off">
+            <button type="button" class="btn btn-outline-secondary btn-sm" id="drawResetBtn">초기화</button>
+        </div>
+        <div id="drawResult"></div>
+    </div>
+
+    <div class="card-panel my-3">
         <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
             <div>
                 <h6 class="fw-bold mb-1">번호별 통계 (<span id="freqGameLabel"></span> 기준, 저장된 추천 전체)</h6>
@@ -624,19 +635,21 @@
     }
 
     // 회차 당첨번호를 보여주되, 입력 번호와 맞은 건 강조하고 나머지는 흐리게
+    // rec.plain이면 강조 없이 그대로 보여줌(당첨 회차 검색에서 번호를 안 넣었을 때)
     function winningNumbersHtml(rec, r) {
+        const cls = hit => rec.plain ? '' : (hit ? 'hit' : 'dim');
         if (rec.game === 'powerball') {
-            const balls = r.nums.map(n => `<span class="ball ${bandClass('powerball', n)} ${rec.main.includes(n) ? 'hit' : 'dim'}">${n}</span>`).join('');
-            return `<div class="reco-balls">${balls}<span class="pball-single ${rec.bonus === r.pb ? 'hit' : 'dim'}">${r.pb}</span></div>`;
+            const balls = r.nums.map(n => `<span class="ball ${bandClass('powerball', n)} ${cls(rec.main.includes(n))}">${n}</span>`).join('');
+            return `<div class="reco-balls">${balls}<span class="pball-single ${cls(rec.bonus === r.pb)}">${r.pb}</span></div>`;
         }
         if (rec.game === 'lotto645') {
-            const balls = r.nums.map(n => `<span class="ball ${bandClass('lotto645', n)} ${rec.main.includes(n) ? 'hit' : 'dim'}">${n}</span>`).join('');
-            return `<div class="reco-balls">${balls}<span class="hint">+</span><span class="ball ${bandClass('lotto645', r.bonus)} ${rec.main.includes(r.bonus) ? 'hit' : 'dim'}">${r.bonus}</span></div>`;
+            const balls = r.nums.map(n => `<span class="ball ${bandClass('lotto645', n)} ${cls(rec.main.includes(n))}">${n}</span>`).join('');
+            return `<div class="reco-balls">${balls}<span class="hint">+</span><span class="ball ${bandClass('lotto645', r.bonus)} ${cls(rec.main.includes(r.bonus))}">${r.bonus}</span></div>`;
         }
         const trailing = trailingMatch(rec.main.join(''), r.number);
-        const digits = r.number.split('').map((d, i) => `<span class="digit ${i >= r.number.length - trailing ? 'hit' : 'dim'}">${d}</span>`).join('');
+        const digits = r.number.split('').map((d, i) => `<span class="digit ${cls(i >= r.number.length - trailing)}">${d}</span>`).join('');
         const groupHit = !rec.partial && rec.bonus === r.group;
-        return `<div class="reco-digits"><span class="group-badge ${groupHit ? 'hit' : 'dim'}">${r.group}조</span>${digits}</div>`;
+        return `<div class="reco-digits"><span class="group-badge ${cls(groupHit)}">${r.group}조</span>${digits}</div>`;
     }
 
     // 일부 입력일 때 요약 문구에 쓸 "찾은 번호" 설명
@@ -703,6 +716,86 @@
         document.getElementById('filterNumber').value = [...main, ...bonus].join(' ');
         applyColumnFilters();
     }
+
+    // ──────────────────────────────────────────────
+    // 당첨 회차 검색 — 저장된 실제 당첨결과를 회차(하나 또는 범위)와 번호로 찾아봄. 입력이 없으면 최신 회차부터
+    // ──────────────────────────────────────────────
+    const DRAW_META = {
+        powerball: { hint: '회차나 번호로 저장된 파워볼 당첨결과를 찾아요. 번호를 여러 개 넣으면 모두 나온 회차만 보여주고, 일반볼·파워볼 구분 없이 찾아요.', numsPlaceholder: '번호 (예: 7 12)' },
+        lotto645: { hint: '회차나 번호로 저장된 로또6/45 당첨결과를 찾아요. 번호를 여러 개 넣으면 모두 나온 회차만 보여주고, 보너스 번호도 포함해서 찾아요.', numsPlaceholder: '번호 (예: 7 12)' },
+        pension720: { hint: '회차나 번호 뒷자리로 저장된 연금복권720+ 당첨결과를 찾아요.', numsPlaceholder: '번호 뒷자리 (예: 456)' },
+    };
+    const DRAW_MAX_ROWS = 50;
+
+    // "1190" → [1190, 1190], "1180-1190"/"1180~1190" → [1180, 1190], 비었거나 숫자가 없으면 null
+    function parseRoundRange(text) {
+        const nums = parseNums(text);
+        if (!nums.length) return null;
+        const lo = Math.min(nums[0], nums[nums.length - 1]);
+        const hi = Math.max(nums[0], nums[nums.length - 1]);
+        return [lo, hi];
+    }
+
+    function renderDrawSearch() {
+        const game = currentGame;
+        const rounds = roundsData[game] || [];
+        const out = document.getElementById('drawResult');
+        if (!rounds.length) {
+            out.innerHTML = `<div class="check-summary">저장된 ${GAME_META[game].label} 당첨결과가 없어요. 해당 페이지에서 회차를 먼저 추가해주세요.</div>`;
+            return;
+        }
+        const range = parseRoundRange(document.getElementById('drawRound').value);
+        const numsText = document.getElementById('drawNums').value;
+        const nums = game === 'pension720' ? numsText.replace(/\D/g, '').split('').filter(Boolean).map(Number) : parseNums(numsText);
+        const digits = nums.join('');
+
+        const hits = rounds.filter(r => {
+            const no = parseInt(r.round, 10);
+            if (range && (no < range[0] || no > range[1])) return false;
+            if (!nums.length) return true;
+            if (game === 'pension720') return trailingMatch(digits, r.number) === digits.length;
+            const values = game === 'powerball' ? [...r.nums, r.pb] : [...r.nums, r.bonus];
+            return nums.every(n => values.includes(n));
+        }).sort((a, b) => parseInt(b.round, 10) - parseInt(a.round, 10));
+
+        // 번호를 넣었으면 그 번호를 강조해서 보여줌 (파워볼은 파워볼 자리도 같은 숫자면 강조)
+        const rec = { game, main: nums, bonus: game === 'powerball' && nums.length ? undefined : null, partial: true, plain: !nums.length };
+        const rowHtmlOf = r => {
+            const view = game === 'powerball' ? { ...rec, bonus: nums.includes(r.pb) ? r.pb : null } : rec;
+            return `
+            <div class="check-row">
+                <span class="round">${r.round}회</span>
+                ${r.date ? `<span class="hint">${r.date}</span>` : ''}
+                ${winningNumbersHtml(view, r)}
+                ${r.prize ? `<span class="hint">1등 ${r.winners.toLocaleString()}명 · ${r.prize.toLocaleString()}원</span>` : ''}
+            </div>`;
+        };
+
+        const filtered = range || nums.length;
+        const summary = filtered
+            ? `저장된 ${rounds.length.toLocaleString()}개 회차 중 ${hits.length.toLocaleString()}개 회차가 검색됐어요.`
+            : `저장된 ${rounds.length.toLocaleString()}개 회차 · 최신 회차부터 보여줘요.`;
+        out.innerHTML = `
+            <div class="check-summary">${summary}</div>
+            ${hits.length ? `<div class="check-list">${hits.slice(0, DRAW_MAX_ROWS).map(rowHtmlOf).join('')}</div>` : ''}
+            ${hits.length > DRAW_MAX_ROWS ? `<div class="hint mt-1">최신 회차부터 ${DRAW_MAX_ROWS}개만 보여줘요. 회차나 번호로 범위를 좁혀보세요.</div>` : ''}`;
+    }
+
+    function updateDrawForm() {
+        document.getElementById('drawGameLabel').textContent = GAME_META[currentGame].label;
+        document.getElementById('drawHint').textContent = DRAW_META[currentGame].hint;
+        document.getElementById('drawNums').placeholder = DRAW_META[currentGame].numsPlaceholder;
+        document.getElementById('drawRound').value = '';
+        document.getElementById('drawNums').value = '';
+        renderDrawSearch();
+    }
+
+    ['drawRound', 'drawNums'].forEach(id => document.getElementById(id).addEventListener('input', renderDrawSearch));
+    document.getElementById('drawResetBtn').addEventListener('click', () => {
+        document.getElementById('drawRound').value = '';
+        document.getElementById('drawNums').value = '';
+        renderDrawSearch();
+    });
 
     document.getElementById('checkBtn').addEventListener('click', () => runCheck());
     ['checkMain', 'checkBonus'].forEach(id => document.getElementById(id).addEventListener('keydown', e => {
@@ -899,6 +992,7 @@
         document.querySelectorAll('#gameTab .nav-link').forEach(a => a.classList.toggle('active', a.dataset.gameTab === game));
         updateMethodHint();
         updateCheckForm();
+        updateDrawForm();
         renderFreqBoards();
     }
 
@@ -1140,6 +1234,7 @@
         updateMethodHint();
         updateCheckForm();
         await Promise.all([loadAllRounds(), loadRecommendations(), loadFavoritesData()]);
+        updateDrawForm();
         renderTable();
     }
     init();
