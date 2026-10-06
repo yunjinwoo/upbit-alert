@@ -36,7 +36,16 @@
             <h3 class="mb-1">🌙 저녁 주식 요약</h3>
             <div class="text-muted small">매일 저녁 7시 30분 Slack 알림과 같은 내용입니다. Signal Score 기준일 <b id="scoreDate">-</b></div>
         </div>
-        <button class="btn btn-sm btn-outline-secondary" onclick="loadDigest()">새로고침</button>
+        <div class="d-flex gap-2 align-items-center">
+            <select id="reportDays" class="form-select form-select-sm" style="width: auto;" title="AI 분석용 파일에 넣을 기간">
+                <option value="1">1일</option>
+                <option value="5" selected>5일</option>
+                <option value="10">10일</option>
+                <option value="20">20일</option>
+            </select>
+            <button class="btn btn-sm btn-primary" onclick="downloadAiReport()" title="최근 수집 데이터를 종목별로 묶은 마크다운 파일 — AI에게 올려서 질문하세요">🤖 AI 분석용 파일</button>
+            <button class="btn btn-sm btn-outline-secondary" onclick="loadDigest()">새로고침</button>
+        </div>
     </div>
 
     <div class="table-container">
@@ -160,6 +169,10 @@ async function loadDigest() {
                 <td>${esc(j.last_time)}</td><td style="white-space: normal;">${status}</td></tr>`;
         }).join('')
         : emptyRow(5, '최근 24시간 자동 실행 기록이 없습니다.');
+}
+function downloadAiReport() {
+    // 상대경로 — 운영(/upbit 하위)에서도 같은 앱으로 간다
+    window.location.href = 'api/ai-report.md?days=' + encodeURIComponent(document.getElementById('reportDays').value);
 }
 loadDigest();
 </script>
