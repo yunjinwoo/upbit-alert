@@ -69,6 +69,17 @@
         </div>
     </div>
 
+    <div class="table-container">
+        <h5>🗓️ 스케줄 실행 결과 <small class="text-muted fw-normal">최근 24시간 자동 실행 · 실패한 작업이 위로</small></h5>
+        <div class="mb-2" id="jobsSummary"></div>
+        <div class="table-scroll">
+            <table class="table table-sm table-hover digest-table mb-0">
+                <thead class="table-light"><tr><th>작업</th><th>실행</th><th>실패</th><th>마지막 실행</th><th>상태</th></tr></thead>
+                <tbody id="jobsBody"></tbody>
+            </table>
+        </div>
+    </div>
+
     <div class="text-muted small">※ 앱이 계산한 지표 요약이며 매수 권유가 아닙니다.</div>
 </div>
 
@@ -129,6 +140,26 @@ async function loadDigest() {
         ? d.candidates.map(s => `<tr><td>${stockLink(s.name, s.ticker)}</td><td>${typeof s.price === 'number' ? s.price.toLocaleString() : '-'}</td>
             <td>${rateCell(s.change_rate)}</td><td>${reasonTags(s.reasons)}</td></tr>`).join('')
         : emptyRow(4, screeningEmpty);
+
+    // 스케줄 결과 — 마지막 실행이 실패한 작업 → 실패 후 회복된 작업 → 정상 순
+    const jobs = d.jobs || {jobs: [], failing: [], recovered: [], total_runs: 0, job_count: 0};
+    const rank = j => (!j.last_success ? 0 : (j.fails ? 1 : 2));
+    const sorted = [...jobs.jobs].sort((a, b) => rank(a) - rank(b) || String(a.description).localeCompare(String(b.description)));
+    document.getElementById('jobsSummary').innerHTML = !jobs.total_runs
+        ? '<span class="badge bg-warning text-dark">실행 기록 없음</span> 봇 프로세스가 멈췄는지 확인해 주세요.'
+        : (jobs.failing.length
+            ? `<span class="badge bg-danger">실패 ${jobs.failing.length}개</span> 작업 ${jobs.job_count}개 · 실행 ${jobs.total_runs}회`
+            : `<span class="badge bg-success">모두 정상</span> 작업 ${jobs.job_count}개 · 실행 ${jobs.total_runs}회`
+              + (jobs.recovered.length ? ` · 재시도로 회복 ${jobs.recovered.length}개` : ''));
+    document.getElementById('jobsBody').innerHTML = sorted.length
+        ? sorted.map(j => {
+            const status = !j.last_success
+                ? `<span class="badge bg-danger">실패</span> <span class="text-muted">${esc(j.last_error || '')}</span>`
+                : (j.fails ? '<span class="badge bg-warning text-dark">재시도 후 정상</span>' : '<span class="badge bg-success">정상</span>');
+            return `<tr><td>${esc(j.description)}</td><td>${esc(j.runs)}</td><td>${j.fails ? `<b class="up-rate">${esc(j.fails)}</b>` : 0}</td>
+                <td>${esc(j.last_time)}</td><td style="white-space: normal;">${status}</td></tr>`;
+        }).join('')
+        : emptyRow(5, '최근 24시간 자동 실행 기록이 없습니다.');
 }
 loadDigest();
 </script>

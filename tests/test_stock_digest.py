@@ -27,3 +27,44 @@ def test_overlap_listed_first_and_c_grade_excluded():
     assert '카카오' not in text
     assert 'NAVER(035420) -0.40% · 200선 근접+구름 위' in text
     assert '매수 권유가 아닙니다' in text
+
+
+from app.core.stock_digest import build_job_summary_text, summarize_job_runs
+
+
+def _run(job, ok, t, desc=None, err=None, trigger='auto'):
+    return {'job_name': job, 'description': desc or job, 'start_time': t, 'success': 1 if ok else 0,
+            'error_message': err, 'trigger_type': trigger}
+
+
+def test_job_summary_all_ok_is_one_line():
+    rows = [_run('hts_top_view', True, '2026-10-05 09:10:00'), _run('remote_sync', True, '2026-10-05 20:00:00')]
+    text = build_job_summary_text(summarize_job_runs(rows))
+    assert text == '✅ 최근 24시간 스케줄 2개 · 실행 2회 모두 정상'
+
+
+def test_job_summary_failing_and_recovered():
+    rows = [
+        _run('top_gainers', False, '2026-10-05 15:10:00', desc='상승률 순위 (15시)', err='timeout'),
+        _run('top_gainers', True, '2026-10-05 15:14:00', desc='상승률 순위 (15시)'),
+        _run('remote_sync', False, '2026-10-05 20:00:00', desc='원격 동기화', err='HTTP 502\nBad Gateway'),
+        _run('hts_top_view', True, '2026-10-05 10:10:00'),
+    ]
+    summary = summarize_job_runs(rows)
+    assert [j['job_name'] for j in summary['failing']] == ['remote_sync']
+    assert [j['job_name'] for j in summary['recovered']] == ['top_gainers']
+    text = build_job_summary_text(summary)
+    assert '⚠️ 원격 동기화 — 실패 1회, 마지막 실행(2026-10-05 20:00:00)도 실패: HTTP 502 Bad Gateway' in text
+    assert '↻ 실패 후 재시도로 정상: 상승률 순위 (15시) 1회' in text
+    assert 'hts_top_view' not in text
+
+
+def test_job_summary_ignores_manual_runs():
+    rows = [_run('remote_sync', False, '2026-10-05 21:00:00', err='x', trigger='manual'),
+            _run('upbit_live', True, '2026-10-05 21:05:00', trigger='auto_live')]
+    summary = summarize_job_runs(rows)
+    assert summary['total_runs'] == 1 and not summary['failing']
+
+
+def test_job_summary_no_runs_warns():
+    assert '실행 기록이 없습니다' in build_job_summary_text(summarize_job_runs([]))
