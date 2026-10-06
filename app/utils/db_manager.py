@@ -3505,7 +3505,7 @@ def get_powerball_rounds(limit: int = 300) -> list:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute('SELECT * FROM powerball_rounds ORDER BY round DESC LIMIT ?', (limit,))
+    cursor.execute('SELECT * FROM powerball_rounds ORDER BY CAST(round AS INTEGER) DESC LIMIT ?', (limit,))
     rows = cursor.fetchall()
     conn.close()
     result = []
@@ -3613,11 +3613,11 @@ def save_lotto645_rounds(rounds: list) -> tuple:
 
 
 def get_lotto645_rounds(limit: int = 300) -> list:
-    """로또6/45 당첨결과 목록 조회 (회차 최신순). nums는 리스트[int]로 파싱해서 반환."""
+    """로또6/45 당첨결과 목록 조회 (회차 최신순). round 컬럼이 TEXT라 정수로 바꿔 정렬해야 "999"가 "1000"보다 앞에 오지 않음. nums는 리스트[int]로 파싱해서 반환."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute('SELECT * FROM lotto645_rounds ORDER BY round DESC LIMIT ?', (limit,))
+    cursor.execute('SELECT * FROM lotto645_rounds ORDER BY CAST(round AS INTEGER) DESC LIMIT ?', (limit,))
     rows = cursor.fetchall()
     conn.close()
     result = []
