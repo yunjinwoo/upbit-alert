@@ -63,6 +63,14 @@
         .fav-btn { background: none; border: none; font-size: 1rem; cursor: pointer; line-height: 1; }
         .fav-btn:disabled { opacity: .5; cursor: default; }
 
+        .check-form { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+        .check-summary { font-size: 0.85rem; font-weight: 700; color: #1a1a2e; margin: 8px 0 6px; }
+        .check-list { display: flex; flex-direction: column; gap: 6px; max-height: 360px; overflow-y: auto; }
+        .check-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 10px; border-radius: 10px; background: #f7f8fc; font-size: 0.8rem; }
+        .check-row .round { font-weight: 800; min-width: 70px; }
+        .ball.hit, .pball-single.hit, .digit.hit, .group-badge.hit { box-shadow: 0 0 0 3px #e0457b; }
+        .ball.dim, .pball-single.dim, .digit.dim, .group-badge.dim { opacity: .35; }
+
         .msg { font-size: 0.78rem; font-weight: 600; margin-top: 6px; white-space: pre-line; }
         .msg.ok { color: #1f8a5f; }
         .msg.err { color: #c14a4a; }
@@ -91,6 +99,21 @@
     </div>
     <p class="hint mb-1" id="methodHint"></p>
     <div class="msg" id="genMsg"></div>
+
+    <div class="card-panel my-3">
+        <h6 class="fw-bold mb-1">🔍 내 번호 당첨 확인 (<span id="checkGameLabel"></span>)</h6>
+        <p class="hint mb-2" id="checkHint"></p>
+        <div class="check-form">
+            <select id="checkGroup" class="form-select form-select-sm" style="max-width:90px; display:none">
+                <option value="1">1조</option><option value="2">2조</option><option value="3">3조</option><option value="4">4조</option><option value="5">5조</option>
+            </select>
+            <input type="text" id="checkMain" class="form-control form-control-sm" style="max-width:260px" autocomplete="off">
+            <input type="text" id="checkBonus" class="form-control form-control-sm" style="max-width:110px" placeholder="파워볼 (0~9)" autocomplete="off">
+            <button type="button" class="btn btn-primary btn-sm" id="checkBtn">당첨 확인</button>
+        </div>
+        <div class="msg" id="checkMsg"></div>
+        <div id="checkResult"></div>
+    </div>
 
     <div class="card-panel my-3">
         <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
@@ -243,9 +266,9 @@
     async function loadAllRounds() {
         const safeFetch = (url) => fetch(url).then(r => r.json()).catch(() => ({ data: [] }));
         const [pb, lo, pe] = await Promise.all([
-            safeFetch('api/powerball/rounds'),
-            safeFetch('api/lotto645/rounds'),
-            safeFetch('api/pension720/rounds'),
+            safeFetch('api/powerball/rounds?limit=5000'),
+            safeFetch('api/lotto645/rounds?limit=5000'),
+            safeFetch('api/pension720/rounds?limit=5000'),
         ]);
         roundsData.powerball = pb.data || [];
         roundsData.lotto645 = lo.data || [];
@@ -512,6 +535,124 @@
         return best;
     }
 
+    // ──────────────────────────────────────────────
+    // 내 번호 당첨 확인 — 입력한 번호를 저장된 당첨결과 전체와 비교해 당첨된 회차를 모두 보여줌
+    // ──────────────────────────────────────────────
+    const CHECK_META = {
+        powerball: { hint: '일반볼 5개(1~28)와 파워볼 1개(0~9)를 입력하세요. 번호는 띄어쓰기나 쉼표로 구분해요.', placeholder: '일반볼 5개 (예: 3 9 15 22 27)' },
+        lotto645: { hint: '번호 6개(1~45)를 입력하세요. 띄어쓰기나 쉼표로 구분해요. 2등은 보너스 번호까지 자동으로 따져요.', placeholder: '번호 6개 (예: 3 11 19 27 33 41)' },
+        pension720: { hint: '조와 6자리 번호를 입력하세요. 뒤에서부터 일치하는 자릿수로 등수를 매겨요.', placeholder: '6자리 번호 (예: 123456)' },
+    };
+
+    function updateCheckForm() {
+        const meta = CHECK_META[currentGame];
+        document.getElementById('checkGameLabel').textContent = GAME_META[currentGame].label;
+        document.getElementById('checkHint').textContent = meta.hint;
+        document.getElementById('checkMain').placeholder = meta.placeholder;
+        document.getElementById('checkBonus').style.display = currentGame === 'powerball' ? '' : 'none';
+        document.getElementById('checkGroup').style.display = currentGame === 'pension720' ? '' : 'none';
+        document.getElementById('checkMsg').textContent = '';
+        document.getElementById('checkResult').innerHTML = '';
+    }
+
+    function parseNums(text) {
+        return (text.match(/\d+/g) || []).map(n => parseInt(n, 10));
+    }
+
+    // 입력값을 추천 결과와 같은 형태({game, main, bonus})로 변환. 문제가 있으면 { error }
+    function readCheckInput() {
+        const mainText = document.getElementById('checkMain').value;
+        if (currentGame === 'pension720') {
+            const digits = mainText.replace(/\D/g, '');
+            if (digits.length !== 6) return { error: '6자리 번호를 입력해주세요.' };
+            return { game: 'pension720', main: digits.split('').map(Number), bonus: parseInt(document.getElementById('checkGroup').value, 10) };
+        }
+        const nums = parseNums(mainText);
+        const [count, max] = currentGame === 'powerball' ? [5, 28] : [6, 45];
+        if (nums.length !== count) return { error: `번호를 ${count}개 입력해주세요. (지금 ${nums.length}개)` };
+        if (nums.some(n => n < 1 || n > max)) return { error: `번호는 1~${max} 사이여야 해요.` };
+        if (new Set(nums).size !== count) return { error: '같은 번호가 중복됐어요.' };
+        const main = nums.slice().sort((a, b) => a - b);
+        if (currentGame === 'lotto645') return { game: 'lotto645', main, bonus: null };
+        const pb = parseNums(document.getElementById('checkBonus').value);
+        if (pb.length !== 1 || pb[0] > 9) return { error: '파워볼 번호(0~9)를 1개 입력해주세요.' };
+        return { game: 'powerball', main, bonus: pb[0] };
+    }
+
+    // 입력 번호를 저장된 회차 전체와 비교 — 당첨된 회차만 [{ rank, label, round, prize, r }] (등수 → 최신 회차 순)
+    function findAllMatches(rec) {
+        const rounds = roundsData[rec.game] || [];
+        const hits = [];
+        rounds.forEach(r => {
+            let g = null, prize = null;
+            if (rec.game === 'powerball') {
+                g = pbGrade(rec.main.filter(n => r.nums.includes(n)).length, rec.bonus === r.pb);
+            } else if (rec.game === 'lotto645') {
+                const mainMatch = rec.main.filter(n => r.nums.includes(n)).length;
+                g = lottoGradeOf(mainMatch, mainMatch === 5 && rec.main.includes(r.bonus));
+                if (g) prize = g.rank === 1 ? r.prize : (LOTTO_FIXED_PRIZE[g.rank] || null);
+            } else {
+                g = pensionGradeOf(rec.bonus, rec.main.join(''), r.group, r.number);
+            }
+            if (g) hits.push({ ...g, round: r.round, prize, r });
+        });
+        return hits.sort((a, b) => a.rank - b.rank || parseInt(b.round, 10) - parseInt(a.round, 10));
+    }
+
+    // 회차 당첨번호를 보여주되, 입력 번호와 맞은 건 강조하고 나머지는 흐리게
+    function winningNumbersHtml(rec, r) {
+        if (rec.game === 'powerball') {
+            const balls = r.nums.map(n => `<span class="ball ${bandClass('powerball', n)} ${rec.main.includes(n) ? 'hit' : 'dim'}">${n}</span>`).join('');
+            return `<div class="reco-balls">${balls}<span class="pball-single ${rec.bonus === r.pb ? 'hit' : 'dim'}">${r.pb}</span></div>`;
+        }
+        if (rec.game === 'lotto645') {
+            const balls = r.nums.map(n => `<span class="ball ${bandClass('lotto645', n)} ${rec.main.includes(n) ? 'hit' : 'dim'}">${n}</span>`).join('');
+            return `<div class="reco-balls">${balls}<span class="hint">+</span><span class="ball ${bandClass('lotto645', r.bonus)} ${rec.main.includes(r.bonus) ? 'hit' : 'dim'}">${r.bonus}</span></div>`;
+        }
+        const mine = rec.main.join('');
+        let trailing = 0;
+        for (let i = 5; i >= 0 && mine[i] === r.number[i]; i--) trailing++;
+        const digits = r.number.split('').map((d, i) => `<span class="digit ${i >= 6 - trailing ? 'hit' : 'dim'}">${d}</span>`).join('');
+        return `<div class="reco-digits"><span class="group-badge ${rec.bonus === r.group ? 'hit' : 'dim'}">${r.group}조</span>${digits}</div>`;
+    }
+
+    function runCheck() {
+        const msg = document.getElementById('checkMsg');
+        const out = document.getElementById('checkResult');
+        const rec = readCheckInput();
+        out.innerHTML = '';
+        if (rec.error) { msg.textContent = rec.error; msg.className = 'msg err'; return; }
+        const total = (roundsData[rec.game] || []).length;
+        if (!total) { msg.textContent = `저장된 ${GAME_META[rec.game].label} 당첨결과가 없어요. 해당 페이지에서 회차를 먼저 추가해주세요.`; msg.className = 'msg err'; return; }
+        msg.textContent = '';
+        const hits = findAllMatches(rec);
+        if (!hits.length) {
+            out.innerHTML = `<div class="check-summary">저장된 ${total.toLocaleString()}개 회차 중 당첨된 회차가 없어요.</div>`;
+            return;
+        }
+        const byRank = {};
+        hits.forEach(h => { byRank[h.label] = (byRank[h.label] || 0) + 1; });
+        const summary = Object.entries(byRank).map(([label, c]) => `${label} ${c}회`).join(' · ');
+        const MAX_ROWS = 100;
+        const rows = hits.slice(0, MAX_ROWS).map(h => `
+            <div class="check-row">
+                <span class="round">${h.round}회</span>
+                ${h.r.date ? `<span class="hint">${h.r.date}</span>` : ''}
+                <span class="match-badge hit">${h.label}</span>
+                ${winningNumbersHtml(rec, h.r)}
+                ${h.prize ? `<span class="prize-amount">${h.prize.toLocaleString()}원</span>` : ''}
+            </div>`).join('');
+        out.innerHTML = `
+            <div class="check-summary">저장된 ${total.toLocaleString()}개 회차 중 ${hits.length.toLocaleString()}번 당첨 — ${summary}</div>
+            <div class="check-list">${rows}</div>
+            ${hits.length > MAX_ROWS ? `<div class="hint mt-1">등수가 높은 순으로 ${MAX_ROWS}개만 보여줘요.</div>` : ''}`;
+    }
+
+    document.getElementById('checkBtn').addEventListener('click', runCheck);
+    ['checkMain', 'checkBonus'].forEach(id => document.getElementById(id).addEventListener('keydown', e => {
+        if (e.key === 'Enter') runCheck();
+    }));
+
     // 번호 클릭 시 표 전체 + 통계 칩에서 같은 번호에 보더를 토글하는 표시 상태 (일반번호/보너스 별도, 각 최대 6개)
     const MAX_MARKS = 6;
     const markedMain = new Set();
@@ -700,6 +841,7 @@
         currentGame = game;
         document.querySelectorAll('#gameTab .nav-link').forEach(a => a.classList.toggle('active', a.dataset.gameTab === game));
         updateMethodHint();
+        updateCheckForm();
         renderFreqBoards();
     }
 
@@ -935,6 +1077,7 @@
             'beforeend', METHOD_META.map(m => `<option value="${m.id}">${m.short}</option>`).join('')
         );
         updateMethodHint();
+        updateCheckForm();
         await Promise.all([loadAllRounds(), loadRecommendations(), loadFavoritesData()]);
         renderTable();
     }
