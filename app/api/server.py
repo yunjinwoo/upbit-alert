@@ -385,6 +385,13 @@ def delete_quick_link_api(link_id):
         return jsonify({'status': 'error', 'message': '해당 링크를 찾을 수 없습니다.'}), 404
     return jsonify({'status': 'success', 'deleted': deleted})
 
+def _rounds_limit_arg():
+    """복권 당첨결과 조회 API의 ?limit= 값(1~5000). 없거나 잘못되면 None → 함수 기본값 사용"""
+    limit = request.args.get('limit', type=int)
+    if not limit or limit < 1:
+        return None
+    return min(limit, 5000)
+
 @app.route('/powerball')
 def powerball_view():
     """동행복권 파워볼 당첨결과 저장 + 즐겨찾기 번호 관리 페이지"""
@@ -392,8 +399,9 @@ def powerball_view():
 
 @app.route('/api/powerball/rounds', methods=['GET'])
 def get_powerball_rounds_api():
-    """저장된 파워볼 당첨결과 전체 조회 (회차 최신순)"""
-    data = get_powerball_rounds()
+    """저장된 파워볼 당첨결과 조회 (회차 최신순). ?limit=N으로 개수 조절(기본값은 db_manager 함수 기본값)"""
+    limit = _rounds_limit_arg()
+    data = get_powerball_rounds(limit) if limit else get_powerball_rounds()
     return jsonify({'status': 'success', 'count': len(data), 'data': data})
 
 @app.route('/api/powerball/rounds', methods=['POST'])
@@ -452,8 +460,9 @@ def lotto645_view():
 
 @app.route('/api/lotto645/rounds', methods=['GET'])
 def get_lotto645_rounds_api():
-    """저장된 로또6/45 당첨결과 전체 조회 (회차 최신순)"""
-    data = get_lotto645_rounds()
+    """저장된 로또6/45 당첨결과 조회 (회차 최신순). ?limit=N으로 개수 조절(기본값은 db_manager 함수 기본값)"""
+    limit = _rounds_limit_arg()
+    data = get_lotto645_rounds(limit) if limit else get_lotto645_rounds()
     return jsonify({'status': 'success', 'count': len(data), 'data': data})
 
 @app.route('/api/lotto645/rounds', methods=['POST'])
@@ -524,8 +533,9 @@ def pension720_view():
 
 @app.route('/api/pension720/rounds', methods=['GET'])
 def get_pension720_rounds_api():
-    """저장된 연금복권720+ 당첨결과 전체 조회 (회차 최신순)"""
-    data = get_pension720_rounds()
+    """저장된 연금복권720+ 당첨결과 조회 (회차 최신순). ?limit=N으로 개수 조절(기본값은 db_manager 함수 기본값)"""
+    limit = _rounds_limit_arg()
+    data = get_pension720_rounds(limit) if limit else get_pension720_rounds()
     return jsonify({'status': 'success', 'count': len(data), 'data': data})
 
 @app.route('/api/pension720/rounds', methods=['POST'])
