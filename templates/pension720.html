@@ -41,6 +41,10 @@
         .freq-chip .cnt { background: #dfe3f5; color: #3454c9; font-weight: 800; font-size: 0.7rem; padding: 1px 7px; border-radius: 999px; }
         .freq-chip.group { background: #dff5ea; color: #0a8f5c; }
         .freq-chip.group .cnt { background: #c5ecd9; color: #0a8f5c; }
+        .freq-chip { cursor: pointer; border: 2px solid transparent; }
+        .freq-chip.marked { border-color: #8b5cf6; }
+        .rcard .group-badge, .rcard .digit.last { cursor: pointer; }
+        .group-badge.marked, .digit.marked { box-shadow: 0 0 0 2px #8b5cf6 inset; }
 
         .empty { color: #a0a4b8; font-size: 0.85rem; padding: 26px 4px; text-align: center; border: 1px dashed #dde1ec; border-radius: 12px; margin-top: 16px; }
 
@@ -107,7 +111,12 @@
         </div>
 
         <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
-            <span class="hint" id="roundCount"></span>
+            <span class="hint">조나 번호 끝자리를 클릭하면 전체 카드에서 같은 조·끝자리에 보라색 테두리가 표시돼요 (각 최대 6개) · 출현 빈도 칩과 연동돼요</span>
+            <span class="d-flex align-items-center gap-2">
+                <span class="hint" id="roundCount"></span>
+                <span class="hint" id="markCount">조 0/6 · 끝자리 0/6</span>
+                <button class="btn btn-outline-secondary btn-sm" id="clearMarksBtn">표시 지우기</button>
+            </span>
         </div>
         <div id="board" class="grid"></div>
     </div>
@@ -149,13 +158,17 @@
     }
 
     function roundCard(r) {
-        const digits = r.number.split('').map(d => `<span class="digit">${d}</span>`).join('');
+        // 출현 빈도가 "끝자리" 기준이라 표시(마크)도 마지막 자리에만 걸림
+        const last = r.number.length - 1;
+        const digits = r.number.split('').map((d, i) => i === last
+            ? `<span class="digit last" data-digit="${d}">${d}</span>`
+            : `<span class="digit">${d}</span>`).join('');
         return `
             <div class="rcard">
                 <button class="del" data-del-round="${r.id}" title="삭제">✕</button>
                 <div class="rhead">
                     <span class="round">제 ${r.round} 회</span>
-                    <span class="group-badge">${r.group}조</span>
+                    <span class="group-badge" data-group="${r.group}">${r.group}조</span>
                 </div>
                 <div class="numboard">${digits}</div>
             </div>`;
@@ -175,17 +188,55 @@
             .sort((a, b) => b[1] - a[1] || a[0] - b[0]);
     }
 
-    function renderFreq(containerId, freqList, chipClass) {
+    // 조/끝자리 클릭 시 전체 카드 + 출현 빈도 칩에서 같은 값에 보더를 토글하는 표시 상태 (조/끝자리 별도, 각 최대 6개)
+    const MAX_MARKS = 6;
+    const markedGroups = new Set();
+    const markedDigits = new Set();
+
+    function toggleMark(set, n) {
+        if (set.has(n)) { set.delete(n); return; }
+        if (set.size >= MAX_MARKS) return;  // 최대 개수 도달 — 새로 추가하지 않고 무시
+        set.add(n);
+    }
+
+    function renderFreq(containerId, freqList, chipClass, markedSet, dataKey) {
         const el = document.getElementById(containerId);
         el.innerHTML = freqList.length
-            ? freqList.map(([n, c]) => `<span class="freq-chip${chipClass ? ' ' + chipClass : ''}">${n} <span class="cnt">${c}회</span></span>`).join('')
+            ? freqList.map(([n, c]) => `<span class="freq-chip${chipClass ? ' ' + chipClass : ''}${markedSet.has(n) ? ' marked' : ''}" data-${dataKey}="${n}">${chipClass === 'group' ? n + '조' : n} <span class="cnt">${c}회</span></span>`).join('')
             : '<span class="hint">아직 데이터가 없어요</span>';
     }
 
     function renderFreqBoards() {
-        renderFreq('freqGroupBoard', computeFreq(lastRounds, r => r.group, 1, 5), 'group');
-        renderFreq('freqDigitBoard', computeFreq(lastRounds, r => parseInt(r.number.slice(-1), 10), 0, 9), '');
+        renderFreq('freqGroupBoard', computeFreq(lastRounds, r => r.group, 1, 5), 'group', markedGroups, 'group');
+        renderFreq('freqDigitBoard', computeFreq(lastRounds, r => parseInt(r.number.slice(-1), 10), 0, 9), '', markedDigits, 'digit');
     }
+
+    function applyMarks() {
+        document.querySelectorAll('#board .group-badge').forEach(el => {
+            el.classList.toggle('marked', markedGroups.has(parseInt(el.dataset.group, 10)));
+        });
+        document.querySelectorAll('#board .digit.last').forEach(el => {
+            el.classList.toggle('marked', markedDigits.has(parseInt(el.dataset.digit, 10)));
+        });
+        renderFreqBoards();
+        document.getElementById('markCount').textContent = `조 ${markedGroups.size}/${MAX_MARKS} · 끝자리 ${markedDigits.size}/${MAX_MARKS}`;
+    }
+
+    // 카드/칩이 다시 그려져도 클릭 위임은 부모 컨테이너에 한 번만 걸어두면 계속 동작함
+    ['board', 'freqGroupBoard', 'freqDigitBoard'].forEach(id => {
+        document.getElementById(id).addEventListener('click', (e) => {
+            const groupEl = e.target.closest('[data-group]');
+            if (groupEl) { toggleMark(markedGroups, parseInt(groupEl.dataset.group, 10)); applyMarks(); return; }
+            const digitEl = e.target.closest('[data-digit]');
+            if (digitEl) { toggleMark(markedDigits, parseInt(digitEl.dataset.digit, 10)); applyMarks(); }
+        });
+    });
+
+    document.getElementById('clearMarksBtn').addEventListener('click', () => {
+        markedGroups.clear();
+        markedDigits.clear();
+        applyMarks();
+    });
 
     async function loadRounds() {
         const res = await fetch('api/pension720/rounds');
@@ -197,7 +248,7 @@
             ? rounds.map(roundCard).join('')
             : '<div class="empty" style="grid-column:1/-1">아직 등록된 회차가 없어요. 위에 붙여넣고 "회차 추가"를 눌러보세요.</div>';
         document.getElementById('roundCount').textContent = `총 ${rounds.length}개 회차 저장됨`;
-        renderFreqBoards();
+        applyMarks();
 
         board.querySelectorAll('[data-del-round]').forEach(btn => {
             btn.addEventListener('click', async (e) => {
