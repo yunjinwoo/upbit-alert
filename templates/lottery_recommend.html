@@ -71,6 +71,12 @@
         .ball.hit, .pball-single.hit, .digit.hit, .group-badge.hit { box-shadow: 0 0 0 3px #e0457b; }
         .ball.dim, .pball-single.dim, .digit.dim, .group-badge.dim { opacity: .35; }
 
+        .fav-list { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+        .fav-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: #fff8e1; border: 1px solid #f2d9a0; font-size: 0.76rem; cursor: pointer; }
+        .fav-chip:hover { border-color: #b5790a; }
+        .fav-chip .fav-name { font-weight: 700; color: #7a5c00; }
+        .fav-chip .fav-nums { font-weight: 700; color: #1a1a2e; letter-spacing: .02em; }
+
         .msg { font-size: 0.78rem; font-weight: 600; margin-top: 6px; white-space: pre-line; }
         .msg.ok { color: #1f8a5f; }
         .msg.err { color: #c14a4a; }
@@ -110,8 +116,10 @@
             <input type="text" id="checkMain" class="form-control form-control-sm" style="max-width:260px" autocomplete="off">
             <input type="text" id="checkBonus" class="form-control form-control-sm" style="max-width:110px" placeholder="파워볼 (0~9)" autocomplete="off">
             <button type="button" class="btn btn-primary btn-sm" id="checkBtn">당첨 확인</button>
+            <button type="button" class="btn btn-warning btn-sm" id="checkFavBtn" title="입력한 번호를 이 복권 페이지의 즐겨찾기 번호에 저장해요">⭐ 즐겨찾기 저장</button>
         </div>
         <div class="msg" id="checkMsg"></div>
+        <div class="fav-list mt-2" id="favList"></div>
         <div id="checkResult"></div>
     </div>
 
@@ -830,6 +838,90 @@
         renderDrawSearch();
     });
 
+    // ──────────────────────────────────────────────
+    // 즐겨찾기 번호 — 각 복권 페이지의 "즐겨찾기 번호" 탭과 같은 저장소(api/<game>/favorites)를 그대로 씀
+    // ──────────────────────────────────────────────
+    function favNumbersText(game, f) {
+        if (game === 'powerball') return `${f.nums.join(' ')} + ${f.pb}`;
+        if (game === 'lotto645') return f.nums.join(' ');
+        return `${f.group}조 ${f.number}`;
+    }
+
+    // 저장된 당첨결과 전체 대비 가장 좋은 결과 (서버가 계산해서 내려줌)
+    function favBestText(game, f) {
+        if (game === 'powerball') {
+            if (f.best_hit_count === null || f.best_hit_count === undefined) return '';
+            return `최고 ${f.best_hit_count}개${f.best_pb_hit ? '+파워볼' : ''} 일치 (${f.best_round}회)`;
+        }
+        return f.best_grade_label ? `최고 ${f.best_grade_label} (${f.best_round}회)` : '당첨 기록 없음';
+    }
+
+    function renderFavList() {
+        const el = document.getElementById('favList');
+        const favs = favoritesData[currentGame] || [];
+        if (!favs.length) {
+            el.innerHTML = `<span class="hint">⭐ ${GAME_META[currentGame].label} 즐겨찾기 번호가 아직 없어요. 번호를 넣고 "즐겨찾기 저장"을 누르면 ${GAME_META[currentGame].label} 페이지의 즐겨찾기 번호에도 함께 보여요.</span>`;
+            return;
+        }
+        el.innerHTML = `<span class="hint">⭐ 즐겨찾기 번호 (누르면 바로 당첨 확인):</span>` + favs.map(f => `
+            <span class="fav-chip" data-fav-pick="${f.id}" title="${favBestText(currentGame, f)}">
+                <span class="fav-name">${escapeHtml(f.name || '')}</span>
+                <span class="fav-nums">${favNumbersText(currentGame, f)}</span>
+            </span>`).join('');
+    }
+
+    function escapeHtml(text) {
+        return String(text).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    document.getElementById('favList').addEventListener('click', (e) => {
+        const chip = e.target.closest('[data-fav-pick]');
+        if (!chip) return;
+        const f = (favoritesData[currentGame] || []).find(x => String(x.id) === chip.dataset.favPick);
+        if (!f) return;
+        if (currentGame === 'pension720') {
+            document.getElementById('checkGroup').value = String(f.group);
+            document.getElementById('checkMain').value = f.number;
+        } else {
+            document.getElementById('checkMain').value = f.nums.join(' ');
+            if (currentGame === 'powerball') document.getElementById('checkBonus').value = String(f.pb);
+        }
+        runCheck();
+    });
+
+    document.getElementById('checkFavBtn').addEventListener('click', async (e) => {
+        const btn = e.currentTarget;
+        const msg = document.getElementById('checkMsg');
+        const rec = readCheckInput();
+        const fail = (text) => { msg.textContent = text; msg.className = 'msg err'; };
+        if (rec.error) return fail(rec.error);
+        if (rec.partial) {
+            return fail(rec.game === 'powerball' ? '즐겨찾기는 일반볼 5개와 파워볼을 모두 넣어야 저장돼요.'
+                : rec.game === 'lotto645' ? '즐겨찾기는 번호 6개를 모두 넣어야 저장돼요.' : '즐겨찾기는 조와 6자리 번호를 모두 넣어야 저장돼요.');
+        }
+        if (isFavorited(rec)) { msg.textContent = '이미 즐겨찾기에 있는 번호예요.'; msg.className = 'msg ok'; return; }
+        const payload = rec.game === 'powerball' ? { name: '', nums: rec.main, pb: rec.bonus }
+            : rec.game === 'lotto645' ? { name: '', nums: rec.main }
+            : { name: '', group: rec.bonus, number: rec.main.join('') };
+        btn.disabled = true;
+        try {
+            const res = await fetch(FAVORITE_ENDPOINT[rec.game], {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+            });
+            const json = await res.json();
+            if (json.status !== 'success') return fail(json.message || '저장하지 못했어요.');
+            await loadFavoritesData();
+            renderFavList();
+            renderTable(); // 추천 표에서 같은 조합이 ✅로 바뀌도록
+            msg.textContent = `${GAME_META[rec.game].label} 즐겨찾기 번호에 저장했어요.`;
+            msg.className = 'msg ok';
+        } catch (err) {
+            fail('저장하지 못했어요. 잠시 후 다시 시도해주세요.');
+        } finally {
+            btn.disabled = false;
+        }
+    });
+
     document.getElementById('checkBtn').addEventListener('click', () => runCheck());
     ['checkMain', 'checkBonus'].forEach(id => document.getElementById(id).addEventListener('keydown', e => {
         if (e.key === 'Enter') runCheck();
@@ -1026,6 +1118,7 @@
         updateMethodHint();
         updateCheckForm();
         updateDrawForm();
+        renderFavList();
         renderFreqBoards();
     }
 
@@ -1198,6 +1291,7 @@
                 if (json.status === 'success') {
                     // 성공하면 즐겨찾기 목록을 다시 불러와서 이 행(과 같은 조합인 다른 행들)을 전부 ✅로 고정 표시
                     await loadFavoritesData();
+                    renderFavList();
                     renderTable();
                 } else {
                     favBtn.textContent = '⚠️';
@@ -1268,6 +1362,7 @@
         updateCheckForm();
         await Promise.all([loadAllRounds(), loadRecommendations(), loadFavoritesData()]);
         updateDrawForm();
+        renderFavList();
         renderTable();
     }
     init();
