@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, render_template, request, session, redirect, url_for
+from flask import Flask, Response, jsonify, render_template, request, session, redirect, url_for
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -68,6 +68,7 @@ from app.core.powerball import parse_powerball_block
 from app.core.lotto645 import parse_lotto645_block, parse_lotto645_excel
 from app.core.pension720 import parse_pension720_block, parse_pension720_excel
 from app.core.stock_digest import load_stock_digest
+from app.core.ai_report import generate_ai_report
 from app.core.stock_monitor import (
     fetch_market_cap_ranking, fetch_investor_trend, fetch_sector_index_daily, fetch_stock_investor_daily,
     fetch_ranking_preview, fetch_sector_stocks, fetch_multi_stock_price,
@@ -3067,6 +3068,21 @@ def stock_digest_api():
         return jsonify({"status": "success", **load_stock_digest()})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/ai-report.md', methods=['GET'])
+def ai_report_api():
+    """AI 분석용 리포트(마크다운) 내려받기 — 최근 N거래일 수집 데이터를 종목 단위로 합친 파일 (새 API 호출 없음)"""
+    try:
+        days = int(request.args.get('days') or 5)
+    except ValueError:
+        days = 5
+    try:
+        text = generate_ai_report(days)
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+    filename = f"stock-report-{_dt.now().strftime('%Y%m%d')}-{days}d.md"
+    return Response(text, mimetype='text/markdown; charset=utf-8',
+                    headers={'Content-Disposition': f'attachment; filename="{filename}"'})
 
 @app.route('/signal-score-history')
 def signal_score_history_view():
