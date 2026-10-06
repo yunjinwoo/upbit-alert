@@ -121,6 +121,10 @@
         <div class="check-form">
             <input type="text" id="drawRound" class="form-control form-control-sm" style="max-width:220px" placeholder="회차 (예: 1190 또는 1180-1190)" autocomplete="off">
             <input type="text" id="drawNums" class="form-control form-control-sm" style="max-width:220px" autocomplete="off">
+            <input type="text" id="drawBonus" class="form-control form-control-sm" style="max-width:140px" autocomplete="off">
+            <select id="drawGroup" class="form-select form-select-sm" style="max-width:100px; display:none">
+                <option value="">조 전체</option><option value="1">1조</option><option value="2">2조</option><option value="3">3조</option><option value="4">4조</option><option value="5">5조</option>
+            </select>
             <button type="button" class="btn btn-outline-secondary btn-sm" id="drawResetBtn">초기화</button>
         </div>
         <div id="drawResult"></div>
@@ -721,9 +725,9 @@
     // 당첨 회차 검색 — 저장된 실제 당첨결과를 회차(하나 또는 범위)와 번호로 찾아봄. 입력이 없으면 최신 회차부터
     // ──────────────────────────────────────────────
     const DRAW_META = {
-        powerball: { hint: '회차나 번호로 저장된 파워볼 당첨결과를 찾아요. 번호를 여러 개 넣으면 모두 나온 회차만 보여주고, 일반볼·파워볼 구분 없이 찾아요.', numsPlaceholder: '번호 (예: 7 12)' },
-        lotto645: { hint: '회차나 번호로 저장된 로또6/45 당첨결과를 찾아요. 번호를 여러 개 넣으면 모두 나온 회차만 보여주고, 보너스 번호도 포함해서 찾아요.', numsPlaceholder: '번호 (예: 7 12)' },
-        pension720: { hint: '회차나 번호 뒷자리로 저장된 연금복권720+ 당첨결과를 찾아요.', numsPlaceholder: '번호 뒷자리 (예: 456)' },
+        powerball: { hint: '회차, 일반볼, 파워볼로 저장된 파워볼 당첨결과를 찾아요. 일반볼을 여러 개 넣으면 모두 나온 회차만 보여줘요.', numsPlaceholder: '일반볼 (예: 7 12)', bonusPlaceholder: '파워볼 (0~9)' },
+        lotto645: { hint: '회차, 번호, 보너스 번호로 저장된 로또6/45 당첨결과를 찾아요. 번호를 여러 개 넣으면 당첨번호 6개에 모두 나온 회차만 보여줘요.', numsPlaceholder: '번호 (예: 7 12)', bonusPlaceholder: '보너스 (1~45)' },
+        pension720: { hint: '회차, 번호 뒷자리, 조로 저장된 연금복권720+ 당첨결과를 찾아요.', numsPlaceholder: '번호 뒷자리 (예: 456)', bonusPlaceholder: '' },
     };
     const DRAW_MAX_ROWS = 50;
 
@@ -736,6 +740,22 @@
         return [lo, hi];
     }
 
+    // 검색 조건에 맞은 부분만 강조해서 회차 당첨번호를 그림 (조건이 없으면 강조 없이)
+    function drawNumbersHtml(game, r, q) {
+        const cls = hit => q.plain ? '' : (hit ? 'hit' : 'dim');
+        if (game === 'powerball') {
+            const balls = r.nums.map(n => `<span class="ball ${bandClass('powerball', n)} ${cls(q.nums.includes(n))}">${n}</span>`).join('');
+            return `<div class="reco-balls">${balls}<span class="pball-single ${cls(q.bonus === r.pb)}">${r.pb}</span></div>`;
+        }
+        if (game === 'lotto645') {
+            const balls = r.nums.map(n => `<span class="ball ${bandClass('lotto645', n)} ${cls(q.nums.includes(n))}">${n}</span>`).join('');
+            return `<div class="reco-balls">${balls}<span class="hint">+</span><span class="ball ${bandClass('lotto645', r.bonus)} ${cls(q.bonus === r.bonus)}">${r.bonus}</span></div>`;
+        }
+        const trailing = q.digits ? trailingMatch(q.digits, r.number) : 0;
+        const digits = r.number.split('').map((d, i) => `<span class="digit ${cls(i >= r.number.length - trailing)}">${d}</span>`).join('');
+        return `<div class="reco-digits"><span class="group-badge ${cls(q.group === r.group)}">${r.group}조</span>${digits}</div>`;
+    }
+
     function renderDrawSearch() {
         const game = currentGame;
         const rounds = roundsData[game] || [];
@@ -746,32 +766,39 @@
         }
         const range = parseRoundRange(document.getElementById('drawRound').value);
         const numsText = document.getElementById('drawNums').value;
-        const nums = game === 'pension720' ? numsText.replace(/\D/g, '').split('').filter(Boolean).map(Number) : parseNums(numsText);
-        const digits = nums.join('');
+        const q = { nums: [], digits: '', bonus: null, group: null };
+        if (game === 'pension720') {
+            q.digits = numsText.replace(/\D/g, '');
+            const g = document.getElementById('drawGroup').value;
+            q.group = g ? parseInt(g, 10) : null;
+        } else {
+            q.nums = parseNums(numsText);
+            const b = parseNums(document.getElementById('drawBonus').value);
+            q.bonus = b.length ? b[0] : null; // 파워볼 / 로또 보너스 — 한 개만 사용
+        }
+        q.plain = !q.nums.length && !q.digits && q.bonus === null && q.group === null;
 
         const hits = rounds.filter(r => {
             const no = parseInt(r.round, 10);
             if (range && (no < range[0] || no > range[1])) return false;
-            if (!nums.length) return true;
-            if (game === 'pension720') return trailingMatch(digits, r.number) === digits.length;
-            const values = game === 'powerball' ? [...r.nums, r.pb] : [...r.nums, r.bonus];
-            return nums.every(n => values.includes(n));
+            if (game === 'pension720') {
+                if (q.digits && trailingMatch(q.digits, r.number) !== q.digits.length) return false;
+                return q.group === null || q.group === r.group;
+            }
+            if (!q.nums.every(n => r.nums.includes(n))) return false;
+            const rBonus = game === 'powerball' ? r.pb : r.bonus;
+            return q.bonus === null || q.bonus === rBonus;
         }).sort((a, b) => parseInt(b.round, 10) - parseInt(a.round, 10));
 
-        // 번호를 넣었으면 그 번호를 강조해서 보여줌 (파워볼은 파워볼 자리도 같은 숫자면 강조)
-        const rec = { game, main: nums, bonus: game === 'powerball' && nums.length ? undefined : null, partial: true, plain: !nums.length };
-        const rowHtmlOf = r => {
-            const view = game === 'powerball' ? { ...rec, bonus: nums.includes(r.pb) ? r.pb : null } : rec;
-            return `
+        const rowHtmlOf = r => `
             <div class="check-row">
                 <span class="round">${r.round}회</span>
                 ${r.date ? `<span class="hint">${r.date}</span>` : ''}
-                ${winningNumbersHtml(view, r)}
+                ${drawNumbersHtml(game, r, q)}
                 ${r.prize ? `<span class="hint">1등 ${r.winners.toLocaleString()}명 · ${r.prize.toLocaleString()}원</span>` : ''}
             </div>`;
-        };
 
-        const filtered = range || nums.length;
+        const filtered = range || !q.plain;
         const summary = filtered
             ? `저장된 ${rounds.length.toLocaleString()}개 회차 중 ${hits.length.toLocaleString()}개 회차가 검색됐어요.`
             : `저장된 ${rounds.length.toLocaleString()}개 회차 · 최신 회차부터 보여줘요.`;
@@ -785,15 +812,21 @@
         document.getElementById('drawGameLabel').textContent = GAME_META[currentGame].label;
         document.getElementById('drawHint').textContent = DRAW_META[currentGame].hint;
         document.getElementById('drawNums').placeholder = DRAW_META[currentGame].numsPlaceholder;
-        document.getElementById('drawRound').value = '';
-        document.getElementById('drawNums').value = '';
+        document.getElementById('drawBonus').placeholder = DRAW_META[currentGame].bonusPlaceholder;
+        document.getElementById('drawBonus').style.display = currentGame === 'pension720' ? 'none' : '';
+        document.getElementById('drawGroup').style.display = currentGame === 'pension720' ? '' : 'none';
+        clearDrawInputs();
         renderDrawSearch();
     }
 
-    ['drawRound', 'drawNums'].forEach(id => document.getElementById(id).addEventListener('input', renderDrawSearch));
+    function clearDrawInputs() {
+        ['drawRound', 'drawNums', 'drawBonus', 'drawGroup'].forEach(id => { document.getElementById(id).value = ''; });
+    }
+
+    ['drawRound', 'drawNums', 'drawBonus'].forEach(id => document.getElementById(id).addEventListener('input', renderDrawSearch));
+    document.getElementById('drawGroup').addEventListener('change', renderDrawSearch);
     document.getElementById('drawResetBtn').addEventListener('click', () => {
-        document.getElementById('drawRound').value = '';
-        document.getElementById('drawNums').value = '';
+        clearDrawInputs();
         renderDrawSearch();
     });
 
