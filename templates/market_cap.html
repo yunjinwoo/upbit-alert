@@ -406,7 +406,7 @@
                         <td data-order="${item.rank}"><span class="badge rank-badge ${item.fid_input_iscd === '1001' ? 'bg-success' : 'bg-primary'}">${item.rank}위</span></td>
                         <td class="text-center">${badge}</td>
                         <td>
-                            <a href="https://finance.naver.com/item/main.nhn?code=${item.code}" target="_blank" class="ticker-link">
+                            <a href="https://stock.naver.com/domestic/stock/${item.code}/price" target="_blank" class="ticker-link">
                                 ${item.name}${isNew ? '<span class="badge-new ms-1">NEW</span>' : ''} <small class="text-muted">(${item.code})</small>
                             </a>
                             <button class="memo-icon-btn" onclick='openStockMemo(${JSON.stringify(item.code)}, ${JSON.stringify(item.name || "")})' title="메모">📝</button>

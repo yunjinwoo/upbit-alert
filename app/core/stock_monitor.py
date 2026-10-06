@@ -878,7 +878,7 @@ def send_signal_score_alerts(scores: list):
             f"모멘텀 {s['momentum_score']} | 수급 {s['supply_demand_score']} | "
             f"랭킹안정성 {s['rank_stability_score']} | 시장환경 {s['market_environment_score']} | "
             f"리스크 {s['risk_penalty_score']}\n"
-            f"https://finance.naver.com/item/main.nhn?code={s['code']}"
+            f"https://stock.naver.com/domestic/stock/{s['code']}/price"
         )
         send_slack_msg(text)
         logger.info(f"[Signal Score] A등급 알림 발송: {s['name']}({s['code']}) {s['total']}점")
@@ -1226,7 +1226,7 @@ def run_stock_monitor():
                         change_rate=change_rate, volume=stock.acml_vol,
                         volume_power="0", market_cap="-",
                         reason=f"최근 {avg_info['days_used']}일 평균 거래량 대비 {vol_ratio:.2f}배",
-                        url=f"https://finance.naver.com/item/main.nhn?code={code}"
+                        url=f"https://stock.naver.com/domestic/stock/{code}/price"
                         )
                     last_notified[code] = now
             time.sleep(120) # 30 * 4

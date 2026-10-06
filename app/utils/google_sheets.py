@@ -192,7 +192,7 @@ def save_signal_score_to_sheet(scores: list, worksheet_title: str = "SignalScore
     for s in scores:
         supply = s.get("detail", {}).get("supply_demand", {})
         code = s.get("code", "")
-        code_link = f'=HYPERLINK("https://finance.naver.com/item/main.nhn?code={code}", "{code}")' if code else ""
+        code_link = f'=HYPERLINK("https://stock.naver.com/domestic/stock/{code}/price", "{code}")' if code else ""
         hts_bonus = s.get("hts_top_view_bonus_score", 0)
         top_interest_bonus = s.get("top_interest_bonus_score", 0)
         total = s.get("total", 0)
@@ -316,7 +316,7 @@ def save_investor_ranking_to_sheet(days: int = 10, top_n: int = 40, worksheet_ti
             direction = "혼조"
 
         code = r.get("code", "")
-        code_link = f'=HYPERLINK("https://finance.naver.com/item/main.nhn?code={code}", "{code}")' if code else ""
+        code_link = f'=HYPERLINK("https://stock.naver.com/domestic/stock/{code}/price", "{code}")' if code else ""
         rows.append([
             period_str, code_link, r.get("name", ""),
             frgn, orgn, direction,

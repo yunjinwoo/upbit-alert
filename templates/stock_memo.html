@@ -155,7 +155,7 @@
                             <div class="memo-card">
                                 <div class="memo-card-head">
                                     <span>
-                                        <a href="https://finance.naver.com/item/main.naver?code=${r.code}" target="_blank" class="memo-card-name">${escHtml(r.name)}</a>
+                                        <a href="https://stock.naver.com/domestic/stock/${r.code}/price" target="_blank" class="memo-card-name">${escHtml(r.name)}</a>
                                         <span class="memo-card-code">(${r.code})</span>
                                         <button class="memo-chart-btn" onclick='selectChart(${JSON.stringify(r.code)}, ${JSON.stringify(r.name || "")})' title="차트 보기">📈</button>
                                     </span>
