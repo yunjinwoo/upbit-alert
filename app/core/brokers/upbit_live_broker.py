@@ -20,7 +20,7 @@ import pyupbit
 from app.config import Config
 from app.utils.logger import get_logger
 from app.utils.db_manager import get_trade_engine_settings
-from app.core.brokers.base import BrokerClient, OrderResult, Position
+from app.core.brokers.base import BalanceUnavailableError, BrokerClient, OrderResult, Position
 
 logger = get_logger()
 
@@ -76,13 +76,29 @@ class UpbitLiveBroker(BrokerClient):
             logger.error(f"[{ticker}] 시세 조회 최종 실패: {last_error}")
         return None
 
+    def _fetch_balances(self) -> List[dict]:
+        """계좌 전체 잔고 원본 — 실패하면 BalanceUnavailableError. 일시적 오류(429 등)가 잦아 한 번
+        짧게 재시도한다. 응답이 목록이 아니면(오류 객체 등) 실패로 본다."""
+        last_error = None
+        for attempt in range(2):
+            try:
+                balances = self._client.get_balances()
+                if isinstance(balances, list):
+                    return balances
+                last_error = f"예상 밖 응답: {balances!r}"[:300]
+            except Exception as e:
+                last_error = e
+            logger.error(f"업비트 실계좌 잔고 조회 실패 (attempt={attempt + 1}): {last_error}")
+            if attempt == 0:
+                time.sleep(0.5)
+        raise BalanceUnavailableError(f"업비트 잔고 조회 실패 — 이번엔 보유 현황을 확인할 수 없습니다: {last_error}")
+
     def get_raw_balances(self) -> List[dict]:
-        """계좌 전체 잔고 원본(필터 없음). 실패 시 빈 리스트."""
+        """계좌 전체 잔고 원본(필터 없음). 실패 시 빈 리스트 — 현금 표시·매도 수량 보정처럼 0/없음으로
+        취급해도 안전한 곳만 쓴다. 보유 종목 판단은 get_positions()(실패 시 예외)를 쓸 것."""
         try:
-            balances = self._client.get_balances()
-            return balances or []
-        except Exception as e:
-            logger.error(f"업비트 실계좌 잔고 조회 실패: {e}")
+            return self._fetch_balances()
+        except BalanceUnavailableError:
             return []
 
     def get_selected_balances(self) -> List[dict]:
@@ -105,8 +121,9 @@ class UpbitLiveBroker(BrokerClient):
         호출부(app/core/auto_trader.py의 _reconcile_live_positions)가 승인 이력으로 범위를
         좁혀서 결정한다 — 그래야 봇과 무관하게 보유 중인 다른 코인들이 실거래 스위치를 켜는
         순간 갑자기 자동 손절/익절 대상이 되는 일을 막을 수 있다."""
+        # 조회 실패를 빈 목록으로 돌려주면 "전부 팔렸다"로 오해된다 — BalanceUnavailableError를 그대로 던진다.
         positions = []
-        for b in self.get_raw_balances():
+        for b in self._fetch_balances():
             currency = b.get("currency")
             if currency == "KRW":
                 continue

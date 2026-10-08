@@ -17,7 +17,7 @@ import pyupbit
 from app.config import Config
 from app.utils.logger import get_logger
 from app.utils.slack import send_slack_msg
-from app.core.brokers.base import TradeCycleBusyError
+from app.core.brokers.base import BalanceUnavailableError, TradeCycleBusyError
 from app.core.brokers.paper_broker import PaperBroker
 from app.core.brokers.upbit_live_broker import UpbitLiveBroker
 from app.core.brokers.upbit_account import get_real_krw_balance
@@ -267,7 +267,12 @@ def _reconcile_live_positions(broker) -> None:
     트레일링 손절 추적값(peak_price/below_stop_streak)과 물타기 상태(dca_enabled/dca_used/dca_count)를
     실거래에도 그대로 재사용할 수 있다 — qty/avg_buy_price만 매 사이클 실제 잔고로 덮어쓰고
     (upsert_paper_position은 peak_price를 명시하지 않으면 기존 값을 보존한다), 나머지 트래킹 필드는
-    건드리지 않는다. 전량 매도돼(수동 매도 포함) 더 이상 안 보이는 종목은 추적 행도 같이 지운다."""
+    건드리지 않는다. 전량 매도돼(수동 매도 포함) 더 이상 안 보이는 종목은 추적 행도 같이 지운다.
+
+    잔고 조회에 실패하면 get_positions()가 BalanceUnavailableError를 던지고, 여기서 잡지 않고 사이클을
+    통째로 건너뛴다. 예전엔 실패 시 빈 목록을 받아 "전부 팔렸다"로 보고 추적 행을 지웠는데, 그러면
+    승인이 꺼진 보유 종목(강제매수·수렴매수로 산 것, 승인을 나중에 끈 것)이 관리 범위에서 영영 빠져
+    실거래 표에서 사라지고 손절/익절도 멈췄다(승인된 종목도 고점·물타기 기록이 초기화됐다)."""
     real_positions = {p.ticker: p for p in broker.get_positions() if p.qty > 0}
     approved_tickers = get_approved_candidate_tickers(broker.broker_name, broker.mode)
     tracked_tickers = {row['ticker'] for row in get_paper_positions(broker.broker_name, broker.mode)}
@@ -298,7 +303,11 @@ def _track_new_live_position(broker, ticker: str, label: str) -> None:
     한 번만 조회해서 못 찾으면 포기하지 않고 짧게 재시도한다."""
     matched = None
     for attempt in range(5):  # 최대 5회(1.5초 간격) = 최초 조회 포함 총 ~6초까지 재시도
-        for pos in broker.get_positions():
+        try:
+            positions_now = broker.get_positions()
+        except BalanceUnavailableError:
+            positions_now = []  # 잔고 조회 실패도 "아직 반영 안 됨"과 똑같이 재시도
+        for pos in positions_now:
             if pos.ticker == ticker:
                 matched = pos
                 break
@@ -1061,17 +1070,26 @@ def force_sell(ticker: str, broker=None) -> dict:
     # 제외한 일부만 매도했을 수도 있음) force_buy와 동일하게 짧게 재시도한다.
     if result.success and broker.mode == 'live':
         matched = None
+        balance_known = False
         for attempt in range(5):  # 최대 5회(0,1,2,3초 간격) = 최초 조회 포함 총 ~6초까지 재시도
-            positions_now = broker.get_positions()
+            try:
+                positions_now = broker.get_positions()
+            except BalanceUnavailableError:
+                if attempt < 4:
+                    time.sleep(1.5)
+                continue
+            balance_known = True
             matched = next((p for p in positions_now if p.ticker == ticker), None)
             if matched is None or matched.qty < sell_qty - 1e-9:
                 break  # 잔고에 매도가 반영됨(전량 매도돼 사라졌거나 수량이 줄었음)
             if attempt < 4:
                 time.sleep(1.5)
-        if matched and matched.qty > 1e-9:
-            upsert_paper_position(broker.broker_name, broker.mode, ticker, matched.qty, matched.avg_buy_price)
-        else:
-            delete_paper_position(broker.broker_name, broker.mode, ticker)
+        # 잔고를 끝내 못 읽었으면 추적 행은 그대로 둔다 — 다음 사이클의 _reconcile_live_positions()가 맞춘다.
+        if balance_known:
+            if matched and matched.qty > 1e-9:
+                upsert_paper_position(broker.broker_name, broker.mode, ticker, matched.qty, matched.avg_buy_price)
+            else:
+                delete_paper_position(broker.broker_name, broker.mode, ticker)
 
     final_decision = 'SELL' if result.success else 'SKIP'
     reason = result.message if result.success else f"강제매도(수동) 실패: {result.message}"
