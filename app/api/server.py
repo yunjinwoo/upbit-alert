@@ -204,6 +204,10 @@ def require_login():
     # 매매일지 연동(/api/journal/*)은 같은 서버의 stock-history가 호출한다 — 세션 로그인 대신 루프백으로 인증
     if request.path.startswith('/api/journal/'):
         return _check_journal_request()
+    # 현재가 조회(/api/stock-price)는 같은 서버의 매매일지(stock-history)가 직접 부른다 — 민감한 정보가 아니라
+    # 토큰 없이 루프백 직접 호출이면 통과. nginx를 거친 외부 요청은 아래에서 평소처럼 로그인을 확인한다.
+    if request.path == '/api/stock-price' and _is_loopback_direct():
+        return
     if not _login_state['lock_enabled']:
         return  # 잠금 꺼져있으면 전체 오픈
     if request.endpoint in _PUBLIC_ENDPOINTS:
@@ -215,12 +219,16 @@ def require_login():
 
 _LOOPBACK_ADDRS = {'127.0.0.1', '::1'}
 
+def _is_loopback_direct():
+    """같은 서버에서 5000 포트로 직접 부른 요청인지 — 루프백 주소이고 프록시 헤더(X-Forwarded-For)가 없어야 한다."""
+    return request.remote_addr in _LOOPBACK_ADDRS and not request.headers.get('X-Forwarded-For')
+
 def _check_journal_request():
     """/api/journal/* 인증 — 같은 서버에서 5000 포트로 직접 부른 요청만 받는다.
     nginx(/upbit)를 거친 요청은 X-Forwarded-For가 붙어 있고(readme의 nginx 설정), ProxyFix(x_for=1)가
     remote_addr도 실제 방문자 IP로 바꾸므로 둘 중 하나로 걸러진다. nginx가 이 헤더를 안 붙이게 바뀌면
     외부 요청이 루프백처럼 보이게 되니, 그런 환경에선 JOURNAL_API_TOKEN을 설정해 토큰까지 확인할 것."""
-    if request.remote_addr not in _LOOPBACK_ADDRS or request.headers.get('X-Forwarded-For'):
+    if not _is_loopback_direct():
         return jsonify({'status': 'error', 'message': '같은 서버에서만 호출할 수 있습니다.'}), 403
     token = Config.JOURNAL_API_TOKEN
     if token and not secrets.compare_digest(request.headers.get('X-Journal-Token', ''), token):

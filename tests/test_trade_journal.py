@@ -1,4 +1,4 @@
-"""매매일지 연동(app/core/trade_journal.py, /api/journal/fills) 테스트 — 네트워크 없이 임시 DB로 검증한다.
+"""매매일지 연동(app/core/trade_journal.py, /api/journal/fills, /api/stock-price) 테스트 — 네트워크 없이 임시 DB로 검증한다.
 
 실행: python tests/test_trade_journal.py
 """
@@ -161,6 +161,25 @@ with tempfile.TemporaryDirectory() as tmp:
     check('symbol 없으면 400', res.status_code == 400)
     res = client.get('/api/journal/holdings', environ_base={'REMOTE_ADDR': '8.8.8.8'})
     check('보유현황도 외부 IP는 403', res.status_code == 403, res.status_code)
+
+    # /api/stock-price — 로그인 잠금이 켜져 있어도 루프백 직접 호출(매매일지)은 토큰 없이 통과
+    from app.api import server
+    orig_lock, orig_fetch = server._login_state['lock_enabled'], server.fetch_multi_stock_price
+    server._login_state['lock_enabled'] = True
+    server.fetch_multi_stock_price = lambda codes: [{'inter_shrn_iscd': c, 'inter2_prpr': '70000'} for c in codes]
+    server._STOCK_PRICE_CACHE.clear()
+    try:
+        res = client.get('/api/stock-price?codes=005930', environ_base={'REMOTE_ADDR': '127.0.0.1'})
+        body = res.get_json()
+        check('현재가: 루프백 직접 호출은 로그인 없이 200', res.status_code == 200, res.status_code)
+        check('현재가: 응답', (body or {}).get('data', [{}])[0].get('code') == '005930' and body['data'][0]['price'] == '70000', body)
+        res = client.get('/api/stock-price?codes=005930', environ_base={'REMOTE_ADDR': '8.8.8.8'})
+        check('현재가: 외부 IP는 로그인 필요(401)', res.status_code == 401, res.status_code)
+        res = client.get('/api/stock-price?codes=005930', environ_base={'REMOTE_ADDR': '127.0.0.1'},
+                         headers={'X-Forwarded-For': '1.2.3.4'})
+        check('현재가: 프록시를 거친 요청은 로그인 필요(401)', res.status_code == 401, res.status_code)
+    finally:
+        server._login_state['lock_enabled'], server.fetch_multi_stock_price = orig_lock, orig_fetch
 
 print()
 print('ALL PASS' if not FAILED else f'FAILED: {FAILED}')
