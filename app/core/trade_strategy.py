@@ -191,7 +191,7 @@ def _evaluate_exit_recovery(pos: dict, price: float, cfg, rsi_now: float = None,
         if elapsed_min is not None and elapsed_min < cooldown_min:
             return hold(
                 f'recovery_dca_cooldown({dca_count + 1}/{max_count}회, 평단대비 {pnl_pct:.2f}%, '
-                f'쿨다운 {elapsed_min:.0f}/{cooldown_min}분)',
+                f'쿨다운 {elapsed_min / 60:.1f}/{cooldown_min / 60:g}시간)',
                 'recovery_dca_pending',
             )
         return TradeDecision(
