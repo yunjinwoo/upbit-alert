@@ -75,7 +75,7 @@
 | `recovery_dca_enabled` | `false` | 이 모드 on/off. **켜면 이 포지션들에 트레일링 손절이 동작하지 않는다** |
 | `recovery_dca_trigger_pct` | `20.0` | **평단 대비** 이 % 이상 하락하면 물타기 후보 |
 | `recovery_dca_amount_krw` | `50,000` | 1회 물타기 금액(소액, 절대금액). 매수금액(10만원)의 절반 |
-| `recovery_dca_cooldown_min` | `60` | 직전 물타기(없으면 최초 진입)로부터 최소 경과 시간(분). "시간이 조금 지나서" |
+| `recovery_dca_cooldown_min` | `60` | 직전 물타기(없으면 최초 진입)로부터 최소 경과 시간(분). 화면에서는 시간 단위로 입력한다(24=1일, 저장은 분). "시간이 조금 지나서" |
 | `recovery_take_profit_pct` | `5.0` | **평단 대비** 이 % 이상이면 전량 매도(반등 익절) |
 | `recovery_dca_max_count` | `3` | 포지션당 회복형 물타기 최대 횟수 |
 | `recovery_max_invested_krw` | `250,000` | 포지션당 총 투입액 상한. 다음 물타기를 더하면 넘는 시점부터 금지 |

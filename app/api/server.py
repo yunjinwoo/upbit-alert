@@ -1310,7 +1310,7 @@ def set_trade_strategy_settings_api():
         if 'recovery_dca_cooldown_min' in body:
             v = int(body['recovery_dca_cooldown_min'])
             if v < 0:
-                raise ValueError('회복형 물타기 쿨다운(분)은 0 이상이어야 합니다.')
+                raise ValueError('회복형 물타기 쿨다운은 0 이상이어야 합니다.')
             kwargs['recovery_dca_cooldown_min'] = v
         if 'recovery_take_profit_pct' in body:
             v = float(body['recovery_take_profit_pct'])
