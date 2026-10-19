@@ -125,7 +125,7 @@ class Config:
     TRADE_CONDITIONS_OBSERVE_ONLY = False    # 정밀 매수조건 "관찰 모드" 기본값 — 켜면 조건 검사와 화면
                                               # 라벨은 그대로 돌지만 매수를 막지는 않는다(진입 게이트 해제).
                                               # 대시보드에서 저장하면 trade_strategy_settings 값이 우선.
-    TRADE_SLACK_ALERT = True               # 체결(매수/매도/물타기) 시 Slack 알림 발송 여부 — "[🔴 실거래]"/"[모의매매]"
+    TRADE_SLACK_ALERT = True               # 체결(매수/매도/물타기) 시 Slack 알림 발송 여부 — "[🟢 실거래]"(매수)/"[🔴 실거래]"(매도)/"[모의매매]"
                                             # 라벨로 구분해서 보냄(app/core/auto_trader.py의 _execute 참고). SLACK_TOKEN
                                             # 미설정 시 send_slack_msg가 조용히 스킵하므로 켜둬도 안전함.
     TRADE_RSI_EXIT_ENABLED = False          # RSI 과매수 매도조건 on/off (기본 비활성화 — 켜기 전까진 동작 안 바뀜)

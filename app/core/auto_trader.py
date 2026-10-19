@@ -222,7 +222,9 @@ def _execute(decision, broker):
                     side_label = '회복형 물타기 매수'
                 elif decision.action == 'SELL':
                     side_label = '소액 손절 매도(일부)' if decision.partial_sell else '회복형 매도'
-            mode_label = '🔴 실거래' if broker.mode == 'live' else '모의매매'
+            # 실거래 신호등은 매수 계열(매수/물타기)은 🟢, 매도는 🔴 — Slack에서 방향을 색으로 바로 구분 (2026-10-19 요청)
+            live_light = '🔴' if decision.action == 'SELL' else '🟢'
+            mode_label = f'{live_light} 실거래' if broker.mode == 'live' else '모의매매'
             # 실거래는 주문 직후 체결 확인이 지연되면 price/qty가 아직 비어있을 수 있다
             # (UpbitLiveBroker._wait_for_fill 타임아웃) — 그 경우 상세 수치 없이 접수 사실만 알린다.
             if result.price is not None and result.qty is not None:
