@@ -62,6 +62,38 @@
             letter-spacing: 0.02em; margin-bottom: 2px;
         }
 
+        /* 매매 기준 설정 — 기본 / 손실 대응 방식 / 추가 매도 규칙 카드. 지금 안 쓰이는 카드는 .inactive로 흐리게 */
+        .st-section { margin-top: 14px; }
+        .st-section-title { font-size: 0.8rem; font-weight: 700; color: #334155; margin-bottom: 6px; }
+        .st-section-sub { font-size: 0.7rem; font-weight: 400; color: #94a3b8; margin-left: 6px; }
+        .st-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr)); gap: 10px; }
+        .st-card { border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px; background: #fff; transition: opacity .15s; }
+        .st-card-wide { grid-column: 1 / -1; }
+        .st-card.active { border-color: #86efac; background: #f7fef9; }
+        .st-card.inactive .st-fields, .st-card.inactive .st-subhead, .st-card.inactive .st-hint { opacity: 0.45; }
+        .st-card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+        .st-card-title { font-weight: 700; font-size: 0.82rem; color: #1e293b; margin-right: auto; }
+        .st-toggle { font-size: 0.76rem; color: #475569; cursor: pointer; margin: 0; white-space: nowrap; }
+        .st-toggle input { margin-right: 4px; vertical-align: -2px; }
+        .st-badge { font-size: 0.68rem; padding: 1px 8px; border-radius: 999px; background: #f1f5f9; color: #64748b; white-space: nowrap; }
+        .st-badge:empty { display: none; }
+        .st-badge.on { background: #dcfce7; color: #166534; font-weight: 700; }
+        .st-badge.skip { background: #fef3c7; color: #92400e; }
+        .st-subhead { font-size: 0.7rem; font-weight: 700; color: #94a3b8; margin: 8px 0 4px; }
+        .st-subhead:first-of-type { margin-top: 0; }
+        .st-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px 10px; }
+        .st-field { display: flex; flex-direction: column; justify-content: flex-end; }
+        .st-field input { width: 100%; }
+        .st-field label { display: block; font-size: 0.72rem; color: #64748b; margin-bottom: 2px; }
+        .st-field-wide { grid-column: 1 / -1; }
+        .st-hint { font-size: 0.7rem; color: #94a3b8; margin-top: 6px; }
+        .st-savebar {
+            position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; gap: 10px;
+            margin: 14px -18px 0; padding: 10px 18px; background: rgba(255,255,255,0.95);
+            border-top: 1px solid #e2e8f0; border-radius: 0 0 12px 12px;
+        }
+        .st-help summary { cursor: pointer; color: #64748b; }
+
         .table-wrap { overflow-x: auto; }
         table.trade-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
         .trade-table th {
@@ -367,189 +399,167 @@
             </label>
             <div id="strategyPresetMsg" class="text-muted mt-1" style="font-size:0.74rem"></div>
         </div>
-        <div class="d-flex flex-wrap align-items-end">
-            <div class="settings-group">
-                <div class="settings-group-label">포지션 · 루프</div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">1종목당 매수금액(원)</label>
-                    <input type="number" id="setMaxPosition" class="form-control form-control-sm" style="width:150px" min="1">
+        <!-- 설정 카드는 "언제 쓰이는지"로 묶는다: 늘 쓰는 기본값 / 손실 대응 방식(셋 중 하나만 동작) / 추가 매도 규칙.
+             손실 대응 방식의 우선순위는 trade_strategy.evaluate_exits()와 같다 — 회복형 > 짧은 손절 > 기본.
+             지금 안 쓰이는 카드는 흐리게 + 이유 배지(updateSettingsApplicability()). -->
+        <div class="st-section">
+            <div class="st-section-title">기본 <span class="st-section-sub">항상 적용</span></div>
+            <div class="st-grid">
+                <div class="st-card">
+                    <div class="st-card-head"><span class="st-card-title">매수 · 루프</span></div>
+                    <div class="st-fields">
+                        <div class="st-field"><label for="setMaxPosition">1종목당 매수금액(원)</label>
+                            <input type="number" id="setMaxPosition" class="form-control form-control-sm" min="1"></div>
+                        <div class="st-field"><label for="setMaxPositions">최대 동시보유 종목수</label>
+                            <input type="number" id="setMaxPositions" class="form-control form-control-sm" min="1" step="1"></div>
+                        <div class="st-field"><label for="setLoopInterval">매매 루프 주기(초)</label>
+                            <input type="number" id="setLoopInterval" class="form-control form-control-sm" min="10" step="1"></div>
+                    </div>
                 </div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">최대 동시보유 종목수</label>
-                    <input type="number" id="setMaxPositions" class="form-control form-control-sm" style="width:110px" min="1" step="1">
+                <div class="st-card">
+                    <div class="st-card-head"><span class="st-card-title">익절 · 가드레일</span></div>
+                    <div class="st-fields">
+                        <div class="st-field"><label for="setTakeProfit">익절 기준(평단대비 +%)</label>
+                            <input type="number" id="setTakeProfit" class="form-control form-control-sm" min="0.1" step="0.1"></div>
+                        <div class="st-field"><label for="setPerPositionCap" title="표시만 하고 매수를 막지는 않습니다">1종목당 투입원금 상한(원)</label>
+                            <input type="number" id="setPerPositionCap" class="form-control form-control-sm" min="1" step="10000"></div>
+                        <div class="st-field"><label for="setReentryBlockHours" title="판 종목은 이 시간 동안 다시 사지 않습니다. 0이면 꺼짐">매도 후 재매수 대기(시간, 0=꺼짐)</label>
+                            <input type="number" id="setReentryBlockHours" class="form-control form-control-sm" min="0" step="1"></div>
+                    </div>
                 </div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">매매 루프 주기(초)</label>
-                    <input type="number" id="setLoopInterval" class="form-control form-control-sm" style="width:110px" min="10" step="1">
-                </div>
-            </div>
-            <div class="settings-group">
-                <div class="settings-group-label">손절 · 익절</div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">손절 기준(%)</label>
-                    <input type="number" id="setStopLoss" class="form-control form-control-sm" style="width:100px" min="0.1" step="0.1">
-                </div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">익절 기준(%)</label>
-                    <input type="number" id="setTakeProfit" class="form-control form-control-sm" style="width:100px" min="0.1" step="0.1">
-                </div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">손절 연속확인 사이클수</label>
-                    <input type="number" id="setStopConfirm" class="form-control form-control-sm" style="width:110px" min="1" step="1">
-                </div>
-            </div>
-            <div class="settings-group">
-                <div class="settings-group-label">물타기</div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">물타기 트리거(%)</label>
-                    <input type="number" id="setDcaTrigger" class="form-control form-control-sm" style="width:110px" min="0.1" step="0.1">
-                </div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">물타기 최대 횟수</label>
-                    <input type="number" id="setDcaMaxCount" class="form-control form-control-sm" style="width:110px" min="1" step="1">
-                </div>
-            </div>
-            <div class="settings-group">
-                <div class="settings-group-label">가드레일</div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">1종목당 투입원금 상한(원)</label>
-                    <input type="number" id="setPerPositionCap" class="form-control form-control-sm" style="width:150px" min="1" step="10000">
-                </div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b" title="판 종목은 이 시간 동안 다시 사지 않습니다. 0이면 꺼짐">매도 후 재매수 대기(시간, 0=꺼짐)</label>
-                    <input type="number" id="setReentryBlockHours" class="form-control form-control-sm" style="width:110px" min="0" step="1">
-                </div>
-            </div>
-            <div class="settings-group">
-                <div class="settings-group-label">RSI 매도 (15분봉)</div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">
-                        <input type="checkbox" id="setRsiExitEnabled" style="margin-right:4px">사용
-                    </label>
-                </div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">RSI 기간</label>
-                    <input type="number" id="setRsiExitPeriod" class="form-control form-control-sm" style="width:90px" min="2" step="1">
-                </div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">과매수 기준(이상)</label>
-                    <input type="number" id="setRsiExitOverbought" class="form-control form-control-sm" style="width:100px" min="1" max="100" step="0.5">
-                </div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">최소 수익률(%, 이상일 때만)</label>
-                    <input type="number" id="setRsiExitMinProfit" class="form-control form-control-sm" style="width:100px" min="0" step="0.5">
-                </div>
-            </div>
-            <div class="settings-group">
-                <div class="settings-group-label">되돌림 익절</div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">
-                        <input type="checkbox" id="setTrailingTpEnabled" style="margin-right:4px">사용
-                    </label>
-                </div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">발동 기준(%, 이상)</label>
-                    <input type="number" id="setTrailingTpArm" class="form-control form-control-sm" style="width:110px" min="0.1" step="0.1">
-                </div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">매도 기준(%, 이하)</label>
-                    <input type="number" id="setTrailingTpFloor" class="form-control form-control-sm" style="width:110px" min="0.1" step="0.1">
-                </div>
-            </div>
-            <div class="settings-group">
-                <div class="settings-group-label">짧은 손절 · 긴 수익</div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">
-                        <input type="checkbox" id="setTightStopEnabled" style="margin-right:4px">사용
-                    </label>
-                </div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">짧은 손절(평단대비 -%)</label>
-                    <input type="number" id="setTightStopInitial" class="form-control form-control-sm" style="width:130px" min="0.1" step="0.1">
-                </div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">트레일링 전환(고점 +%)</label>
-                    <input type="number" id="setTightStopArm" class="form-control form-control-sm" style="width:130px" min="0.1" step="0.5">
-                </div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">전환 후 허용 하락(고점대비 -%)</label>
-                    <input type="number" id="setTightStopTrail" class="form-control form-control-sm" style="width:160px" min="0.1" step="0.5">
-                </div>
-            </div>
-            <div class="settings-group">
-                <div class="settings-group-label" title="기존 규칙은 그대로 두고, 적은 코인만 평단 대비 이 선에 닿으면 먼저 팝니다(연속 확인·물타기 없음). 선에 안 닿으면 기존 규칙대로 판단합니다. 모아가기 코인은 적어도 팔지 않습니다.">적극 손절 · 익절 코인</div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">
-                        <input type="checkbox" id="setFastExitEnabled" style="margin-right:4px">사용
-                    </label>
-                </div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">코인(쉼표로 구분)</label>
-                    <input type="text" id="setFastExitTickers" class="form-control form-control-sm" style="width:220px" placeholder="XRP, SOL">
-                </div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b" title="0이면 손절은 기존 규칙대로">손절(평단대비 -%)</label>
-                    <input type="number" id="setFastExitStop" class="form-control form-control-sm" style="width:110px" min="0" step="0.5">
-                </div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b" title="0이면 익절은 기존 규칙대로">익절(평단대비 +%)</label>
-                    <input type="number" id="setFastExitTakeProfit" class="form-control form-control-sm" style="width:110px" min="0" step="0.5">
-                </div>
-            </div>
-            <div class="settings-group">
-                <div class="settings-group-label">회복형 분할 물타기</div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">
-                        <input type="checkbox" id="setRecoveryEnabled" style="margin-right:4px">사용
-                    </label>
-                </div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">물타기 트리거(평단대비 -%)</label>
-                    <input type="number" id="setRecoveryTrigger" class="form-control form-control-sm" style="width:120px" min="0.1" step="0.5">
-                </div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">1회 물타기 금액(원)</label>
-                    <input type="number" id="setRecoveryAmount" class="form-control form-control-sm" style="width:130px" min="5000" step="5000">
-                </div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">물타기 쿨다운(시간, 24=1일, 720=한달)</label>
-                    <input type="number" id="setRecoveryCooldown" class="form-control form-control-sm" style="width:130px" min="0" step="1">
-                </div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">반등 익절(평단대비 +%)</label>
-                    <input type="number" id="setRecoveryTakeProfit" class="form-control form-control-sm" style="width:120px" min="0.1" step="0.5">
-                </div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">물타기 최대 횟수</label>
-                    <input type="number" id="setRecoveryMaxCount" class="form-control form-control-sm" style="width:110px" min="0" step="1">
-                </div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">총 투입액 상한(원)</label>
-                    <input type="number" id="setRecoveryMaxInvested" class="form-control form-control-sm" style="width:140px" min="5000" step="10000">
-                </div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">시간 하드스톱(일, 0=없음)</label>
-                    <input type="number" id="setRecoveryTimeStopDays" class="form-control form-control-sm" style="width:130px" min="0" step="1">
-                </div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">소액 손절 기준(평단대비 -%, 0=없음)</label>
-                    <input type="number" id="setRecoveryPartialPct" class="form-control form-control-sm" style="width:160px" min="0" step="0.5">
-                </div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">소액 손절 비율(보유량 %)</label>
-                    <input type="number" id="setRecoveryPartialRatio" class="form-control form-control-sm" style="width:140px" min="0" max="100" step="5">
-                </div>
-                <div>
-                    <label class="form-label mb-1" style="font-size:0.76rem; color:#64748b">소액 손절 간격(분)</label>
-                    <input type="number" id="setRecoveryPartialCooldown" class="form-control form-control-sm" style="width:120px" min="0" step="30">
-                </div>
-            </div>
-            <div class="d-flex align-items-center gap-2 pb-1">
-                <button class="btn-search" onclick="saveStrategySettings()">저장</button>
-                <span id="settingsSavedMsg" class="text-muted" style="font-size:0.76rem"></span>
             </div>
         </div>
-        <div class="mt-2 text-muted" style="font-size:0.72rem">
+
+        <div class="st-section">
+            <div class="st-section-title">손실 대응 방식 <span class="st-section-sub">셋 중 하나만 동작 · 둘 다 켜면 회복형 우선, 둘 다 끄면 기본</span></div>
+            <div class="st-grid">
+                <div class="st-card" id="stCardBasic">
+                    <div class="st-card-head">
+                        <span class="st-card-title">기본 · 트레일링 손절 + 물타기</span>
+                        <span class="st-badge" id="stBadgeBasic"></span>
+                    </div>
+                    <div class="st-fields">
+                        <div class="st-field"><label for="setStopLoss">손절 기준(최고가대비 -%)</label>
+                            <input type="number" id="setStopLoss" class="form-control form-control-sm" min="0.1" step="0.1"></div>
+                        <div class="st-field"><label for="setStopConfirm">손절 연속확인 사이클수</label>
+                            <input type="number" id="setStopConfirm" class="form-control form-control-sm" min="1" step="1"></div>
+                        <div class="st-field"><label for="setDcaTrigger">물타기 트리거(평단대비 -%)</label>
+                            <input type="number" id="setDcaTrigger" class="form-control form-control-sm" min="0.1" step="0.1"></div>
+                        <div class="st-field"><label for="setDcaMaxCount">물타기 최대 횟수</label>
+                            <input type="number" id="setDcaMaxCount" class="form-control form-control-sm" min="1" step="1"></div>
+                    </div>
+                    <div class="st-hint">손절 조건이 연속확인되면 바로 팔지 않고 트리거까지 기다렸다가 1종목당 매수금액만큼 물탑니다. 횟수를 다 쓰면 손절.</div>
+                </div>
+                <div class="st-card" id="stCardTight">
+                    <div class="st-card-head">
+                        <span class="st-card-title">짧은 손절 · 긴 수익</span>
+                        <label class="st-toggle"><input type="checkbox" id="setTightStopEnabled">사용</label>
+                        <span class="st-badge" id="stBadgeTight"></span>
+                    </div>
+                    <div class="st-fields">
+                        <div class="st-field"><label for="setTightStopInitial">짧은 손절(평단대비 -%)</label>
+                            <input type="number" id="setTightStopInitial" class="form-control form-control-sm" min="0.1" step="0.1"></div>
+                        <div class="st-field"><label for="setTightStopArm">트레일링 전환(고점 +%)</label>
+                            <input type="number" id="setTightStopArm" class="form-control form-control-sm" min="0.1" step="0.5"></div>
+                        <div class="st-field"><label for="setTightStopTrail">전환 후 허용 하락(고점대비 -%)</label>
+                            <input type="number" id="setTightStopTrail" class="form-control form-control-sm" min="0.1" step="0.5"></div>
+                    </div>
+                    <div class="st-hint">물타기 없이 짧게 끊고, 수익 전환 뒤에는 고점 대비 허용 하락까지 버팁니다.</div>
+                </div>
+                <div class="st-card st-card-wide" id="stCardRecovery">
+                    <div class="st-card-head">
+                        <span class="st-card-title">회복형 분할 물타기</span>
+                        <label class="st-toggle"><input type="checkbox" id="setRecoveryEnabled">사용</label>
+                        <span class="st-badge" id="stBadgeRecovery"></span>
+                    </div>
+                    <div class="st-subhead">물타기</div>
+                    <div class="st-fields">
+                        <div class="st-field"><label for="setRecoveryTrigger">트리거(평단대비 -%)</label>
+                            <input type="number" id="setRecoveryTrigger" class="form-control form-control-sm" min="0.1" step="0.5"></div>
+                        <div class="st-field"><label for="setRecoveryAmount">1회 금액(원)</label>
+                            <input type="number" id="setRecoveryAmount" class="form-control form-control-sm" min="5000" step="5000"></div>
+                        <div class="st-field"><label for="setRecoveryCooldown" title="24=1일, 720=한달">쿨다운(시간)</label>
+                            <input type="number" id="setRecoveryCooldown" class="form-control form-control-sm" min="0" step="1"></div>
+                        <div class="st-field"><label for="setRecoveryMaxCount">최대 횟수</label>
+                            <input type="number" id="setRecoveryMaxCount" class="form-control form-control-sm" min="0" step="1"></div>
+                        <div class="st-field"><label for="setRecoveryMaxInvested">총 투입액 상한(원)</label>
+                            <input type="number" id="setRecoveryMaxInvested" class="form-control form-control-sm" min="5000" step="10000"></div>
+                    </div>
+                    <div class="st-subhead">빠져나오기</div>
+                    <div class="st-fields">
+                        <div class="st-field"><label for="setRecoveryTakeProfit">반등 익절(평단대비 +%)</label>
+                            <input type="number" id="setRecoveryTakeProfit" class="form-control form-control-sm" min="0.1" step="0.5"></div>
+                        <div class="st-field"><label for="setRecoveryTimeStopDays">시간 하드스톱(일, 0=없음)</label>
+                            <input type="number" id="setRecoveryTimeStopDays" class="form-control form-control-sm" min="0" step="1"></div>
+                    </div>
+                    <div class="st-subhead">소액 손절 <span class="st-section-sub">물타기 상한을 다 쓴 뒤에만</span></div>
+                    <div class="st-fields">
+                        <div class="st-field"><label for="setRecoveryPartialPct">기준(평단대비 -%, 0=없음)</label>
+                            <input type="number" id="setRecoveryPartialPct" class="form-control form-control-sm" min="0" step="0.5"></div>
+                        <div class="st-field"><label for="setRecoveryPartialRatio">비율(보유량 %)</label>
+                            <input type="number" id="setRecoveryPartialRatio" class="form-control form-control-sm" min="0" max="100" step="5"></div>
+                        <div class="st-field"><label for="setRecoveryPartialCooldown">간격(분)</label>
+                            <input type="number" id="setRecoveryPartialCooldown" class="form-control form-control-sm" min="0" step="30"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="st-section">
+            <div class="st-section-title">추가 매도 규칙 <span class="st-section-sub">켜면 위 방식과 함께 동작</span></div>
+            <div class="st-grid">
+                <div class="st-card" id="stCardRsi">
+                    <div class="st-card-head">
+                        <span class="st-card-title">RSI 매도 (15분봉)</span>
+                        <label class="st-toggle"><input type="checkbox" id="setRsiExitEnabled">사용</label>
+                        <span class="st-badge" id="stBadgeRsi"></span>
+                    </div>
+                    <div class="st-fields">
+                        <div class="st-field"><label for="setRsiExitPeriod">RSI 기간</label>
+                            <input type="number" id="setRsiExitPeriod" class="form-control form-control-sm" min="2" step="1"></div>
+                        <div class="st-field"><label for="setRsiExitOverbought">과매수 기준(이상)</label>
+                            <input type="number" id="setRsiExitOverbought" class="form-control form-control-sm" min="1" max="100" step="0.5"></div>
+                        <div class="st-field"><label for="setRsiExitMinProfit">최소 수익률(%, 이상일 때만)</label>
+                            <input type="number" id="setRsiExitMinProfit" class="form-control form-control-sm" min="0" step="0.5"></div>
+                    </div>
+                </div>
+                <div class="st-card" id="stCardTrailingTp">
+                    <div class="st-card-head">
+                        <span class="st-card-title">되돌림 익절</span>
+                        <label class="st-toggle"><input type="checkbox" id="setTrailingTpEnabled">사용</label>
+                        <span class="st-badge" id="stBadgeTrailingTp"></span>
+                    </div>
+                    <div class="st-fields">
+                        <div class="st-field"><label for="setTrailingTpArm">발동 기준(%, 이상)</label>
+                            <input type="number" id="setTrailingTpArm" class="form-control form-control-sm" min="0.1" step="0.1"></div>
+                        <div class="st-field"><label for="setTrailingTpFloor">매도 기준(%, 이하)</label>
+                            <input type="number" id="setTrailingTpFloor" class="form-control form-control-sm" min="0.1" step="0.1"></div>
+                    </div>
+                </div>
+                <div class="st-card" id="stCardFastExit">
+                    <div class="st-card-head">
+                        <span class="st-card-title" title="기존 규칙은 그대로 두고, 적은 코인만 평단 대비 이 선에 닿으면 먼저 팝니다(연속 확인·물타기 없음). 선에 안 닿으면 기존 규칙대로 판단합니다. 모아가기 코인은 적어도 팔지 않습니다.">적극 손절 · 익절 코인</span>
+                        <label class="st-toggle"><input type="checkbox" id="setFastExitEnabled">사용</label>
+                        <span class="st-badge" id="stBadgeFastExit"></span>
+                    </div>
+                    <div class="st-fields">
+                        <div class="st-field st-field-wide"><label for="setFastExitTickers">코인(쉼표로 구분)</label>
+                            <input type="text" id="setFastExitTickers" class="form-control form-control-sm" placeholder="XRP, SOL"></div>
+                        <div class="st-field"><label for="setFastExitStop" title="0이면 손절은 기존 규칙대로">손절(평단대비 -%)</label>
+                            <input type="number" id="setFastExitStop" class="form-control form-control-sm" min="0" step="0.5"></div>
+                        <div class="st-field"><label for="setFastExitTakeProfit" title="0이면 익절은 기존 규칙대로">익절(평단대비 +%)</label>
+                            <input type="number" id="setFastExitTakeProfit" class="form-control form-control-sm" min="0" step="0.5"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="st-savebar">
+            <button class="btn-search" onclick="saveStrategySettings()">저장</button>
+            <span id="settingsSavedMsg" class="text-muted" style="font-size:0.76rem"></span>
+        </div>
+        <details class="st-help mt-2 text-muted" style="font-size:0.72rem">
+            <summary>설정 설명 자세히 보기</summary>
             * 저장하면 DB에 즉시 반영되고, <code>python main.py live_trade</code> 프로세스가 재시작 없이 다음
             사이클부터 새 값을 적용합니다(루프 주기 자체도 다음 사이클부터 바뀐 값으로 동작). 이미 보유 중인
             포지션의 손절/익절 판단에도 다음 사이클부터 새 기준이 적용됩니다.
@@ -594,7 +604,7 @@
             켜기 전에 <b>총 투입액 상한</b>이 "1종목당 매수금액 + 1회 물타기 금액"보다 큰지 확인하세요 —
             작으면 처음부터 물타기 여력이 없는 상태가 됩니다. 자세한 설계는
             <code>docs/auto-trade-recovery-dca.md</code>.
-        </div>
+        </details>
     </div>
 
     <div class="card-panel mb-3">
@@ -1994,7 +2004,42 @@
         document.getElementById('setRecoveryPartialPct').value = settings.recovery_partial_stop_pct ?? '';
         document.getElementById('setRecoveryPartialRatio').value = settings.recovery_partial_stop_ratio ?? '';
         document.getElementById('setRecoveryPartialCooldown').value = settings.recovery_partial_stop_cooldown_min ?? '';
+        updateSettingsApplicability();
     }
+
+    // 매매 기준 설정 카드에 "지금 실제로 쓰이는지"를 표시한다. 우선순위는 trade_strategy.evaluate_exits()와 같다:
+    // 회복형이 켜져 있으면 짧은 손절·기본(트레일링 손절+물타기)·되돌림 익절을 건너뛰고, 짧은 손절이 켜져 있으면
+    // 기본·되돌림 익절을 건너뛴다. 보유 종목 중 🔒 산 시점 규칙이 고정된 종목은 그 규칙을 따르므로 여기 표시와 다를 수 있다.
+    function updateSettingsApplicability() {
+        const on = id => document.getElementById(id).checked;
+        const recovery = on('setRecoveryEnabled');
+        const tight = on('setTightStopEnabled');
+        const set = (card, badge, state, text) => {
+            const c = document.getElementById(card);
+            c.classList.toggle('active', state === 'on');
+            c.classList.toggle('inactive', state !== 'on');
+            const b = document.getElementById(badge);
+            b.className = 'st-badge' + (state === 'on' ? ' on' : state === 'skip' ? ' skip' : '');
+            b.textContent = text;
+        };
+        if (recovery) set('stCardRecovery', 'stBadgeRecovery', 'on', '적용 중');
+        else set('stCardRecovery', 'stBadgeRecovery', 'off', '꺼짐');
+        if (tight && recovery) set('stCardTight', 'stBadgeTight', 'skip', '회복형이 우선이라 안 씀');
+        else if (tight) set('stCardTight', 'stBadgeTight', 'on', '적용 중');
+        else set('stCardTight', 'stBadgeTight', 'off', '꺼짐');
+        if (recovery) set('stCardBasic', 'stBadgeBasic', 'skip', '회복형 사용 중이라 안 씀');
+        else if (tight) set('stCardBasic', 'stBadgeBasic', 'skip', '짧은 손절 사용 중이라 안 씀');
+        else set('stCardBasic', 'stBadgeBasic', 'on', '적용 중');
+        const trailingTp = on('setTrailingTpEnabled');
+        if (trailingTp && (recovery || tight)) set('stCardTrailingTp', 'stBadgeTrailingTp', 'skip', (recovery ? '회복형' : '짧은 손절') + ' 사용 중이라 안 씀');
+        else set('stCardTrailingTp', 'stBadgeTrailingTp', trailingTp ? 'on' : 'off', trailingTp ? '적용 중' : '꺼짐');
+        set('stCardRsi', 'stBadgeRsi', on('setRsiExitEnabled') ? 'on' : 'off',
+            on('setRsiExitEnabled') ? (recovery ? '적용 중 · 수익 구간만' : '적용 중') : '꺼짐');
+        set('stCardFastExit', 'stBadgeFastExit', on('setFastExitEnabled') ? 'on' : 'off', on('setFastExitEnabled') ? '적용 중' : '꺼짐');
+    }
+    ['setRecoveryEnabled', 'setTightStopEnabled', 'setTrailingTpEnabled', 'setRsiExitEnabled', 'setFastExitEnabled']
+        .forEach(id => document.getElementById(id).addEventListener('change', updateSettingsApplicability));
+    updateSettingsApplicability();
 
     async function saveStrategySettings() {
         const body = {
