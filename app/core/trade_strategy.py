@@ -130,9 +130,12 @@ def _evaluate_exit_recovery(pos: dict, price: float, cfg, rsi_now: float = None,
     peak = max(pos.get('peak_price') or avg_price, price)
 
     def sell(reason, sell_qty=None, partial=False):
+        # 실현손익은 "판 수량"만큼이다 — 소액 손절은 보유량 일부만 파는데 보유 전체의 평가손익을
+        # 넣으면 매도 이력·매매 성과가 손실을 몇 배로 부풀린다(2026-10-29 KRW-2Z에서 발견).
+        sold_qty = sell_qty if sell_qty is not None else qty
         return TradeDecision(
-            ticker, 'SELL', reason=reason, price=price, qty=sell_qty if sell_qty is not None else qty,
-            pnl_krw=pnl_krw, pnl_pct=pnl_pct, recovery=True, partial_sell=partial,
+            ticker, 'SELL', reason=reason, price=price, qty=sold_qty,
+            pnl_krw=(price - avg_price) * sold_qty, pnl_pct=pnl_pct, recovery=True, partial_sell=partial,
         )
 
     def hold(reason, status):

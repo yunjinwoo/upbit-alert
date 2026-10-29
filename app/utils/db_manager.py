@@ -868,6 +868,13 @@ def init_db():
         "ALTER TABLE trade_strategy_settings ADD COLUMN fast_exit_tickers TEXT NOT NULL DEFAULT ''",
         'ALTER TABLE trade_strategy_settings ADD COLUMN fast_exit_stop_pct REAL NOT NULL DEFAULT 3.0',
         'ALTER TABLE trade_strategy_settings ADD COLUMN fast_exit_take_profit_pct REAL NOT NULL DEFAULT 5.0',
+        # 회복형 소액 손절(보유량 일부 매도) 행에 판 수량이 아니라 보유 전체의 평가손익이 들어가 있던 것을
+        # 판 수량 기준으로 바로잡는다(app/core/trade_strategy.py _evaluate_exit_recovery의 sell()).
+        # 평단 대비 손익률(pnl_pct)과 매도금액은 맞게 남아 있으므로 실현손익 = 매도금액 × r / (1 + r).
+        # 다시 돌려도 같은 값이 나와서 매번 실행돼도 안전하다. _all(전량 매도)은 원래 맞아서 제외.
+        "UPDATE trade_order_log SET pnl_krw = amount_krw * pnl_pct / (100.0 + pnl_pct) "
+        "WHERE decision = 'SELL' AND reason LIKE 'recovery_partial_stop(%' "
+        "AND amount_krw IS NOT NULL AND pnl_pct IS NOT NULL AND pnl_pct > -100",
 
     ]
     for sql in migrations:
