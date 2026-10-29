@@ -111,6 +111,10 @@ capped = pos(recovery_count=3, last_dca_min_ago=400)
 check('상한 소진 + -30% 경계 → 부분 매도', decide(capped, 700.0).action, 'SELL')
 check('부분 매도 플래그', decide(capped, 700.0).partial_sell, True)
 check('보유량 20%만 매도', round(decide(capped, 700.0).qty, 6), 20.0)
+# 실현손익은 판 20개분(-300원 × 20 = -6,000원)이지 보유 100개 전체의 평가손익(-30,000원)이 아니다 —
+# 전체를 넣으면 매도 이력·매매 성과에서 손실이 몇 배로 부풀려진다(2026-10-29 KRW-2Z).
+check('부분 매도 실현손익은 판 수량만큼', round(decide(capped, 700.0).pnl_krw, 2), -6000.0)
+check('부분 매도 손익률은 평단 대비 그대로', round(decide(capped, 700.0).pnl_pct, 2), -30.0)
 check('-29.9%면 아직 반등 대기', decide(capped, 701.0).status, 'recovery_capped')
 check('소액 손절 간격 미경과(100/360분) → 대기',
       decide(pos(recovery_count=3, last_dca_min_ago=400, last_partial_min_ago=100), 700.0).action, 'HOLD')
@@ -131,6 +135,7 @@ check('4,000원짜리 조각은 5,000원으로 올려 부분 매도', decide(tin
 dust = pos(avg=1000.0, qty=8.0, recovery_count=3, last_dca_min_ago=400)
 check('쪼갤 수 없는 잔량 → 전량 매도', decide(dust, 1000.0 * 0.7).partial_sell, False)
 check('쪼갤 수 없는 잔량 사유', decide(dust, 1000.0 * 0.7).reason.split('(')[0], 'recovery_partial_stop_all')
+check('전량 매도 실현손익은 보유 전체', round(decide(dust, 1000.0 * 0.7).pnl_krw, 2), -2400.0)
 
 print("--- 시간 하드스톱 ---")
 # 상한 소진 시각(마지막 물타기) 기준 7일 = 10,080분.
