@@ -140,6 +140,7 @@
             <!-- 현재 상황 메시지: 주요 지수(api/stock-indices) + 선택한 업종 요약(일자별 데이터로 계산) -->
             <div class="alert alert-light border mb-3 py-2" id="statusBox">
                 <div class="fw-bold mb-1">📢 현재 상황</div>
+                <div id="statusRegime" class="small mb-1">주식 시장 판단 불러오는 중...</div>
                 <div id="statusIndices" class="small">주요 지수 불러오는 중...</div>
                 <div id="statusSector" class="small mt-1 text-muted"></div>
             </div>
@@ -392,6 +393,37 @@
         if (rate === null || rate === undefined || isNaN(rate)) return '';
         const cls = rate > 0 ? 'text-danger' : rate < 0 ? 'text-primary' : '';
         return ` <span class="${cls}">(${rate > 0 ? '+' : ''}${fmt(rate)}%)</span>`;
+    }
+
+    // 주식 시장 판단 — market-regime-bot이 저장한 값(슬랙 알림과 같은 판정)을 그대로 보여준다
+    async function loadStockRegime() {
+        const el = document.getElementById('statusRegime');
+        try {
+            const res = await fetch('api/stock-regime');
+            const result = await res.json();
+            if (result.status !== 'success') throw new Error(result.message || '조회 실패');
+            const snap = result.data, st = snap.state;
+            if (!st || !st.confirmed) {
+                el.innerHTML = `🧭 주식 시장 판단: <span class="text-muted">아직 판정 전 (평일 ${snap.market_hours}에 30분마다 판정)</span>`;
+                return;
+            }
+            const r = snap.regimes[st.confirmed];
+            const last = st.last_result || {};
+            const score = (last.score !== undefined && last.score !== null) ? ` (점수 ${last.score > 0 ? '+' : ''}${last.score})` : '';
+            const items = (last.items || []).map(i => `${i.label} ${i.text} (${i.point > 0 ? '+' : ''}${i.point})`).join(' · ');
+            let pending = '';
+            if (st.pending && snap.regimes[st.pending]) {
+                const p = snap.regimes[st.pending];
+                pending = ` · <span class="text-warning">${p.emoji} ${p.label} 전환 대기 ${st.pending_count}/${snap.confirm_count}</span>`;
+            }
+            el.innerHTML = `🧭 주식 시장 판단: <b>${r.emoji} ${r.label}</b>${score}${pending}`
+                + ` <span class="text-muted">· 확정 ${st.confirmed_at} · 마지막 판정 ${st.checked_at}</span>`
+                + (last.crash ? ' · <span class="text-primary">⚠️ 코스피 급락</span>' : '')
+                + (items ? `<div class="text-muted">${items} · 참고 전략: ${r.strategy}</div>` : '');
+        } catch (e) {
+            console.error(e);
+            el.innerHTML = '🧭 주식 시장 판단: <span class="text-muted">조회 실패</span>';
+        }
     }
 
     async function loadStockIndices() {
@@ -669,6 +701,7 @@
     }
 
     document.addEventListener('DOMContentLoaded', async () => {
+        loadStockRegime();
         loadStockIndices();
         await populateSectorOptions();
         loadFromDb();

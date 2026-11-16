@@ -273,4 +273,10 @@ def run_market_regime_loop(interval_sec: int = None):
             run_market_regime_check()
         except Exception as e:
             logger.error(f"시장 판단 루프 오류: {e}")
+        # 주식 시장 판단(app/core/stock_regime.py)도 같은 주기로 — 평일 장 시간에만 실제로 판정한다
+        try:
+            from app.core.stock_regime import run_stock_regime_check
+            run_stock_regime_check()
+        except Exception as e:
+            logger.error(f"주식 시장 판단 루프 오류: {e}")
         time.sleep(interval_sec)
