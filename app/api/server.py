@@ -1998,6 +1998,15 @@ def get_stock_indices_api():
     rows = fetch_stock_indices()
     return jsonify({'status': 'success', 'data': rows, 'line': format_indices_line(rows)})
 
+@app.route('/api/stock-regime', methods=['GET'])
+def get_stock_regime_api():
+    """주식 시장 판단(좋음/애매/나쁨) — market-regime-bot이 저장한 상태를 그대로 보여준다(슬랙과 같은 판정)."""
+    from app.core.stock_regime import get_stock_regime_snapshot
+    try:
+        return jsonify({'status': 'success', 'data': get_stock_regime_snapshot()})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
 @app.route('/api/sector-index/list', methods=['GET'])
 def get_sector_index_list_api():
     """업종 선택 드롭다운용 — 지원하는 전체 업종 코드/이름 목록 반환"""

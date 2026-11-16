@@ -233,6 +233,11 @@ class Config:
     MARKET_REGIME_BREADTH_DOWN = 40.0        # 이 값 이하면 -1
     MARKET_REGIME_CRASH_PCT = 5.0            # BTC가 전일 대비 이 % 이상 빠지면 점수와 무관하게 곧바로 나쁨
     MARKET_REGIME_MIN_ITEMS = 3              # 네 항목 중 값이 있는 게 이보다 적으면 이번 판정은 건너뜀
+    # 주식 시장 판단(app/core/stock_regime.py) — 코인 판단과 같은 점수 방식. 판정 주기·연속 확인·경계 점수·
+    # RSI/상승 비율 기준은 위 MARKET_REGIME_* 값을 같이 쓰고, 급락 기준과 장 시간만 따로 둔다.
+    STOCK_REGIME_CRASH_PCT = 3.0             # 코스피가 전일 대비 이 % 이상 빠지면 점수와 무관하게 곧바로 나쁨
+    STOCK_REGIME_MARKET_OPEN = '09:00'       # 이 시각~마감 사이(평일)에만 판정 — 장이 닫혀 있으면 값이 안 바뀐다
+    STOCK_REGIME_MARKET_CLOSE = '15:40'
 
     # ── 코인 당일 순위 이력 — app/core/upbit_ranking.py · docs/coin-ranking-history.md
     # 매시 RANKING_HISTORY_MINUTE분에 상승률/거래대금 상위 RANKING_HISTORY_TOP개씩 저장하고,
