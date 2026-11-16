@@ -95,6 +95,27 @@ check('첫 판정은 시작 문구', start_msg.startswith('📊 시장 판단 �
 crash_msg = mr.format_change_message({'from_regime': 'good', 'to_regime': 'bad', 'score': 4, 'detail': crash})
 check('급락 문구', '-5.50% 급락' in crash_msg, crash_msg)
 
+no_idx = mr.format_change_message({'from_regime': 'good', 'to_regime': 'bad', 'score': -4, 'detail': bad},
+                                  indices_line=None)
+check('지수 줄이 없으면 문구에서 빠짐', '주식 지수' not in no_idx, no_idx)
+with_idx = mr.format_change_message({'from_regime': 'good', 'to_regime': 'bad', 'score': -4, 'detail': bad},
+                                    indices_line='📈 주식 지수: 코스피 2,600.00 (+0.50%)')
+check('지수 줄은 근거 아래, 참고 전략 위', with_idx.index('주식 지수') < with_idx.index('참고 전략'), with_idx)
+
+# ── 주식 지수(app/core/stock_indices.py) — 가짜 조회로
+from app.core import stock_indices as si
+
+def fake_fetch(kind, code):
+    if code == 'COMP':
+        raise RuntimeError('timeout')
+    return {'0001': (2612.34, 0.52), '1001': (845.1, -1.234), 'SPX': (5900.0, None)}[code]
+
+rows = si.fetch_stock_indices(fake_fetch)
+check('지수 4개를 정해진 순서로', [r['name'] for r in rows] == ['코스피', '코스닥', '나스닥', 'S&P500'], rows)
+line = si.format_indices_line(rows)
+check('지수 줄 형식', line == '📈 주식 지수: 코스피 2,612.34 (+0.52%) · 코스닥 845.10 (-1.23%) · 나스닥 조회 실패 · S&P500 5,900.00', line)
+check('전부 실패해도 예외 없이 한 줄', '조회 실패' in si.get_stock_indices_line(lambda k, c: 1 / 0))
+
 # ── 20일선: 시장 지표 계산에 추가된 값
 closes = [100.0] * 180 + [100.0 + i for i in range(20)]
 df = pd.DataFrame({'open': closes, 'high': closes, 'low': closes, 'close': closes, 'volume': [1.0] * 200})
@@ -113,20 +134,22 @@ from app.utils import db_manager
 with tempfile.TemporaryDirectory() as tmp:
     db_manager.DB_PATH = os.path.join(tmp, 'test.db')
     sent = []
+    IDX = '📈 주식 지수: 코스피 2,600.00 (+0.50%)'
     check('판정 전에는 상태 없음', db_manager.get_market_regime_state() is None)
 
-    mr.run_market_regime_check(inputs(price=110, rsi_day=60, rsi_4h=58, up_ratio=65), now=t0, notify=sent.append)
+    mr.run_market_regime_check(inputs(price=110, rsi_day=60, rsi_4h=58, up_ratio=65), now=t0, notify=sent.append, indices_fn=lambda: IDX)
     check('첫 판정 → 시작 알림 1건', len(sent) == 1 and '시장 판단 시작' in sent[0], sent)
+    check('알림에 주식 지수 줄이 붙음', IDX in sent[0], sent)
 
     mr.run_market_regime_check(inputs(price=110, rsi_day=60, rsi_4h=58, up_ratio=65),
-                               now=t0 + timedelta(minutes=30), notify=sent.append)
+                               now=t0 + timedelta(minutes=30), notify=sent.append, indices_fn=lambda: IDX)
     check('같은 판정 반복은 알림 없음', len(sent) == 1, sent)
 
-    mr.run_market_regime_check(inputs(price=90, rsi_day=40), now=t0 + timedelta(minutes=60), notify=sent.append)
+    mr.run_market_regime_check(inputs(price=90, rsi_day=40), now=t0 + timedelta(minutes=60), notify=sent.append, indices_fn=lambda: IDX)
     saved = db_manager.get_market_regime_state()
     check('대기 상태가 DB에 저장됨', saved['pending'] == 'bad' and saved['pending_count'] == 1 and len(sent) == 1, saved)
 
-    mr.run_market_regime_check(inputs(price=90, rsi_day=40), now=t0 + timedelta(minutes=90), notify=sent.append)
+    mr.run_market_regime_check(inputs(price=90, rsi_day=40), now=t0 + timedelta(minutes=90), notify=sent.append, indices_fn=lambda: IDX)
     saved = db_manager.get_market_regime_state()
     check('두 번째 연속 판정 → 확정 + 변경 알림', saved['confirmed'] == 'bad' and len(sent) == 2
           and '좋음 → 🔴 *나쁨*' in sent[1], (saved, sent))
@@ -145,7 +168,7 @@ with tempfile.TemporaryDirectory() as tmp:
         raise RuntimeError('slack down')
 
     mr.run_market_regime_check(inputs(price=110, rsi_day=60, rsi_4h=58, up_ratio=65, change_rate_24h=0),
-                               now=t0 + timedelta(minutes=120), notify=boom)
+                               now=t0 + timedelta(minutes=120), notify=boom, indices_fn=lambda: IDX)
     check('슬랙 실패해도 상태 저장은 유지', db_manager.get_market_regime_state()['pending'] == 'good')
 
 print()

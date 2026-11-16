@@ -144,9 +144,11 @@ def advance_state(state: Optional[dict], result: dict, now: datetime, confirm_co
     return state, None
 
 
-def format_change_message(change: dict, active_preset: str = None, preset_known: bool = False) -> str:
+def format_change_message(change: dict, active_preset: str = None, preset_known: bool = False,
+                          indices_line: str = None) -> str:
     """확정 국면이 바뀌었을 때 슬랙으로 보낼 문구. preset_known이면 지금 매매 설정에 적용 중인 전략 묶음
-    (active_preset, 묶음과 다르면 None)을 같이 적는다 — 판단과 적용 중인 묶음이 다르면 바꿀지 고르라는 뜻."""
+    (active_preset, 묶음과 다르면 None)을 같이 적는다 — 판단과 적용 중인 묶음이 다르면 바꿀지 고르라는 뜻.
+    indices_line(app/core/stock_indices.py)이 있으면 근거 아래에 주식 지수 한 줄을 참고로 붙인다(점수엔 안 들어감)."""
     detail = change.get('detail') or {}
     to_r = REGIMES[change['to_regime']]
     if change.get('from_regime'):
@@ -160,6 +162,8 @@ def format_change_message(change: dict, active_preset: str = None, preset_known:
     for item in detail.get('items') or []:
         lines.append(f"• {item['label']}: {item['text']} ({item['point']:+d})" if item['point'] else
                      f"• {item['label']}: {item['text']} (0)")
+    if indices_line:
+        lines.append(indices_line)
     lines.append(f"참고 전략: {to_r['strategy']} (자동 적용 안 함)")
     if preset_known:
         from app.core.strategy_presets import preset_text
@@ -216,8 +220,12 @@ def _active_preset() -> tuple:
         return None, False
 
 
-def run_market_regime_check(inputs: dict = None, now: datetime = None, notify: Callable = None) -> dict:
-    """1회 판정 → 상태 저장 → 확정 국면이 바뀌었으면 슬랙 알림. 새 상태와 변경 내역을 돌려준다."""
+def run_market_regime_check(inputs: dict = None, now: datetime = None, notify: Callable = None,
+                            indices_fn: Callable = None) -> dict:
+    """1회 판정 → 상태 저장 → 확정 국면이 바뀌었으면 슬랙 알림. 새 상태와 변경 내역을 돌려준다.
+    주식 지수(indices_fn)는 알림을 보낼 때만 조회한다 — 30분마다 KIS를 부를 필요가 없어서."""
+    if indices_fn is None:
+        from app.core.stock_indices import get_stock_indices_line as indices_fn
     from app.utils.db_manager import get_market_regime_state, save_market_regime_state
     if notify is None:
         from app.utils.slack import send_slack_msg as notify
@@ -239,7 +247,7 @@ def run_market_regime_check(inputs: dict = None, now: datetime = None, notify: C
         )
     if change:
         try:
-            notify(format_change_message(change, *_active_preset()))
+            notify(format_change_message(change, *_active_preset(), indices_line=indices_fn()))
         except Exception as e:
             logger.error(f"시장 판단 슬랙 알림 실패: {e}")
     return {'state': state, 'change': change}
