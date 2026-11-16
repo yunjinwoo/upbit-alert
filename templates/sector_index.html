@@ -137,6 +137,13 @@
                 </div>
             </div>
 
+            <!-- 현재 상황 메시지: 주요 지수(api/stock-indices) + 선택한 업종 요약(일자별 데이터로 계산) -->
+            <div class="alert alert-light border mb-3 py-2" id="statusBox">
+                <div class="fw-bold mb-1">📢 현재 상황</div>
+                <div id="statusIndices" class="small">주요 지수 불러오는 중...</div>
+                <div id="statusSector" class="small mt-1 text-muted"></div>
+            </div>
+
             <!-- 요약 카드 -->
             <div class="row g-3 mb-3" id="summaryCards" style="display:none!important">
                 <div class="col-6 col-md-3">
@@ -381,6 +388,63 @@
         });
     }
 
+    function rateSpan(rate) {
+        if (rate === null || rate === undefined || isNaN(rate)) return '';
+        const cls = rate > 0 ? 'text-danger' : rate < 0 ? 'text-primary' : '';
+        return ` <span class="${cls}">(${rate > 0 ? '+' : ''}${fmt(rate)}%)</span>`;
+    }
+
+    async function loadStockIndices() {
+        const box = document.getElementById('statusIndices');
+        try {
+            const res = await fetch('api/stock-indices');
+            const result = await res.json();
+            if (result.status !== 'success') throw new Error(result.message || '조회 실패');
+            box.innerHTML = '📈 주요 지수: ' + result.data.map(r => r.value === null
+                ? `${r.name} <span class="text-muted">조회 실패</span>`
+                : `<b>${r.name}</b> ${fmt(r.value)}${rateSpan(r.change_pct)}`).join(' · ')
+                + ` <span class="text-muted">· ${new Date().toLocaleTimeString()} 기준 (해외 지수는 미국 장 마감 시 직전 종가)</span>`;
+        } catch (e) {
+            console.error(e);
+            box.innerHTML = '📈 주요 지수: <span class="text-muted">조회 실패</span>';
+        }
+    }
+
+    // 선택한 업종의 일자별 데이터(최신순)로 한 줄 상황 요약을 만든다.
+    function renderStatusSector(data, iscd) {
+        const el = document.getElementById('statusSector');
+        if (!data || !data.length) { el.textContent = ''; return; }
+        const name = getSectorName(iscd);
+        const latest = data[0];
+        const rate = parseFloat(latest.change_rate);
+        const parts = [`<b>${name}</b> ${latest.date} ${fmt(latest.close)}${rateSpan(rate)}`];
+
+        // 연속 상승/하락 일수
+        const dir = rate > 0 ? 1 : rate < 0 ? -1 : 0;
+        if (dir !== 0) {
+            let n = 0;
+            for (const d of data) {
+                const r = parseFloat(d.change_rate);
+                if ((dir > 0 && r > 0) || (dir < 0 && r < 0)) n++; else break;
+            }
+            if (n >= 2) parts.push(`${n}일 연속 ${dir > 0 ? '상승' : '하락'}`);
+        }
+
+        // 조회 기간 고점/저점 대비 위치
+        const closes = data.map(d => parseFloat(d.close)).filter(v => !isNaN(v));
+        const close = parseFloat(latest.close);
+        if (closes.length > 1 && !isNaN(close)) {
+            const hi = Math.max(...closes), lo = Math.min(...closes);
+            parts.push(`최근 ${closes.length}거래일 고점 대비 ${fmt((close - hi) / hi * 100)}% · 저점 대비 +${fmt((close - lo) / lo * 100)}%`);
+        }
+
+        // 20일 이격도(100 위면 20일 평균보다 위)
+        const d20 = parseFloat(latest.d20_dsrt);
+        if (!isNaN(d20)) parts.push(`20일 이격도 ${fmt(d20)}% (${d20 >= 100 ? '20일 평균 위' : '20일 평균 아래'})`);
+
+        el.innerHTML = parts.join(' · ');
+    }
+
     function renderSummary(data) {
         if (!data.length) return;
         const latest = data[0];
@@ -412,6 +476,7 @@
                 return;
             }
             renderSummary(result.data);
+            renderStatusSector(result.data, iscd);
             renderChart(result.data);
             if (dataTable) { dataTable.destroy(); dataTable = null; }
             document.getElementById('tableBody').innerHTML = result.data.map(d => {
@@ -557,6 +622,7 @@
             const data = result.data;
 
             renderSummary(data);
+            renderStatusSector(data, iscd);
             renderChart(data);
 
             if (dataTable) { dataTable.destroy(); dataTable = null; }
@@ -603,6 +669,7 @@
     }
 
     document.addEventListener('DOMContentLoaded', async () => {
+        loadStockIndices();
         await populateSectorOptions();
         loadFromDb();
     });

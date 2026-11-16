@@ -1990,6 +1990,14 @@ def sector_index_view():
     """업종 일자별지수 조회 페이지"""
     return render_template('sector_index.html', active_page='sector_index')
 
+@app.route('/api/stock-indices', methods=['GET'])
+def get_stock_indices_api():
+    """주요 지수(코스피·코스닥·나스닥·S&P500) 현재값 — 업종 일자별지수 페이지 '현재 상황' 메시지용.
+    시장 판단 슬랙 알림과 같은 조회(app/core/stock_indices.py)를 쓴다. 일부 실패해도 200으로 나머지를 준다."""
+    from app.core.stock_indices import fetch_stock_indices, format_indices_line
+    rows = fetch_stock_indices()
+    return jsonify({'status': 'success', 'data': rows, 'line': format_indices_line(rows)})
+
 @app.route('/api/sector-index/list', methods=['GET'])
 def get_sector_index_list_api():
     """업종 선택 드롭다운용 — 지원하는 전체 업종 코드/이름 목록 반환"""
