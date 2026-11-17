@@ -60,6 +60,7 @@
 | [kis-mcp-and-ranking-preview.md](kis-mcp-and-ranking-preview.md) | ✅ 완료 (2026-07-10) | 한국투자 MCP 연결 + 순위분석 API 미리보기 페이지 |
 | [sector-index-psychology-index-fix.md](sector-index-psychology-index-fix.md) | ✅ 완료 (2026-07-15) | 업종 일자별지수 `net_buy` 필드 오라벨링 발견·수정 |
 | [slack-login.md](slack-login.md) | 📖 학습용 정리 | Slack 연동 로그인 (상시 비밀번호 방식) 동작 정리 |
+| [health-check.md](health-check.md) | ✅ 구현 완료 (2026-11-17) · 조회 전용 | 서버 상태 점검 `/api/health` — 수집 테이블별 마지막 저장 시각·스케줄 실패·로그 오류를 한 번에(토큰 인증, 자동 점검용) |
 
 ---
 

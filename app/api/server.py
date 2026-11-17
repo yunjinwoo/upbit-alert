@@ -95,6 +95,7 @@ from app.core.toss_auto_trader import (
     get_live_dashboard_summary as get_toss_live_dashboard_summary,
 )
 from app.core.brokers.toss_live_broker import TossLiveBroker
+from app.core.health import build_health
 from app.config import Config
 import json
 import os
@@ -208,6 +209,10 @@ def require_login():
     # 토큰 없이 루프백 직접 호출이면 통과. nginx를 거친 외부 요청은 아래에서 평소처럼 로그인을 확인한다.
     if request.path == '/api/stock-price' and _is_loopback_direct():
         return
+    # 상태 점검(/api/health, 읽기 전용)은 자동 점검이 밖에서 부른다 — HEALTH_API_TOKEN 이 설정돼 있고
+    # X-Health-Token 헤더가 같으면 로그인 없이 통과. 토큰이 없거나 틀리면 아래에서 평소처럼 로그인을 확인한다.
+    if request.path == '/api/health' and _has_valid_health_token():
+        return
     if not _login_state['lock_enabled']:
         return  # 잠금 꺼져있으면 전체 오픈
     if request.endpoint in _PUBLIC_ENDPOINTS:
@@ -222,6 +227,10 @@ _LOOPBACK_ADDRS = {'127.0.0.1', '::1'}
 def _is_loopback_direct():
     """같은 서버에서 5000 포트로 직접 부른 요청인지 — 루프백 주소이고 프록시 헤더(X-Forwarded-For)가 없어야 한다."""
     return request.remote_addr in _LOOPBACK_ADDRS and not request.headers.get('X-Forwarded-For')
+
+def _has_valid_health_token():
+    token = Config.HEALTH_API_TOKEN
+    return bool(token) and secrets.compare_digest(request.headers.get('X-Health-Token', ''), token)
 
 def _check_journal_request():
     """/api/journal/* 인증 — 같은 서버에서 5000 포트로 직접 부른 요청만 받는다.
@@ -2626,6 +2635,16 @@ def cleanup_stock_raw_data_api():
 
         deleted = delete_oldest_stock_raw_data(count)
         return jsonify({"status": "success", "deleted": deleted})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/health', methods=['GET'])
+def get_health_api():
+    """서버 상태 점검(읽기 전용) — 수집 테이블별 마지막 저장 시각, 최근 24시간 스케줄 실패, 로그 오류 요약.
+    DB를 읽기 전용으로만 열고 외부 API·매매 함수는 부르지 않는다. 응답 필드는 app/core/health.py 참고.
+    인증: 로그인 세션 또는 X-Health-Token(HEALTH_API_TOKEN)."""
+    try:
+        return jsonify({"status": "success", **build_health()})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
