@@ -4,7 +4,7 @@
     'ranking_preview': 'data', 'hts_top_view': 'data', 'top_interest': 'data',
     'top_gainers': 'data', 'coin_screening': 'data', 'coin_ranking': 'data',
     'signal_score_preview': 'signal', 'signal_score_history': 'signal', 'stock_digest': 'signal',
-    'raw_data': 'ops', 'history': 'ops', 'sync_admin': 'ops', 'date_column_convert': 'ops', 'security': 'ops',
+    'monitor': 'ops', 'raw_data': 'ops', 'history': 'ops', 'sync_admin': 'ops', 'date_column_convert': 'ops', 'security': 'ops',
     'powerball': 'lottery', 'lotto645': 'lottery', 'pension720': 'lottery', 'lottery_recommend': 'lottery',
 } %}
 {% set active_group = group_map.get(active_page) %}
@@ -28,6 +28,7 @@
         ('stock_digest_view', 'stock_digest', '저녁 주식 요약'),
     ],
     'ops': [
+        ('monitor_view', 'monitor', '서버 모니터링'),
         ('raw_data_view', 'raw_data', '원본 데이터'),
         (None, None, '리비전 관리'),
         ('history_view', 'history', '히스토리'),
@@ -110,6 +111,7 @@
             <div class="dropdown">
                 <a class="nav-link dropdown-toggle{{ ' active' if active_group == 'ops' }}" href="{{ url_for(group_items['ops'][0][0]) }}">운영/관리</a>
                 <ul class="dropdown-menu">
+                    <li><a class="dropdown-item{{ ' active' if active_page == 'monitor' }}" href="{{ url_for('monitor_view') }}">🩺 서버 모니터링</a></li>
                     <li><a class="dropdown-item{{ ' active' if active_page == 'raw_data' }}" href="{{ url_for('raw_data_view') }}">원본 데이터</a></li>
                     <li><a class="dropdown-item" href="/grid">리비전 관리</a></li>
                     <li><a class="dropdown-item{{ ' active' if active_page == 'history' }}" href="{{ url_for('history_view') }}">히스토리</a></li>

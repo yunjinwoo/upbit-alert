@@ -35,6 +35,7 @@
 ## 상태 점검
 
 - `GET /api/health` (`app/core/health.py`) — 수집 테이블별 마지막 저장 시각, 최근 24시간 스케줄 실패, 로그 오류 요약. 로그인 세션 또는 `X-Health-Token`(`HEALTH_API_TOKEN`)으로 인증한다.
+- `/monitor` (`templates/monitor.html`) — 같은 응답을 표로 보여주는 화면. 시장 판단·주요 지수 메시지도 여기에 있다.
 - `check_health.py` 종료 코드: 0 정상, 1 확인 필요, 2 서버에 못 닿음/인증 실패.
 - 판정 기준은 `health.FRESHNESS_RULES` 에 있다. 수집 시각을 바꾸면 여기도 같이 고친다.
 - 공휴일은 모른다. 평일 휴장일엔 주식 수집이 `stale` 로 나오는 게 정상이다.
