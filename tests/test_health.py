@@ -124,6 +124,27 @@ def test_readonly_connection_rejects_writes():
         db_manager.DB_PATH = original
 
 
+def test_log_counts_live_order_failures():
+    lines = [
+        '2026-11-17 11:02:17,107 - ERROR - [실매수] KRW-AXS 주문 거부: None',
+        '2026-11-17 11:02:18,000 - ERROR - [KRW-HP] 지정가 실매수 주문 실패: timeout',
+        '2026-11-17 11:02:19,000 - ERROR - [실매도] KRW-XRP 주문 거부: None',
+        '2026-11-17 11:02:20,000 - ERROR - [KRW-LINK] 지표 계산 실패',
+        '2026-11-17 11:02:21,000 - WARNING - [실거래 매수 차단] KRW-SAHARA — 최소주문금액',
+    ]
+    s = summarize_log_lines(lines, datetime(2026, 11, 17, 11, 30))
+    assert s['error_count'] == 4
+    assert s['order_failure_count'] == 3
+
+
+def test_overall_warns_on_live_order_failure_only():
+    ok_f = [{'status': 'ok'}]
+    ok_jobs = {'total_runs': 10, 'failing': []}
+    assert overall_status(ok_f, ok_jobs, {'error_count': 5, 'order_failure_count': 0}) == 'ok'
+    assert overall_status(ok_f, ok_jobs, {'error_count': 5, 'order_failure_count': 1}) == 'warn'
+    assert overall_status(ok_f, ok_jobs, {'status': 'missing'}) == 'ok'
+
+
 if __name__ == '__main__':
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8')

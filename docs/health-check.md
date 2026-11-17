@@ -15,7 +15,7 @@
 |---|---|---|
 | `freshness` | 수집 테이블별 마지막 저장 시각 | 24시간 수집은 90분 이내, 평일 수집은 "수집 시각+30분이 지난 평일엔 오늘 자료" |
 | `jobs` | 최근 24시간 `job_run_log` 요약(`stock_digest.summarize_job_runs` 재사용) | 마지막 실행이 실패인 작업이 있거나 실행 기록이 0건이면 경고 |
-| `log` | `app.log` 끝 512KB 에서 최근 24시간 ERROR/WARNING 건수와 최근 오류 20줄 | 판정에 넣지 않음(읽고 판단) |
+| `log` | `app.log` 끝 512KB 에서 최근 24시간 ERROR/WARNING 건수와 최근 오류 20줄 | 실거래 주문 실패 줄(`실매수`/`실매도` 가 든 ERROR, `order_failure_count`)이 1건이라도 있으면 경고. 그 밖의 오류는 판정에 넣지 않음(읽고 판단) |
 
 `overall` 은 `ok` / `warn` 둘 중 하나.
 

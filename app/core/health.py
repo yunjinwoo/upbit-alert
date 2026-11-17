@@ -6,6 +6,7 @@
 - 공휴일은 모른다 — 평일 휴장일엔 주식 수집 테이블이 stale 로 나올 수 있다(note 에 적어 둔다).
 """
 import os
+import re
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -44,6 +45,9 @@ LOG_WINDOW_HOURS = 24
 LOG_RECENT_ERRORS = 20
 LOG_LINE_MAX_LEN = 300
 TS_FORMAT = '%Y-%m-%d %H:%M:%S'
+# 실거래 주문 실패 ERROR 줄 — '[실매수] X 주문 거부', '[X] 지정가 실매수 주문 실패', '[실매도] ...' 등.
+# 흔한 지표 계산 오류와 달리 돈이 걸린 실패라, 1건이라도 있으면 전체 판정을 warn 으로 올린다.
+ORDER_FAILURE_PATTERN = re.compile(r'실매[수도]')
 
 
 def _parse_ts(value):
@@ -131,7 +135,7 @@ def summarize_log_lines(lines: list, now: datetime) -> dict:
     """app.log 꼬리(lines) → 최근 LOG_WINDOW_HOURS 시간의 ERROR/WARNING 건수와 최근 오류 줄.
     시각이 없는 줄(트레이스백 이어지는 줄 등)은 바로 앞 줄의 시각·레벨을 따른다."""
     since = now - timedelta(hours=LOG_WINDOW_HOURS)
-    errors, warnings, recent, last_ts = 0, 0, [], None
+    errors, warnings, order_failures, recent, last_ts = 0, 0, 0, [], None
     in_window = False
     for line in lines:
         ts = _parse_ts(line[:19]) if len(line) >= 19 and line[4:5] == '-' else None
@@ -143,6 +147,8 @@ def summarize_log_lines(lines: list, now: datetime) -> dict:
             continue
         if ' - ERROR - ' in line:
             errors += 1
+            if ORDER_FAILURE_PATTERN.search(line):
+                order_failures += 1
             recent.append(line.rstrip()[:LOG_LINE_MAX_LEN])
         elif ' - WARNING - ' in line:
             warnings += 1
@@ -151,6 +157,7 @@ def summarize_log_lines(lines: list, now: datetime) -> dict:
         'last_line_at': last_ts.strftime(TS_FORMAT) if last_ts else None,
         'error_count': errors,
         'warning_count': warnings,
+        'order_failure_count': order_failures,
         'recent_errors': recent[-LOG_RECENT_ERRORS:],
     }
 
@@ -174,12 +181,14 @@ def load_log_summary(now: datetime, log_path: str = None) -> dict:
     return summary
 
 
-def overall_status(freshness: list, jobs: dict) -> str:
-    """ok / warn — 수집이 밀렸거나 마지막 실행이 실패한 스케줄이 있으면 warn.
-    로그 오류 건수는 판정에 넣지 않는다(종목 1개 지표 계산 실패처럼 흔한 오류가 섞여 있어 사람이/에이전트가 읽고 판단)."""
+def overall_status(freshness: list, jobs: dict, log: dict = None) -> str:
+    """ok / warn — 수집이 밀렸거나, 마지막 실행이 실패한 스케줄이 있거나, 실거래 주문 실패 로그가 있으면 warn.
+    그 밖의 로그 오류 건수는 판정에 넣지 않는다(종목 1개 지표 계산 실패처럼 흔한 오류가 섞여 있어 사람이/에이전트가 읽고 판단)."""
     if any(f['status'] != 'ok' for f in freshness):
         return 'warn'
     if jobs.get('failing') or not jobs.get('total_runs'):
+        return 'warn'
+    if (log or {}).get('order_failure_count'):
         return 'warn'
     return 'ok'
 
@@ -193,10 +202,11 @@ def build_health(now: datetime = None) -> dict:
                 'failing': jobs['failing'], 'recovered': jobs['recovered'], 'text': build_job_summary_text(jobs)}
     except sqlite3.Error as e:
         jobs = {'total_runs': 0, 'job_count': 0, 'failing': [], 'recovered': [], 'text': f'작업 이력을 읽을 수 없음: {e}'}
+    log = load_log_summary(now)
     return {
         'checked_at': now.strftime(TS_FORMAT),
-        'overall': overall_status(freshness, jobs),
+        'overall': overall_status(freshness, jobs, log),
         'freshness': freshness,
         'jobs': jobs,
-        'log': load_log_summary(now),
+        'log': log,
     }

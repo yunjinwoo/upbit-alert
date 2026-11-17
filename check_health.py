@@ -45,6 +45,8 @@ def format_health(data: dict) -> str:
         lines.append(f"❌ {log.get('note')}")
     else:
         lines.append(f"ERROR {log.get('error_count')}건 · WARNING {log.get('warning_count')}건 · 마지막 기록 {log.get('last_line_at') or '-'}")
+        if log.get('order_failure_count'):
+            lines.append(f"❌ 실거래 주문 실패 {log['order_failure_count']}건 — 아래 오류 줄과 서버 pm2 로그를 확인하세요")
         lines += [f"  {line}" for line in log.get('recent_errors', [])]
     return '\n'.join(lines)
 
