@@ -2001,7 +2001,7 @@ def sector_index_view():
 
 @app.route('/api/stock-indices', methods=['GET'])
 def get_stock_indices_api():
-    """주요 지수(코스피·코스닥·나스닥·S&P500) 현재값 — 업종 일자별지수 페이지 '현재 상황' 메시지용.
+    """주요 지수(코스피·코스닥·나스닥·S&P500) 현재값 — 서버 모니터링 페이지(/monitor) '시장 현재 상황' 메시지용.
     시장 판단 슬랙 알림과 같은 조회(app/core/stock_indices.py)를 쓴다. 일부 실패해도 200으로 나머지를 준다."""
     from app.core.stock_indices import fetch_stock_indices, format_indices_line
     rows = fetch_stock_indices()
@@ -2917,6 +2917,11 @@ def get_investor_trend_cached_api():
     mrkt = request.args.get('mrkt', '1')
     data = get_investor_trend_cached(exch, mrkt)
     return jsonify({'status': 'success', 'data': data, 'source': 'cache'})
+
+@app.route('/monitor')
+def monitor_view():
+    """서버 모니터링 페이지 — /api/health(수집·스케줄·로그) + 시장 현재 상황(시장 판단·주요 지수)을 한 화면에. 읽기 전용."""
+    return render_template('monitor.html', active_page='monitor')
 
 @app.route('/sync-admin')
 def sync_admin_view():
