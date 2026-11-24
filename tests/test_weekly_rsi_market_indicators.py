@@ -198,12 +198,90 @@ def slow_fetch():
     calls['n'] += 1
     _time.sleep(0.2)
     return {'ok': True}
-mi._cache['dominance'].update(value=None, fetched_at=0.0)
+mi._cache['dominance'].update(value=None, fetched_at=0.0, error=None, failed_at=0.0)
 ths = [threading.Thread(target=mi._cached, args=('dominance', 300, slow_fetch)) for _ in range(3)]
 for t in ths: t.start()
 for t in ths: t.join()
 check('동시 요청이 겹쳐도 외부 조회는 1번', calls['n'] == 1, calls)
 mi._cache['dominance'].update(value=None, fetched_at=0.0)
+
+# ── 호출 제한 대응: 429 재시도, 봉 종류별 캐시·이전 값 사용, 실패 직후 재호출 쉬기
+import requests as _requests
+mi.UPBIT_RETRY_DELAYS_SEC = (0.01, 0.01)
+mi.UPBIT_MIN_INTERVAL_SEC = 0.0
+mi.COINGECKO_RETRY_DELAYS_SEC = (0.01,)
+
+
+class _StatusResp:
+    def __init__(self, status, body=None):
+        self.status_code, self._body, self.headers = status, body, {}
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise _requests.HTTPError(f'{self.status_code} Client Error')
+    def json(self): return self._body
+
+
+seq = {'statuses': [], 'n': 0}
+def seq_get(url, **kw):
+    seq['n'] += 1
+    st = seq['statuses'].pop(0) if seq['statuses'] else 200
+    if st == 'timeout':
+        raise _requests.ReadTimeout('Read timed out. (read timeout=5)')
+    return _StatusResp(st, rows)
+
+
+mi.requests.get = seq_get
+try:
+    mi._candle_cache.clear()
+    seq.update(statuses=[429, 429], n=0)
+    df1 = mi._upbit_candles('KRW-BTC', 'day', 200)
+    check('429 두 번 뒤 세 번째 시도에 성공', df1 is not None and seq['n'] == 3, seq)
+
+    seq.update(n=0)
+    mi._upbit_candles('KRW-BTC', 'day', 200)
+    check('TTL 안에서는 같은 봉 캔들을 다시 부르지 않음', seq['n'] == 0, seq)
+
+    mi._candle_cache[('KRW-BTC', 'day', 200)]['fetched_at'] -= 120  # TTL 만료, 대체 허용 시간 안
+    seq.update(statuses=[429, 429, 429], n=0)
+    df2 = mi._upbit_candles('KRW-BTC', 'day', 200)
+    check('재시도까지 모두 429면 이전 캔들로 대신', df2 is df1 and seq['n'] == 3, seq)
+
+    mi._candle_cache[('KRW-BTC', 'day', 200)]['fetched_at'] -= 7200  # 대체 허용 시간도 지남
+    seq.update(statuses=[429, 429, 429], n=0)
+    try:
+        mi._upbit_candles('KRW-BTC', 'day', 200)
+        check('너무 오래된 캔들은 대신 쓰지 않고 실패', False)
+    except _requests.HTTPError:
+        check('너무 오래된 캔들은 대신 쓰지 않고 실패', True)
+
+    seq.update(statuses=['timeout'], n=0)
+    def dom_get(url, **kw):
+        seq['n'] += 1
+        seq.setdefault('timeouts', []).append(kw.get('timeout'))
+        st = seq['statuses'].pop(0) if seq['statuses'] else 200
+        if st == 'timeout':
+            raise _requests.ReadTimeout('Read timed out.')
+        return _StatusResp(st, {'data': {'market_cap_percentage': {'btc': 57.1}}})
+    mi.requests.get = dom_get
+    dom1 = mi._fetch_dominance()
+    check('CoinGecko 타임아웃 한 번은 재시도로 넘김', dom1['btc_dominance'] == 57.1 and seq['n'] == 2, seq)
+    check('CoinGecko 읽기 제한시간은 5초보다 길게', isinstance(seq['timeouts'][0], tuple)
+          and seq['timeouts'][0][1] > 5, seq['timeouts'])
+finally:
+    mi.requests.get = orig_get
+
+fails = {'n': 0}
+def always_fail():
+    fails['n'] += 1
+    raise RuntimeError('boom')
+mi._cache['dominance'].update(value=None, fetched_at=0.0, error=None, failed_at=0.0)
+mi._cached('dominance', 300, always_fail)
+_, _, _, err = mi._cached('dominance', 300, always_fail)
+check('실패 직후에는 다시 부르지 않고 마지막 오류를 돌려줌', fails['n'] == 1 and err == 'boom', fails)
+mi._cache['dominance']['failed_at'] -= 3600
+mi._cached('dominance', 300, always_fail)
+check('쉬는 시간이 지나면 다시 시도', fails['n'] == 2, fails)
+mi._cache['dominance'].update(value=None, fetched_at=0.0, error=None, failed_at=0.0)
 
 # ── DB 시딩: 주봉 RSI 조건은 업비트에만(토스 캔들 API엔 주봉이 없음), 기본 꺼짐
 from app.utils import db_manager
